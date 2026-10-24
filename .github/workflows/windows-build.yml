@@ -1,0 +1,35 @@
+name: Compilar EXE Windows
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Instalar dependencias e testar
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller==6.16.0 pytest==8.4.2
+          python -m pytest -q tests
+          python -m compileall -q app.py core.py hikcentral.py devices.py
+      - name: Empacotar EXE autocontido
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ValeCadastroFacialNFC --collect-all smartcard --hidden-import win32crypt app.py
+          if (!(Test-Path dist/ValeCadastroFacialNFC.exe)) { throw "EXE nao gerado" }
+      - name: Disponibilizar executavel
+        uses: actions/upload-artifact@v4
+        with:
+          name: ValeCadastroFacialNFC-Windows
+          path: dist/ValeCadastroFacialNFC.exe
+          if-no-files-found: error
+          retention-days: 30
