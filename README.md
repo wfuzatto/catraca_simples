@@ -47,3 +47,27 @@ A senha admin compartilhada no planejamento NÃO é incorporada ao aplicativo e 
 O EXE pode ser compilado no GitHub, mas o servidor privado 192.168.100.102, leitores e catracas precisam de homologação presencial. Resposta positiva na solicitação de reaplicação não comprova entrega a todos os dispositivos. Verifique status no HikCentral.
 
 Referência: https://enpinfo.hikvision.com/hkwsen/unzip/20260723200832_95640_doc/index.html
+
+## Certificado privado do HikCentral (localhost:443)
+
+O Vale Visitor PHP anterior podia operar com TLS_VERIFY=0. Para evitar o envio
+de credenciais e fotos para um serviço não autenticado, o aplicativo Windows
+aceita duas alternativas de verificação:
+
+1. Usar DNS correto no certificado + CA PEM confiável (opção preferencial).
+2. Ler e conferir a impressão digital SHA-256 do certificado instalado no
+   HikCentral, confirmando-a fora do aplicativo antes de aprová-la.
+
+Na opção 2, o certificado TLS deve coincidir exatamente com o SHA-256 aprovado
+ANTES de transmitir AppKey, AppSecret, nome, foto ou credencial NFC.
+Qualquer substituição de certificado bloqueia a transmissão automaticamente.
+
+A impressão deve ser comparada com um certificado obtido por canal confiável
+no servidor; não confie nela só porque foi mostrada em conexão não validada.
+Este modo não valida CA, hostname nem validade: use somente em ambiente interno
+autorizado e servidor cuja identidade foi confirmada.
+
+Use Diagnóstico de rede para saber se TCP 443/37443 está acessível. Ao testar
+a conexão, o aplicativo salva as alterações digitadas antes da chamada OpenAPI.
+Não exponha senhas/chaves em prints nem no repositório GitHub.
+
