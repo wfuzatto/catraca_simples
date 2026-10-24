@@ -140,6 +140,11 @@ def registration_payload(v: Visitor) -> dict:
                 "visitorFamilyName": v.last_name.strip(),
                 "visitorGroupName": v.group.strip(),
                 "remark": v.reservation.strip(),
+                "gender": 0,
+                "companyName": "Vale",
+                "certificateType": 111,
+                "certificateNo": "",
+                "accessInfo": {"electrostaticDetectionType": 0, "qrCodeValidNum": 1},
                 "faces": [{"faceData": base64.b64encode(v.photo_jpeg).decode("ascii")}],
                 "cards": [{"cardNo": v.card_number.strip()}]
             }
@@ -182,13 +187,27 @@ def parse_access_lines(raw: str) -> dict:
     return mapping
 
 
-def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = None) -> None:
-    """Grava só IDs necessários para retomar; sem foto, nome, reserva ou segredos."""
+def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = None,
+                 *, appointment_id: str = "", door_ids: list[str] | None = None,
+                 registered: bool = True) -> None:
+    """Checkpoint mínimo após reserva; nunca armazena foto, cartão, segredo ou nome."""
     path = (base or app_dir()) / "pending.json"
     if path.exists():
-        raise RuntimeError("Há cadastro pendente. Conclua-o antes de criar outro.")
-    path.write_text(json.dumps({"visitor_id": visitor_id,
-                               "access_ids": access_ids, "assigned": []}), encoding="utf-8")
+        raise RuntimeError("Há cadastro pendente. Confira o cadastro anterior antes de criar outro.")
+    path.write_text(json.dumps({
+        "visitor_id": visitor_id, "appointment_id": appointment_id,
+        "access_ids": access_ids, "door_ids": door_ids or [],
+        "registered": registered, "assigned": []
+    }), encoding="utf-8")
+
+
+def mark_registered(base: Path | None = None) -> None:
+    path = (base or app_dir()) / "pending.json"
+    data = load_pending(base)
+    if not data:
+        raise RuntimeError("Não há cadastro pendente.")
+    data["registered"] = True
+    path.write_text(json.dumps(data), encoding="utf-8")
 
 
 def load_pending(base: Path | None = None) -> dict | None:
