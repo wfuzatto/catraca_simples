@@ -26,6 +26,7 @@ def app_dir() -> Path:
 def default_settings() -> dict:
     return {
         "host": "192.168.100.102", "port": 37443, "ca_file": "",
+        "cert_pin_sha256": "",
         "tickets": json.loads(json.dumps(DEFAULT_TICKETS)),
         "group_access": {group: ACCESS_LEVELS.copy() for group in GROUPS},
         "card_format": "DECIMAL_BIG", "camera_index": 0
