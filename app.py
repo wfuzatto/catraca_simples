@@ -106,6 +106,8 @@ class ValeApp(tk.Tk):
         ttk.Button(card_left, text="Ler ACR122U (PC/SC)", command=self.scan).pack(anchor="w")
         ttk.Label(card_left, textvariable=self.uid).pack(anchor="w", pady=6)
         ttk.Label(card_left, text="Confira conversão HEX/decimal no primeiro teste.").pack(anchor="w")
+        ttk.Label(card_left, text="Obrigat\u00f3rio: facial ou pulseira; pode informar ambos.").pack(
+            anchor="w", pady=(5, 0))
         self.photo_widget = tk.Label(card, text="SEM FOTO", width=20, height=7, bg="#e5edf3")
         self.photo_widget.pack(side="left", padx=10)
         controls = ttk.Frame(card)
@@ -128,9 +130,8 @@ class ValeApp(tk.Tk):
         ttk.Label(period, text="DD/MM/AAAA HH:MM • Saída ajustável manualmente").grid(row=2, column=0, columnspan=4, sticky="w")
 
         buttons = ttk.Frame(self.registration_tab)
-        buttons.pack(fill="x", pady=14)
-        ttk.Label(buttons, text="Informe facial, pulseira ou ambos; ao menos um \u00e9 obrigat\u00f3rio. Reserva opcional.").pack(side="left")
-        ttk.Button(buttons, text="CADASTRAR DIRETAMENTE NO HIKCENTRAL",
+        buttons.pack(fill="x", pady=(8, 4))
+        ttk.Button(buttons, text="Cadastrar visitante",
                    command=self.register).pack(side="right")
 
     def _settings(self):
