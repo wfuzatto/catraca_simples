@@ -42,6 +42,7 @@ class ValeApp(tk.Tk):
         style.theme_use("clam")
         style.configure(".", font=("Segoe UI", 10))
         style.configure("TButton", padding=7)
+        style.configure("Register.TButton", font=("Segoe UI", 10, "bold"), padding=(18, 9))
         style.configure("TNotebook.Tab", padding=(16, 8))
         self._build()
         self._fill_settings()
@@ -131,7 +132,7 @@ class ValeApp(tk.Tk):
 
         buttons = ttk.Frame(self.registration_tab)
         buttons.pack(fill="x", pady=(8, 4))
-        ttk.Button(buttons, text="Cadastrar visitante",
+        ttk.Button(buttons, text="CADASTRAR", width=18, style="Register.TButton",
                    command=self.register).pack(side="right")
 
     def _settings(self):
@@ -530,7 +531,8 @@ class ValeApp(tk.Tk):
                 f"\n\nCredencial(is) a enviar: {credentials}. " +
                 ("Confirme que a pulseira de teste n\u00e3o est\u00e1 vinculada a outro visitante.\n\n"
                  if expect_card else "\n\n") +
-                "Prosseguir com a reserva e o check-in?"
+                "Ao confirmar, o aplicativo criará a reserva e registrará o check-in automaticamente.\n\n"
+                "Prosseguir?"
             )
             if not messagebox.askyesno("Confirmar níveis e catracas", confirmation, parent=self):
                 self.status.set("Cadastro cancelado antes do envio.")

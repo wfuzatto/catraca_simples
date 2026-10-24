@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.4` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.5` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -12,6 +12,7 @@ Aplicativo Windows para check-in de visitantes diretamente no HikCentral Profess
 - Ingressos de 1, 2 ou 3 dias, personalizáveis. Por padrão a saída é às 23:59:59 do último dia incluído.
 - Entrada e saída editáveis, com fuso America/Sao_Paulo.
 - Reserva opcional no campo VisitorInfo.remark.
+- Ao clicar em CADASTRAR, o aplicativo cria a reserva e registra o check-in na mesma operação, após a confirmação da prévia de acesso.
 - Níveis de acesso configurados por grupo. O padrão não concede níveis; o operador precisa definir a política aprovada.
 - Antes de enviar, mostra os níveis e catracas que receberão a operação e pede confirmação.
 - Consulta apenas os métodos enviados em cada catraca após solicitar a reaplicação.
