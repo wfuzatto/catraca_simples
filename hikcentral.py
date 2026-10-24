@@ -372,14 +372,19 @@ class HikCentral:
             "doorIndexCodes": ",".join(doors)
         })
 
-    def delivery_report(self, visitor_id: str, door_ids: list[str]) -> dict:
+    def delivery_report(self, visitor_id: str, door_ids: list[str], *,
+                        expect_face: bool = True, expect_card: bool = True) -> dict:
         if not visitor_id or not door_ids:
-            raise HikError("Visitante e IDs das catracas são obrigatórios para consultar a entrega.")
+            raise HikError("Visitante e IDs das catracas s\u00e3o obrigat\u00f3rios para consultar a entrega.")
+        if not expect_face and not expect_card:
+            raise HikError("Selecione reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
         data = self.post("/artemis/api/visitor/v1/person/ID/elementDownloadDetail",
                          {"id": visitor_id}).get("data") or {}
         if not isinstance(data, dict):
             raise HikError("Resposta de entrega do HikCentral tem formato inesperado.")
-        return parse_delivery_details(data, door_ids)
+        return parse_delivery_details(data, door_ids, expect_face=expect_face,
+                                      expect_card=expect_card)
+
 
 
 def _http_failure(status: int, result: dict, path: str, code: str = "") -> str:
@@ -408,7 +413,9 @@ def _http_failure(status: int, result: dict, path: str, code: str = "") -> str:
 
 def parse_delivery_details(data: dict, door_ids: list[str], *,
                            expect_face: bool = True, expect_card: bool = True) -> dict:
-    """Summarize only per-door face/card delivery states; never return credential data."""
+    """Summarize only requested per-door credential states."""
+    if not expect_face and not expect_card:
+        raise ValueError("Selecione reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
     detail_list = data.get("ElementDetailList") or {}
     if isinstance(detail_list, list):
         rows = detail_list
@@ -440,10 +447,7 @@ def parse_delivery_details(data: dict, door_ids: list[str], *,
                             if isinstance(certificate_list, dict) else [])
         if isinstance(certificate_rows, dict):
             certificate_rows = [certificate_rows]
-        face_state = "not_required" if not expect_face else "queued"
-        card_state = "not_required" if not expect_card else "queued"
-        all_certificates_confirmed = bool(certificate_rows)
-        certificate_failed = False
+        face_statuses, card_statuses = [], []
         for cert in certificate_rows if isinstance(certificate_rows, list) else []:
             if not isinstance(cert, dict):
                 continue
@@ -451,18 +455,26 @@ def parse_delivery_details(data: dict, door_ids: list[str], *,
                 kind, status = int(cert.get("type", -1)), int(cert.get("status", -1))
             except (TypeError, ValueError):
                 continue
-            if status != 0:
-                all_certificates_confirmed = False
-            if status == 2:
-                certificate_failed = True
-            state = "confirmed" if status == 0 else "failed" if status == 2 else "queued"
             if kind == 2 and expect_face:
-                face_state = state
+                face_statuses.append(status)
             elif kind in (0, 4) and expect_card:
-                card_state = state
-        failed = certificate_failed or element_status == 2 or "failed" in (face_state, card_state)
+                card_statuses.append(status)
+
+        def credential_state(statuses, expected):
+            if not expected:
+                return "not_required"
+            if not statuses:
+                return "queued"
+            if 2 in statuses:
+                return "failed"
+            if all(status == 0 for status in statuses):
+                return "confirmed"
+            return "queued"
+
+        face_state = credential_state(face_statuses, expect_face)
+        card_state = credential_state(card_statuses, expect_card)
+        failed = element_status == 2 or "failed" in (face_state, card_state)
         confirmed = (element_status == 0
-                     and all_certificates_confirmed
                      and (not expect_face or face_state == "confirmed")
                      and (not expect_card or card_state == "confirmed"))
         base = detail.get("BaseInfo") or {}
@@ -478,7 +490,10 @@ def parse_delivery_details(data: dict, door_ids: list[str], *,
         })
     states = [door["state"] for door in doors]
     state = "failed" if "failed" in states else "confirmed" if doors and all(x == "confirmed" for x in states) else "queued"
-    message = ("HikCentral confirmou face e pulseira em todas as catracas consultadas."
+    requested = " e ".join(name for enabled, name in
+                           ((expect_face, "reconhecimento facial"),
+                            (expect_card, "pulseira/cart\u00e3o")) if enabled)
+    message = (f"HikCentral confirmou {requested} em todas as catracas consultadas."
                if state == "confirmed" else "Uma ou mais catracas recusaram uma credencial. Consulte os detalhes."
-               if state == "failed" else "Entrega ainda pendente ou sem confirmação em todas as catracas.")
+               if state == "failed" else "Entrega ainda pendente ou sem confirma\u00e7\u00e3o em todas as catracas.")
     return {"state": state, "message": message, "doors": doors}

@@ -95,13 +95,13 @@ class ValeApp(tk.Tk):
         self.groups_box.grid(row=1, column=1, sticky="ew", padx=4)
         self._entry(frame, 1, 1, "Reserva (opcional)", self.reservation)
 
-        card = ttk.LabelFrame(self.registration_tab, text="Pulseira NFC e foto", padding=10)
+        card = ttk.LabelFrame(self.registration_tab, text="Credenciais: reconhecimento facial e/ou pulseira NFC", padding=10)
         card.pack(fill="x", pady=7)
         card_left = ttk.Frame(card)
         card_left.pack(side="left", fill="both", expand=True, padx=(0, 18))
         self.card = tk.StringVar()
         self.uid = tk.StringVar(value="UID não lido")
-        ttk.Label(card_left, text="Número do cartão / pulseira para HikCentral").pack(anchor="w")
+        ttk.Label(card_left, text="N\u00famero do cart\u00e3o / pulseira para HikCentral (opcional)").pack(anchor="w")
         ttk.Entry(card_left, textvariable=self.card, width=35).pack(fill="x", pady=7)
         ttk.Button(card_left, text="Ler ACR122U (PC/SC)", command=self.scan).pack(anchor="w")
         ttk.Label(card_left, textvariable=self.uid).pack(anchor="w", pady=6)
@@ -110,8 +110,8 @@ class ValeApp(tk.Tk):
         self.photo_widget.pack(side="left", padx=10)
         controls = ttk.Frame(card)
         controls.pack(side="left")
-        ttk.Button(controls, text="Escolher foto", command=self.browse_photo).pack(fill="x", pady=5)
-        ttk.Button(controls, text="Foto webcam", command=self.camera).pack(fill="x", pady=5)
+        ttk.Button(controls, text="Escolher foto facial (opcional)", command=self.browse_photo).pack(fill="x", pady=5)
+        ttk.Button(controls, text="Foto facial pela webcam", command=self.camera).pack(fill="x", pady=5)
 
         period = ttk.LabelFrame(self.registration_tab, text="Ingresso e validade", padding=10)
         period.pack(fill="x", pady=7)
@@ -129,7 +129,7 @@ class ValeApp(tk.Tk):
 
         buttons = ttk.Frame(self.registration_tab)
         buttons.pack(fill="x", pady=14)
-        ttk.Label(buttons, text="Foto e pulseira obrigatórias. Reserva no campo remark.").pack(side="left")
+        ttk.Label(buttons, text="Informe facial, pulseira ou ambos; ao menos um \u00e9 obrigat\u00f3rio. Reserva opcional.").pack(side="left")
         ttk.Button(buttons, text="CADASTRAR DIRETAMENTE NO HIKCENTRAL",
                    command=self.register).pack(side="right")
 
@@ -490,6 +490,7 @@ class ValeApp(tk.Tk):
                           self.card.get().strip(), parse_local(self.start.get()),
                           parse_local(self.end.get()).replace(second=59), self.reservation.get())
             payload = registration_payload(obj)
+            expect_face, expect_card = bool(obj.photo_jpeg), bool(obj.card_number.strip())
         except Exception as exc:
             messagebox.showerror("Dados", str(exc))
             return
@@ -514,15 +515,19 @@ class ValeApp(tk.Tk):
                         name = (element.get("BaseInfo") or {}).get("Name") or element_id
                         door_names[element_id] = str(name)
             door_lines = [f"• {door_names.get(door_id, door_id)} (ID {door_id})" for door_id in door_ids]
+            credentials = " e ".join(label for present, label in
+                                     ((expect_face, "reconhecimento facial"),
+                                      (expect_card, "pulseira/cart\u00e3o")) if present)
             confirmation = (
                 f"Visitante: {obj.first_name.strip()} {obj.last_name.strip()}\n"
                 f"Grupo: {group}\n"
                 f"Entrada: {obj.arrival.strftime('%d/%m/%Y %H:%M %Z')}\n"
-                f"Saída: {obj.departure.strftime('%d/%m/%Y %H:%M %Z')}\n\n"
-                "Níveis Visitor que serão associados:\n" + "\n".join(level_lines) +
-                "\n\nCatracas alcançadas por esses níveis:\n" + "\n".join(door_lines) +
-                "\n\nA próxima etapa enviará foto facial e número da pulseira. "
-                "Confirme também que a pulseira de teste não está vinculada a outro visitante.\n\n"
+                f"Sa\u00edda: {obj.departure.strftime('%d/%m/%Y %H:%M %Z')}\n\n"
+                "N\u00edveis Visitor que ser\u00e3o associados:\n" + "\n".join(level_lines) +
+                "\n\nCatracas alcan\u00e7adas por esses n\u00edveis:\n" + "\n".join(door_lines) +
+                f"\n\nCredencial(is) a enviar: {credentials}. " +
+                ("Confirme que a pulseira de teste n\u00e3o est\u00e1 vinculada a outro visitante.\n\n"
+                 if expect_card else "\n\n") +
                 "Prosseguir com a reserva e o check-in?"
             )
             if not messagebox.askyesno("Confirmar níveis e catracas", confirmation, parent=self):
@@ -535,7 +540,8 @@ class ValeApp(tk.Tk):
                 # Checkpoint immediately after the reservation to prevent duplicates.
                 access_ids = [level["id"] for level in selected]
                 save_pending(visitor_id, access_ids, appointment_id=appointment_id,
-                             door_ids=door_ids, registered=False)
+                             door_ids=door_ids, registered=False,
+                             expect_face=expect_face, expect_card=expect_card)
                 registration_record_id = client.register_visitor(payload, selected,
                                                                   appointment_id, visitor_id)
                 mark_registered(registration_record_id)
@@ -543,10 +549,12 @@ class ValeApp(tk.Tk):
                     client.assign_access(visitor_id, level_id)
                     mark_assigned(level_id)
                 client.apply(visitor_id, door_ids)
-                save_last_delivery(visitor_id, door_ids)
+                save_last_delivery(visitor_id, door_ids,
+                                   expect_face=expect_face, expect_card=expect_card)
                 clear_pending()
                 try:
-                    report = self._poll_delivery(client, visitor_id, door_ids)
+                    report = self._poll_delivery(client, visitor_id, door_ids,
+                                                 expect_face=expect_face, expect_card=expect_card)
                     report_error = ""
                 except Exception as exc:
                     report, report_error = None, str(exc)
@@ -614,7 +622,10 @@ class ValeApp(tk.Tk):
             return
 
         def work():
-            return self.client().delivery_report(data["visitor_id"], data["door_ids"])
+            return self.client().delivery_report(
+                data["visitor_id"], data["door_ids"],
+                expect_face=data.get("expect_face", True),
+                expect_card=data.get("expect_card", True))
 
         def finish(report, error):
             if error:
@@ -633,13 +644,15 @@ class ValeApp(tk.Tk):
         self.task(work, finish)
 
     @staticmethod
-    def _poll_delivery(client, visitor_id, door_ids):
-        report = client.delivery_report(visitor_id, door_ids)
+    def _poll_delivery(client, visitor_id, door_ids, *, expect_face=True, expect_card=True):
+        report = client.delivery_report(visitor_id, door_ids,
+                                        expect_face=expect_face, expect_card=expect_card)
         for _ in range(2):
             if report["state"] != "queued":
                 break
             time.sleep(2)
-            report = client.delivery_report(visitor_id, door_ids)
+            report = client.delivery_report(visitor_id, door_ids,
+                                            expect_face=expect_face, expect_card=expect_card)
         return report
 
     def resume(self):
@@ -668,10 +681,14 @@ class ValeApp(tk.Tk):
                     client.assign_access(pending["visitor_id"], level)
                     mark_assigned(level)
             client.apply(pending["visitor_id"], pending["door_ids"])
-            save_last_delivery(pending["visitor_id"], pending["door_ids"])
+            expect_face = pending.get("expect_face", True)
+            expect_card = pending.get("expect_card", True)
+            save_last_delivery(pending["visitor_id"], pending["door_ids"],
+                               expect_face=expect_face, expect_card=expect_card)
             clear_pending()
             try:
-                report = self._poll_delivery(client, pending["visitor_id"], pending["door_ids"])
+                report = self._poll_delivery(client, pending["visitor_id"], pending["door_ids"],
+                                             expect_face=expect_face, expect_card=expect_card)
                 report_error = ""
             except Exception as exc:
                 report, report_error = None, str(exc)

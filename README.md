@@ -1,19 +1,20 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.1` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.2` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
 ## Operação
 - Nome, sobrenome e grupos Visitor reais obtidos no HikCentral.
 - Foto via webcam ou arquivo, enviada via Base64 JPEG. A webcam tem prévia ao vivo, captura e opção de refazer.
+- Cadastro aceita reconhecimento facial, pulseira/cartão ou ambos; ao menos um método é obrigatório.
 - Pulseira NFC por ACR122U/PC-SC, com conversão configurável (HEX, decimal big-endian, decimal little-endian) e número editável.
 - Ingressos de 1, 2 ou 3 dias, personalizáveis. Por padrão a saída é às 23:59:59 do último dia incluído.
 - Entrada e saída editáveis, com fuso America/Sao_Paulo.
 - Reserva opcional no campo VisitorInfo.remark.
 - Níveis de acesso configurados por grupo. O padrão não concede níveis; o operador precisa definir a política aprovada.
 - Antes de enviar, mostra os níveis e catracas que receberão a operação e pede confirmação.
-- Consulta o estado de face e pulseira em cada catraca após solicitar a reaplicação.
+- Consulta apenas os métodos enviados em cada catraca após solicitar a reaplicação.
 - Recurso Concluir pendente retoma distribuição sem criar novo visitante caso falhe após criação.
 
 Grupos iniciais conforme as imagens: Day use, Hóspedes Serra, Hóspedes Vale, Visitors. A lista real sempre é consultada antes da operação.

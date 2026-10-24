@@ -159,6 +159,29 @@ def test_delivery_report_requires_face_and_card_on_each_door():
     assert "cardNo" not in repr(report)
 
 
+def test_delivery_report_checks_only_requested_credential():
+    from hikcentral import parse_delivery_details
+    data = {"ElementDetailList": {"ElementDetail": [
+        {"elementID": "face-door", "ElementStatus": [{"elementStatus": 0}],
+         "CertificateStatusList": {"CertificateStatus": [
+             {"type": 2, "status": 0}, {"type": 4, "status": 2}]}},
+        {"elementID": "card-door", "ElementStatus": [{"elementStatus": 0}],
+         "CertificateStatusList": {"CertificateStatus": [
+             {"type": 2, "status": 2}, {"type": 4, "status": 0}]}}
+    ]}}
+    face = parse_delivery_details(data, ["face-door"], expect_face=True, expect_card=False)
+    assert face["state"] == "confirmed"
+    assert face["doors"][0]["faceState"] == "confirmed"
+    assert face["doors"][0]["credentialState"] == "not_required"
+    assert "reconhecimento facial" in face["message"]
+
+    card = parse_delivery_details(data, ["card-door"], expect_face=False, expect_card=True)
+    assert card["state"] == "confirmed"
+    assert card["doors"][0]["faceState"] == "not_required"
+    assert card["doors"][0]["credentialState"] == "confirmed"
+    assert "pulseira" in card["message"]
+
+
 def test_delivery_report_reads_only_expected_door_ids():
     from hikcentral import parse_delivery_details
     report = parse_delivery_details({}, ["door-1"])

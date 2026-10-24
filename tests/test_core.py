@@ -37,12 +37,39 @@ def test_payload_visitor_group_photo_card_remark():
     assert payload["visitEndTime"].endswith("-03:00")
 
 
+def test_registration_payload_accepts_face_only_card_only_or_both():
+    start = datetime(2099, 10, 24, 10, tzinfo=TZ)
+    end = end_for_ticket(start, default_settings()["tickets"]["1 dia"])
+
+    face = registration_payload(Visitor("Joao", "Silva", "Day use", jpeg(), "", start, end))
+    face_info = face["visitorInfoList"][0]["VisitorInfo"]
+    assert "faces" in face_info and "cards" not in face_info
+
+    card = registration_payload(Visitor("Joao", "Silva", "Day use", b"", "CARD123", start, end))
+    card_info = card["visitorInfoList"][0]["VisitorInfo"]
+    assert "cards" in card_info and "faces" not in card_info
+
+    both = registration_payload(Visitor("Joao", "Silva", "Day use", jpeg(), "CARD123", start, end))
+    both_info = both["visitorInfoList"][0]["VisitorInfo"]
+    assert "faces" in both_info and "cards" in both_info
+
+
+def test_registration_requires_at_least_one_credential():
+    start = datetime(2099, 10, 24, 10, tzinfo=TZ)
+    end = end_for_ticket(start, default_settings()["tickets"]["1 dia"])
+    visitor = Visitor("Joao", "Silva", "Day use", b"", "", start, end)
+    with pytest.raises(ValueError, match="facial"):
+        registration_payload(visitor)
+
+
 def test_settings_and_pending(tmp_path):
     s = default_settings()
     save_settings(s, tmp_path)
     assert load_settings(tmp_path)["host"] == s["host"]
-    save_pending("v001", ["a", "b"], tmp_path)
+    save_pending("v001", ["a", "b"], tmp_path, expect_face=False, expect_card=True)
     assert load_pending(tmp_path)["appointment_id"] == ""
+    assert load_pending(tmp_path)["expect_face"] is False
+    assert load_pending(tmp_path)["expect_card"] is True
     with pytest.raises(RuntimeError, match="pendente"):
         save_pending("v002", ["c"], tmp_path)
     mark_registered("checkin-001", tmp_path)
@@ -51,8 +78,10 @@ def test_settings_and_pending(tmp_path):
     assert load_pending(tmp_path)["assigned"] == ["a"]
     clear_pending(tmp_path)
     assert load_pending(tmp_path) is None
-    save_last_delivery("v001", ["door-1", "door-2", "door-1"], tmp_path)
-    assert load_last_delivery(tmp_path) == {"visitor_id": "v001", "door_ids": ["door-1", "door-2"]}
+    save_last_delivery("v001", ["door-1", "door-2", "door-1"], tmp_path,
+                       expect_face=True, expect_card=False)
+    assert load_last_delivery(tmp_path) == {"visitor_id": "v001", "door_ids": ["door-1", "door-2"],
+                                           "expect_face": True, "expect_card": False}
 
 
 def test_config_editing_and_uid_formats():

@@ -12,7 +12,7 @@ import re
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.1"
+APP_VERSION = "1.0.0-preview.2"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkout": "23:59"},
@@ -154,51 +154,56 @@ def validate_visitor(v: Visitor, now: datetime | None = None) -> None:
         raise ValueError("Informe nome e sobrenome.")
     if not v.group.strip():
         raise ValueError("Escolha um grupo de visitantes.")
-    try:
-        with Image.open(BytesIO(v.photo_jpeg)) as image:
-            if image.format != "JPEG":
-                raise ValueError
-            image.verify()
-    except Exception as exc:
-        raise ValueError("Selecione uma foto JPEG válida.")
-    if len(v.photo_jpeg) > 2_000_000:
-        raise ValueError("Foto maior que 2 MB; comprima a imagem.")
-    if not re.fullmatch(r"[A-Za-z0-9]{1,32}", v.card_number):
-        raise ValueError("Número da pulseira deve ter 1 a 32 caracteres alfanuméricos.")
+    card_number = v.card_number.strip()
+    if not v.photo_jpeg and not card_number:
+        raise ValueError("Informe reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
+    if v.photo_jpeg:
+        try:
+            with Image.open(BytesIO(v.photo_jpeg)) as image:
+                if image.format != "JPEG":
+                    raise ValueError
+                image.verify()
+        except Exception as exc:
+            raise ValueError("Selecione uma foto JPEG v\u00e1lida.") from exc
+        if len(v.photo_jpeg) > 2_000_000:
+            raise ValueError("Foto maior que 2 MB; comprima a imagem.")
+    if card_number and not re.fullmatch(r"[A-Za-z0-9]{1,32}", card_number):
+        raise ValueError("N\u00famero da pulseira deve ter 1 a 32 caracteres alfanum\u00e9ricos.")
     if (v.arrival.tzinfo is None or v.departure.tzinfo is None
             or v.arrival.utcoffset() is None or v.departure.utcoffset() is None):
-        raise ValueError("Datas devem conter fuso horário.")
+        raise ValueError("Datas devem conter fuso hor\u00e1rio.")
     if v.departure <= v.arrival:
-        raise ValueError("Saída deve ser posterior à entrada.")
+        raise ValueError("Sa\u00edda deve ser posterior \u00e0 entrada.")
     current = now or datetime.now(TZ)
     if v.departure.astimezone(TZ) <= current.astimezone(TZ):
-        raise ValueError("O ingresso já expirou. Ajuste a data e hora de saída.")
+        raise ValueError("O ingresso j\u00e1 expirou. Ajuste a data e hora de sa\u00edda.")
     if len(v.reservation) > 255:
-        raise ValueError("Número da reserva muito longo.")
+        raise ValueError("N\u00famero da reserva muito longo.")
 
 
 def registration_payload(v: Visitor) -> dict:
     validate_visitor(v)
+    visitor_info = {
+        "visitorGivenName": v.first_name.strip(),
+        "visitorFamilyName": v.last_name.strip(),
+        "visitorGroupName": v.group.strip(),
+        "remark": v.reservation.strip(),
+        "gender": 0,
+        "companyName": "Vale",
+        "certificateType": 111,
+        "certificateNo": "",
+        "accessInfo": {"electrostaticDetectionType": 0, "qrCodeValidNum": 1},
+    }
+    if v.photo_jpeg:
+        visitor_info["faces"] = [{"faceData": base64.b64encode(v.photo_jpeg).decode("ascii")}]
+    if v.card_number.strip():
+        visitor_info["cards"] = [{"cardNo": v.card_number.strip()}]
     return {
         "visitStartTime": v.arrival.isoformat(timespec="seconds"),
         "visitEndTime": v.departure.isoformat(timespec="seconds"),
         "visitPurposeType": 4,
         "visitPurpose": "Hospedagem / Day use",
-        "visitorInfoList": [{
-            "VisitorInfo": {
-                "visitorGivenName": v.first_name.strip(),
-                "visitorFamilyName": v.last_name.strip(),
-                "visitorGroupName": v.group.strip(),
-                "remark": v.reservation.strip(),
-                "gender": 0,
-                "companyName": "Vale",
-                "certificateType": 111,
-                "certificateNo": "",
-                "accessInfo": {"electrostaticDetectionType": 0, "qrCodeValidNum": 1},
-                "faces": [{"faceData": base64.b64encode(v.photo_jpeg).decode("ascii")}],
-                "cards": [{"cardNo": v.card_number.strip()}]
-            }
-        }]
+        "visitorInfoList": [{"VisitorInfo": visitor_info}]
     }
 
 
@@ -247,14 +252,18 @@ def _write_json_atomic(path: Path, data: dict) -> None:
 
 def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = None,
                  *, appointment_id: str = "", door_ids: list[str] | None = None,
-                 registered: bool = True) -> None:
+                 registered: bool = True, expect_face: bool = True,
+                 expect_card: bool = True) -> None:
     """Checkpoint mínimo após reserva; nunca armazena foto, cartão, segredo ou nome."""
     path = (base or app_dir()) / "pending.json"
+    if not expect_face and not expect_card:
+        raise ValueError("Informe reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
     if path.exists():
         raise RuntimeError("Há cadastro pendente. Confira o cadastro anterior antes de criar outro.")
     _write_json_atomic(path, {
         "visitor_id": visitor_id, "appointment_id": appointment_id,
         "access_ids": access_ids, "door_ids": door_ids or [],
+        "expect_face": bool(expect_face), "expect_card": bool(expect_card),
         "registration_record_id": "", "registered": registered, "assigned": []
     })
 
@@ -288,15 +297,19 @@ def clear_pending(base: Path | None = None) -> None:
     ((base or app_dir()) / "pending.json").unlink(missing_ok=True)
 
 
-def save_last_delivery(visitor_id: str, door_ids: list[str], base: Path | None = None) -> None:
-    """Store only IDs needed to recheck delivery; no visitor PII or credentials."""
+def save_last_delivery(visitor_id: str, door_ids: list[str], base: Path | None = None,
+                       *, expect_face: bool = True, expect_card: bool = True) -> None:
+    """Store only IDs and requested credential types for rechecking delivery."""
     if not visitor_id or not door_ids:
-        raise ValueError("Visitante e catracas são obrigatórios para consultar a entrega.")
+        raise ValueError("Visitante e catracas s\u00e3o obrigat\u00f3rios para consultar a entrega.")
+    if not expect_face and not expect_card:
+        raise ValueError("Informe reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
     dest = base or app_dir()
     dest.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(dest / "last_delivery.json", {
         "visitor_id": str(visitor_id),
-        "door_ids": list(dict.fromkeys(str(x) for x in door_ids))
+        "door_ids": list(dict.fromkeys(str(x) for x in door_ids)),
+        "expect_face": bool(expect_face), "expect_card": bool(expect_card)
     })
 
 
