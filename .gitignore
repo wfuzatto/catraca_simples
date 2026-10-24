@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+dist/
+build/
+*.spec
+.venv/
+*.log
+settings.json
+secrets.dpapi
+pending.json
+*.jpg
+*.jpeg
+*.png
+.env
