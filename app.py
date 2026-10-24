@@ -11,9 +11,9 @@ from PIL import Image, ImageOps, ImageTk
 from core import (GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   parse_ticket_lines, parse_access_lines, load_pending, save_pending,
-                  mark_assigned, clear_pending)
+                  mark_assigned, mark_registered, clear_pending)
 from devices import read_uid, to_card_number
-from hikcentral import HikCentral
+from hikcentral import HikCentral, network_diagnostics
 
 
 class ValeApp(tk.Tk):
@@ -162,6 +162,8 @@ class ValeApp(tk.Tk):
         self.access_text.pack(fill="both", expand=True)
         ttk.Button(self.settings_tab, text="Salvar", command=self.save_config).pack(side="right", pady=5)
         ttk.Button(self.settings_tab, text="Testar conexão", command=self.connect).pack(side="right", padx=9)
+        ttk.Button(self.settings_tab, text="Diagnóstico de rede",
+                   command=self.diagnose).pack(side="right", padx=9)
 
     def _fill_settings(self):
         s = self.settings
@@ -188,7 +190,7 @@ class ValeApp(tk.Tk):
         except (KeyError, ValueError) as exc:
             self.status.set(str(exc))
 
-    def save_config(self):
+    def save_config(self, silent=False):
         try:
             conf = {
                 "host": self.s_host.get().strip(),
@@ -214,9 +216,12 @@ class ValeApp(tk.Tk):
             if self.ticket.get() not in conf["tickets"]:
                 self.ticket.set(next(iter(conf["tickets"])))
             self.calculate()
-            messagebox.showinfo("Configuração", "Salvo. Sincronize novamente antes do cadastro.")
+            if not silent:
+                messagebox.showinfo("Configuração", "Salvo. Sincronize novamente antes do cadastro.")
+            return True
         except Exception as exc:
             messagebox.showerror("Configuração", str(exc))
+            return False
 
     def client(self):
         s = self.settings
@@ -239,28 +244,59 @@ class ValeApp(tk.Tk):
             finish(value, error)
         threading.Thread(target=run, daemon=True).start()
 
+    def diagnose(self):
+        """Testa TCP/TLS sem credenciais; mostra motivo da falha de conexão."""
+        try:
+            host = self.s_host.get().strip()
+            port = int(self.s_port.get().strip())
+            cafile = self.s_ca.get().strip()
+        except ValueError:
+            messagebox.showerror("Diagnóstico", "A porta deve ser um número inteiro.")
+            return
+
+        def done(value, error):
+            if error:
+                messagebox.showerror("Diagnóstico", str(error))
+            else:
+                messagebox.showinfo("Diagnóstico da conexão", value)
+                self.status.set(value.splitlines()[-1])
+
+        self.task(lambda: network_diagnostics(host, port, cafile), done)
+
     def connect(self):
+        # Corrige falha anterior: Testar conexão usava valores salvos antigos,
+        # ignorando host/porta/AppKey recém digitados na tela.
+        if not self.save_config(silent=True):
+            return
+
         def work():
             client = self.client()
-            return client.visitor_groups(), client.access_levels()
+            levels = client.access_levels()
+            if not levels:
+                raise RuntimeError("HikCentral respondeu, mas não retornou níveis Visitor type=2.")
+            try:
+                groups = client.visitor_groups()
+                source = "consultados no HikCentral"
+            except Exception:
+                groups = GROUPS[:]
+                source = "pré-configurados (consulta de grupos não confirmada pela API)"
+            return groups, levels, source
+
         def finish(value, error):
             if error:
                 self.verified = False
                 self.status.set(str(error))
                 messagebox.showerror("Conexão", str(error))
                 return
-            groups, levels = value
-            if not groups:
-                self.verified = False
-                messagebox.showerror("Conexão", "API retornou zero grupos Visitor.")
-                return
+            groups, levels, source = value
             self.connected_groups = groups
             self.groups_box["values"] = groups
             if self.group.get() not in groups:
                 self.group.set(groups[0])
             self.verified = True
-            self.status.set(f"Conectado: {len(groups)} grupos Visitor e {len(levels)} níveis.")
+            self.status.set(f"OpenAPI conectada: {len(levels)} níveis Visitor. Grupos {source}.")
             self.book.select(self.registration_tab)
+
         self.task(work, finish)
 
     def use_photo(self, source):
@@ -341,23 +377,34 @@ class ValeApp(tk.Tk):
 
         def work():
             client = self.client()
-            ids = client.resolve_access_ids(levels)
-            visitor_id = client.create_visitor(payload)
-            # Só criar uma vez: registrar ID antes de atribuir níveis.
-            save_pending(visitor_id, ids)
-            for level_id in ids:
+            selected, door_ids = client.resolve_levels(levels)
+            appointment_id, visitor_id = client.create_appointment(payload, selected)
+            # Guarda checkpoint antes do check-in para não duplicar a reserva
+            # se houver falha de rede durante a segunda etapa.
+            access_ids = [level["id"] for level in selected]
+            save_pending(visitor_id, access_ids, appointment_id=appointment_id,
+                         door_ids=door_ids, registered=False)
+            client.register_visitor(payload, selected, appointment_id, visitor_id)
+            mark_registered()
+            for level_id in access_ids:
                 client.assign_access(visitor_id, level_id)
                 mark_assigned(level_id)
-            client.apply()
+            client.apply(visitor_id, door_ids)
             clear_pending()
             return visitor_id
+
         def finish(visitor_id, error):
             if error:
                 pending = load_pending()
                 if pending:
+                    if not pending.get("registered", True):
+                        advice = ("A reserva foi criada, mas o check-in não está confirmado. "
+                                  "Confirme o estado no HikCentral antes de retomar ou repetir. "
+                                  "Não faça uma segunda reserva.")
+                    else:
+                        advice = "Use CONCLUIR PENDENTE para reaplicar acessos, sem criar outro visitante."
                     messagebox.showwarning("Cadastro parcial",
-                        f"Visitante ID {pending['visitor_id']} criado.\n{error}\n"
-                        "Use CONCLUIR PENDENTE, não refaça o cadastro.")
+                        f"Visitante ID {pending['visitor_id']}.\n{error}\n\n{advice}")
                 else:
                     messagebox.showerror("Resultado incerto",
                         f"{error}\nConfira se a pessoa já existe no HikCentral antes de tentar novamente.")
@@ -374,19 +421,34 @@ class ValeApp(tk.Tk):
         self.task(work, finish)
 
     def resume(self):
-        if not load_pending():
+        data = load_pending()
+        if not data:
             messagebox.showinfo("Pendências", "Nenhum visitante pendente.")
             return
+        if not data.get("registered", True):
+            messagebox.showwarning("Check-in não confirmado",
+                "A reserva já foi criada no HikCentral, mas a resposta do check-in "
+                "não foi confirmada. Confira o visitante/registro no painel e conclua "
+                "o check-in manualmente. Não crie outra reserva. "
+                "O programa não repete essa etapa automaticamente, para evitar duplicação.")
+            return
+        if not data.get("door_ids"):
+            messagebox.showwarning("Dados de versão anterior",
+                "Esta pendência não contém IDs de portas; consulte o HikCentral "
+                "antes de reaplicar credenciais.")
+            return
+
         def work():
             client = self.client()
-            data = load_pending()
-            for level in data["access_ids"]:
-                if level not in data["assigned"]:
-                    client.assign_access(data["visitor_id"], level)
+            pending = load_pending()
+            for level in pending["access_ids"]:
+                if level not in pending["assigned"]:
+                    client.assign_access(pending["visitor_id"], level)
                     mark_assigned(level)
-            client.apply()
+            client.apply(pending["visitor_id"], pending["door_ids"])
             clear_pending()
-            return data["visitor_id"]
+            return pending["visitor_id"]
+
         def finish(value, error):
             if error:
                 messagebox.showerror("Pendente", str(error))
