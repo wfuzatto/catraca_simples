@@ -169,12 +169,13 @@ class ValeApp(tk.Tk):
         tickets.grid(row=0, column=0, sticky="nsew", padx=6)
         self.tickets_text = tk.Text(tickets, height=8, width=26, font=("Consolas", 10))
         self.tickets_text.pack(fill="both", expand=True)
-        access = ttk.LabelFrame(options, text="Níveis: Grupo=Nivel1,Nivel2", padding=8)
+        access = ttk.LabelFrame(options, text="Níveis de acesso por grupo", padding=8)
         access.grid(row=0, column=1, sticky="nsew", padx=6)
         self.access_text = tk.Text(access, height=8, width=44, font=("Consolas", 9), wrap="word")
         self.access_text.pack(fill="both", expand=True)
         ttk.Label(self.settings_tab,
-                  text="Defina apenas os níveis aprovados para cada grupo. Grupos sem níveis ficam bloqueados para cadastro.",
+                  text="Use os nomes exatos dos níveis Visitor sincronizados com o HikCentral (ex.: ENTRADA ACQUAVALE). "
+                       "'type=2' é um filtro técnico, não um tipo para cadastrar. Grupos sem níveis ficam bloqueados para cadastro.",
                   wraplength=850).pack(anchor="w", padx=8)
         ttk.Button(self.settings_tab, text="Salvar", command=self.save_config).pack(side="right", pady=5)
         ttk.Button(self.settings_tab, text="Testar conexão", command=self.connect).pack(side="right", padx=9)

@@ -288,8 +288,13 @@ class HikCentral:
             remote_name = "SAIDA AQCUAVALE" if normalize(name) == normalize("SAIDA ACQUAVALE") else name
             matches = [row for row in levels if normalize(row["name"]) == normalize(remote_name)]
             if len(matches) != 1:
-                raise HikError(f"Nível Visitor ausente/duplicado: {name}. "
-                               "Confira nomes no HikCentral (type=2).")
+                available = ", ".join(row["name"] for row in levels) or "nenhum"
+                raise HikError(
+                    f'"{name}" está salvo como nível de acesso, mas não corresponde a um nível Visitor do HikCentral. '
+                    f"Níveis disponíveis: {available}.\n"
+                    'Ajuste Configurações > Níveis usando um desses nomes. "type=2" é apenas um filtro técnico da consulta; '
+                    "não é um tipo que você precise cadastrar."
+                )
             level = matches[0]
             ids = []
             for entry in level["elements"]:
