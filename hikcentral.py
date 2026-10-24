@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import http.client
 import json
 import os
+import re
 import secrets
 import socket
 import ssl
@@ -32,6 +34,69 @@ def sign(path: str, key: str, secret: str, timestamp: str,
                  f"x-ca-timestamp:{timestamp}\n{path}")
     digest = hmac.new(secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).digest()
     return base64.b64encode(digest).decode("ascii")
+
+
+def normalize_pin(value: str) -> str:
+    """Exige SHA-256 completo, sem aceitar pins curtos ou parciais."""
+    value = value.strip().replace(":", "").replace(" ", "").upper()
+    if value and not re.fullmatch(r"[0-9A-F]{64}", value):
+        raise HikError("A impressão digital precisa ter 64 caracteres hexadecimais SHA-256.")
+    return value
+
+
+def read_cert_sha256(host: str, port: int, timeout: float = 7.0) -> str:
+    """Lê somente o certificado remoto: não envia AppKey, AppSecret nem qualquer PII."""
+    if not host or any(ch in host for ch in ("/", "\\", "://")):
+        raise HikError("IP/DNS inválido.")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+            with context.wrap_socket(sock, server_hostname=host) as tls:
+                der = tls.getpeercert(binary_form=True)
+                if not der:
+                    raise HikError("O servidor não apresentou certificado TLS.")
+                return hashlib.sha256(der).hexdigest().upper()
+    except (OSError, ssl.SSLError) as exc:
+        raise HikError(f"Não foi possível ler certificado em {host}:{port}: {exc}") from exc
+
+
+def pinned_https_post(host: str, port: int, path: str, data: bytes,
+                      headers: dict, fingerprint: str, timeout: float = 25.0) -> tuple[int, bytes]:
+    """Autentica o certificado ANTES de enviar qualquer segredo/dado pessoal.
+
+    TLS transport encryption without CA validation is acceptable only in this
+    explicitly fingerprint-pinned mode. Never fall back if fingerprint differs.
+    """
+    fingerprint = normalize_pin(fingerprint)
+    if not fingerprint:
+        raise HikError("Impressão digital TLS não configurada.")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    conn = http.client.HTTPSConnection(host, int(port), context=context, timeout=timeout)
+    try:
+        conn.connect()  # Executa TLS handshake. Ainda não transmite cabeçalhos/autenticação.
+        cert = conn.sock.getpeercert(binary_form=True) if conn.sock else None
+        if not cert:
+            raise HikError("O serviço não apresentou certificado TLS.")
+        presented = hashlib.sha256(cert).hexdigest().upper()
+        if not hmac.compare_digest(presented, fingerprint):
+            raise HikError(
+                "O CERTIFICADO DO HIKCENTRAL MUDOU ou não corresponde ao SHA-256 confiável. "
+                "Nenhuma credencial foi enviada. Confira o certificado no servidor antes de atualizar."
+            )
+        conn.request("POST", path, body=data, headers=headers)
+        response = conn.getresponse()
+        content = response.read(2_000_001)
+        if len(content) > 2_000_000:
+            raise HikError("Resposta HTTP muito grande.")
+        return response.status, content
+    except (TimeoutError, OSError, http.client.HTTPException, ssl.SSLError) as exc:
+        raise HikError(f"Falha HTTPS com certificado fixado em {host}:{port}: {exc}") from exc
+    finally:
+        conn.close()
 
 
 def network_diagnostics(host: str, port: int, ca_file: str = "",
@@ -75,7 +140,7 @@ def network_diagnostics(host: str, port: int, ca_file: str = "",
 
 class HikCentral:
     def __init__(self, host: str, port: int, key: str, secret: str,
-                 ca_file: str = "", session=None):
+                 ca_file: str = "", session=None, pinned_sha256: str = ""):
         if not host or not key or not secret:
             raise HikError("Configure host e credenciais OpenAPI (AppKey/AppSecret).")
         if "://" in host or "/" in host or "\\" in host:
@@ -84,6 +149,9 @@ class HikCentral:
         self.url = f"https://{host}:{int(port)}"
         self.key, self.secret = key, secret
         self.verify = ca_file if ca_file else True
+        self.pinned_sha256 = normalize_pin(pinned_sha256)
+        if self.pinned_sha256 and ca_file:
+            raise HikError("Selecione apenas CA PEM ou certificado fixado por SHA-256, não ambos.")
         self.session = session or requests.Session()
         # Nunca usar proxy HTTP do usuário para o IP interno do HikCentral.
         if session is None:
@@ -106,30 +174,42 @@ class HikCentral:
             "x-ca-signature": sign(path, self.key, self.secret, timestamp, md5, nonce),
             "userId": "admin",
         }
-        try:
-            response = self.session.post(self.url + path, data=body,
-                                         headers=headers, timeout=(7, 25),
-                                         verify=self.verify)
-            response.raise_for_status()
-            result = response.json()
-        except requests.exceptions.SSLError as exc:
-            raise HikError("Falha no certificado TLS ou nome/IP não corresponde ao certificado. "
-                           "Use o certificado/hostname válido e a CA PEM correspondente.") from exc
-        except requests.exceptions.ConnectTimeout as exc:
-            raise HikError(f"Timeout conectando a {self.host}:{self.port}. "
-                           "Verifique IP, porta, firewall, rede/VPN e serviço OpenAPI.") from exc
-        except requests.exceptions.ConnectionError as exc:
-            raise HikError(f"Não foi possível conectar a {self.host}:{self.port}. "
-                           "IP/porta inacessível, conexão recusada ou serviço offline. "
-                           "Use o botão Diagnóstico de rede para verificar portas 443/37443.") from exc
-        except requests.exceptions.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else "?"
-            raise HikError(f"HikCentral HTTP {status}. Confira endereço, OpenAPI e autorização do partner.") from exc
-        except requests.exceptions.RequestException as exc:
-            raise HikError(f"Falha HTTP no HikCentral: {type(exc).__name__}: {exc}") from exc
-        except ValueError as exc:
-            raise HikError("A porta respondeu, mas não retornou JSON da OpenAPI. "
-                           "Confira host, porta e caminho do Gateway.") from exc
+        if self.pinned_sha256:
+            status, raw = pinned_https_post(
+                self.host, self.port, path, body, headers, self.pinned_sha256)
+            if status >= 400:
+                raise HikError(f"HikCentral HTTP {status} (certificado confirmado). "
+                               "Confira chave, permissão da OpenAPI e caminho Artemis.")
+            try:
+                result = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise HikError("Resposta do serviço não é JSON válido da OpenAPI.") from exc
+        else:
+            try:
+                response = self.session.post(self.url + path, data=body,
+                                             headers=headers, timeout=(7, 25),
+                                             verify=self.verify)
+                response.raise_for_status()
+                result = response.json()
+            except requests.exceptions.SSLError as exc:
+                raise HikError("Falha no certificado TLS ou nome/IP não corresponde ao certificado. "
+                               "Configure CA/hostname ou fixe o certificado SHA-256 "
+                               "após confirmar sua origem no servidor.") from exc
+            except requests.exceptions.ConnectTimeout as exc:
+                raise HikError(f"Timeout conectando a {self.host}:{self.port}. "
+                               "Verifique IP, porta, firewall, rede/VPN e serviço OpenAPI.") from exc
+            except requests.exceptions.ConnectionError as exc:
+                raise HikError(f"Não foi possível conectar a {self.host}:{self.port}. "
+                               "IP/porta inacessível ou serviço offline. "
+                               "Use o diagnóstico de rede.") from exc
+            except requests.exceptions.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else "?"
+                raise HikError(f"HikCentral HTTP {status}. Confira OpenAPI e autorização.") from exc
+            except requests.exceptions.RequestException as exc:
+                raise HikError(f"Falha HTTP no HikCentral: {type(exc).__name__}: {exc}") from exc
+            except ValueError as exc:
+                raise HikError("A porta respondeu, mas não retornou JSON da OpenAPI. "
+                               "Confira host, porta e caminho do Gateway.") from exc
         if not isinstance(result, dict):
             raise HikError("Resposta OpenAPI inesperada (não é objeto JSON).")
         code = str(result.get("code", result.get("ResponseStatus", {}).get("ErrorCode", "0")))
