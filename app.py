@@ -332,7 +332,7 @@ class ValeApp(tk.Tk):
                 raise ValueError("Configure níveis de acesso para este grupo.")
             obj = Visitor(self.first.get(), self.last.get(), group, self.photo_data,
                           self.card.get().strip(), parse_local(self.start.get()),
-                          parse_local(self.end.get()), self.reservation.get())
+                          parse_local(self.end.get()).replace(second=59), self.reservation.get())
             payload = registration_payload(obj)
             levels = self.settings["group_access"][group]
         except Exception as exc:
