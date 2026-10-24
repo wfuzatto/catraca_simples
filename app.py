@@ -13,7 +13,7 @@ from core import (GROUPS, TZ, Visitor, load_settings, save_settings, load_api_ke
                   parse_ticket_lines, parse_access_lines, load_pending, save_pending,
                   mark_assigned, mark_registered, clear_pending)
 from devices import read_uid, to_card_number
-from hikcentral import HikCentral, network_diagnostics
+from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
 
 
 class ValeApp(tk.Tk):
@@ -126,6 +126,7 @@ class ValeApp(tk.Tk):
 
     def _settings(self):
         self.s_host, self.s_port, self.s_ca = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        self.s_cert_pin = tk.StringVar()
         self.s_key, self.s_secret = tk.StringVar(), tk.StringVar()
         self.s_format, self.s_camera = tk.StringVar(), tk.StringVar()
         frame = ttk.LabelFrame(self.settings_tab, text="OpenAPI local", padding=10)
@@ -137,8 +138,11 @@ class ValeApp(tk.Tk):
         self._entry(frame, 1, 0, "CA (PEM opcional)", self.s_ca)
         self._entry(frame, 2, 0, "AppKey", self.s_key)
         self._entry(frame, 2, 1, "AppSecret", self.s_secret, show="*")
-        ttk.Label(frame, text="Usuário admin do Web Client NÃO substitui AppKey/AppSecret. TLS permanece verificado.").grid(
-            row=3, column=0, columnspan=4, sticky="w", pady=6)
+        self._entry(frame, 3, 0, "SHA-256 cert. local", self.s_cert_pin)
+        ttk.Button(frame, text="Ler e conferir certificado", command=self.pin_certificate).grid(
+            row=3, column=2, columnspan=2, sticky="w", padx=5)
+        ttk.Label(frame, text="TLS seguro: CA + DNS correto, OU certificado SHA-256 aprovado manualmente.").grid(
+            row=4, column=0, columnspan=4, sticky="w", pady=6)
         device = ttk.LabelFrame(self.settings_tab, text="Dispositivos", padding=10)
         device.pack(fill="x", pady=6)
         ttk.Label(device, text="Formato do UID").pack(side="left")
@@ -172,6 +176,7 @@ class ValeApp(tk.Tk):
             var.set(str(s[key]))
         self.s_key.set(self.key)
         self.s_secret.set(self.secret)
+        self.s_cert_pin.set(s.get("cert_pin_sha256", ""))
         self.tickets_text.delete("1.0", tk.END)
         self.tickets_text.insert("1.0", "\n".join(
             f"{name};{opt['days']};{opt['checkout']}" for name, opt in s["tickets"].items()))
@@ -196,6 +201,7 @@ class ValeApp(tk.Tk):
                 "host": self.s_host.get().strip(),
                 "port": int(self.s_port.get()),
                 "ca_file": self.s_ca.get().strip(),
+                "cert_pin_sha256": normalize_pin(self.s_cert_pin.get()),
                 "card_format": self.s_format.get(),
                 "camera_index": int(self.s_camera.get()),
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
@@ -205,6 +211,8 @@ class ValeApp(tk.Tk):
                 raise ValueError("Host/porta inválidos.")
             if conf["ca_file"] and not Path(conf["ca_file"]).is_file():
                 raise ValueError("Arquivo CA inválido.")
+            if conf["ca_file"] and conf["cert_pin_sha256"]:
+                raise ValueError("Não combine CA PEM e impressão SHA-256. Selecione um método.")
             key, secret = self.s_key.get().strip(), self.s_secret.get().strip()
             if not key or not secret:
                 raise ValueError("Configure a AppKey e AppSecret (OpenAPI).")
@@ -225,7 +233,8 @@ class ValeApp(tk.Tk):
 
     def client(self):
         s = self.settings
-        return HikCentral(s["host"], s["port"], self.key, self.secret, s["ca_file"])
+        return HikCentral(s["host"], s["port"], self.key, self.secret, s["ca_file"],
+                          pinned_sha256=s.get("cert_pin_sha256", ""))
 
     def task(self, work, finish):
         if self.busy:
@@ -243,6 +252,39 @@ class ValeApp(tk.Tk):
             self.busy = False
             finish(value, error)
         threading.Thread(target=run, daemon=True).start()
+
+    def pin_certificate(self):
+        """Operador confere SHA-256 com o certificado no próprio servidor."""
+        try:
+            host = self.s_host.get().strip()
+            port = int(self.s_port.get())
+        except ValueError:
+            messagebox.showerror("Certificado", "Porta inválida.")
+            return
+
+        def finish(value, error):
+            if error:
+                messagebox.showerror("Certificado", str(error))
+                return
+            formatted = ":".join(value[i:i + 2] for i in range(0, 64, 2))
+            msg = (f"Certificado apresentado por {host}:{port}:\n\n"
+                   f"SHA-256:\n{formatted}\n\n"
+                   "ATENÇÃO: confira esta impressão digital com a do certificado "
+                   "instalado no próprio servidor HikCentral, por uma fonte confiável. "
+                   "Não aprove apenas porque foi exibida aqui. "
+                   "Ao aceitar, o aplicativo enviará dados somente se o servidor "
+                   "apresentar exatamente este certificado.\n\n"
+                   "Você conferiu o SHA-256 e deseja fixá-lo?")
+            if not messagebox.askyesno("Confiar no certificado do HikCentral?", msg):
+                return
+            if self.s_ca.get().strip():
+                messagebox.showerror("Certificado", "Remova o caminho CA PEM antes de fixar SHA-256.")
+                return
+            self.s_cert_pin.set(value)
+            if self.save_config(silent=True):
+                messagebox.showinfo("Certificado", "Impressão SHA-256 salva. Teste a OpenAPI.")
+
+        self.task(lambda: read_cert_sha256(host, port), finish)
 
     def diagnose(self):
         """Testa TCP/TLS sem credenciais; mostra motivo da falha de conexão."""
