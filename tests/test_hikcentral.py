@@ -109,3 +109,56 @@ def test_no_appointment_ids_blocks_duplicates():
 
 def test_normalization():
     assert normalize("HÓSPEDES  VALE") == normalize("hospedes vale")
+
+
+def test_cert_pin_rejects_mismatch_before_sending_secrets(monkeypatch):
+    from unittest.mock import Mock
+    from hikcentral import pinned_https_post
+    fake = Mock()
+    fake.sock.getpeercert.return_value = b"real hikvision certificate"
+    monkeypatch.setattr("hikcentral.http.client.HTTPSConnection", lambda *a, **k: fake)
+    with pytest.raises(HikError, match="CERTIFICADO DO HIKCENTRAL MUDOU"):
+        pinned_https_post("127.0.0.1", 443, "/artemis/example", b"face",
+                          {"x-ca-key": "secret"}, "0" * 64)
+    fake.connect.assert_called_once()
+    fake.request.assert_not_called()
+    fake.close.assert_called_once()
+
+
+def test_cert_pin_approves_exact_sha256(monkeypatch):
+    from unittest.mock import Mock
+    from hikcentral import pinned_https_post
+    certificate = b"cert from locally verified HikCentral"
+    fingerprint = hashlib.sha256(certificate).hexdigest()
+    fake = Mock()
+    fake.sock.getpeercert.return_value = certificate
+    fake.getresponse.return_value.status = 200
+    fake.getresponse.return_value.read.return_value = b'{"code":"0"}'
+    monkeypatch.setattr("hikcentral.http.client.HTTPSConnection", lambda *a, **k: fake)
+    status, data = pinned_https_post("127.0.0.1", 443, "/artemis/example", b"{}",
+                                     {"x-ca-key": "ak"}, fingerprint)
+    assert status == 200
+    assert data == b'{"code":"0"}'
+    fake.connect.assert_called_once()
+    fake.request.assert_called_once()
+    fake.close.assert_called_once()
+
+
+def test_pin_must_be_full_sha256():
+    from hikcentral import normalize_pin
+    with pytest.raises(HikError):
+        normalize_pin("abc")
+    assert normalize_pin("AB:" * 31 + "AB") == "AB" * 32
+
+
+def test_configured_pin_uses_pinned_transport(monkeypatch):
+    from hikcentral import HikCentral
+    calls = []
+    def fake_pinned(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 200, b'{"code": "0", "data": {"ok":true}}'
+    monkeypatch.setattr("hikcentral.pinned_https_post", fake_pinned)
+    api = HikCentral("127.0.0.1", 443, "ak", "sk", pinned_sha256="A" * 64)
+    assert api.post("/artemis/api/acs/v1/privilege/group", {"type": 2})["data"]["ok"]
+    assert calls[0][0][0:2] == ("127.0.0.1", 443)
+    assert calls[0][0][5] == "A" * 64
