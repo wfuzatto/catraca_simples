@@ -1,15 +1,19 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
+Versão atual: `1.0.0-preview.1` (prévia técnica; ainda não homologada em catraca física).
+
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
 ## Operação
 - Nome, sobrenome e grupos Visitor reais obtidos no HikCentral.
-- Foto via webcam ou arquivo, enviada via Base64 JPEG.
+- Foto via webcam ou arquivo, enviada via Base64 JPEG. A webcam tem prévia ao vivo, captura e opção de refazer.
 - Pulseira NFC por ACR122U/PC-SC, com conversão configurável (HEX, decimal big-endian, decimal little-endian) e número editável.
 - Ingressos de 1, 2 ou 3 dias, personalizáveis. Por padrão a saída é às 23:59:59 do último dia incluído.
 - Entrada e saída editáveis, com fuso America/Sao_Paulo.
 - Reserva opcional no campo VisitorInfo.remark.
-- Associa níveis de acesso por grupo e solicita reaplicação das permissões.
+- Níveis de acesso configurados por grupo. O padrão não concede níveis; o operador precisa definir a política aprovada.
+- Antes de enviar, mostra os níveis e catracas que receberão a operação e pede confirmação.
+- Consulta o estado de face e pulseira em cada catraca após solicitar a reaplicação.
 - Recurso Concluir pendente retoma distribuição sem criar novo visitante caso falhe após criação.
 
 Grupos iniciais conforme as imagens: Day use, Hóspedes Serra, Hóspedes Vale, Visitors. A lista real sempre é consultada antes da operação.
@@ -18,33 +22,37 @@ Níveis iniciais conforme as imagens: CATRACAS SABIA, ENTRADA ACQUAVALE, LOJA AC
 
 ## OpenAPI (não usa login Web)
 1. POST /artemis/api/visitor/v1/visitorgroups: recuperar grupos.
-2. POST /artemis/api/acs/v1/privilege/group: consultar níveis.
-3. POST /artemis/api/visitor/v1/registerment: registrar foto, cartão, grupo, período e remark.
-4. POST /artemis/api/acs/v1/privilege/group/single/addPersons: atribuir níveis ao visitorId.
-5. POST /artemis/api/visitor/v1/auth/reapplication: solicitar envio às catracas.
+2. POST /artemis/api/acs/v1/privilege/group com type=2: consultar níveis Visitor e catracas associadas.
+3. POST /artemis/api/visitor/v2/appointment: criar a reserva e receber appointRecordId e visitorId.
+4. POST /artemis/api/visitor/v1/registerment: registrar o check-in e guardar o ID do registro separadamente.
+5. POST /artemis/api/acs/v1/privilege/group/single/addPersons com type=2: atribuir níveis ao visitorId.
+6. POST /artemis/api/visitor/v1/auth/reapplication: solicitar envio às catracas.
+7. POST /artemis/api/visitor/v1/person/ID/elementDownloadDetail: consultar estado de face e pulseira por catraca.
 
 ## Instalação / compilação
 No GitHub, entre em Actions > Compilar EXE Windows e faça download do artefato ValeCadastroFacialNFC-Windows depois de execução bem-sucedida. Ele contém ValeCadastroFacialNFC.exe compilado pelo PyInstaller com runtime Python embutido.
 
 Requisitos externos: Windows 10/11, rede até o HikCentral e drivers PC/SC do leitor ACR122U (para leitura NFC). Câmera configurada no Windows.
 
-Para executar pelo código: Python 3.12, pip install -r requirements.txt, python app.py.
+Para executar pelo código: Python 3.13, pip install -r requirements.txt, python app.py.
 Testes: python -m pytest -q tests.
+Para validar a conexão e as dependências sem abrir a interface ou alterar visitantes, execute `ValeCadastroFacialNFC.exe --check-openapi <arquivo.json>`. O relatório traz endpoint, contagens, estado de importação da câmera/PC-SC e presença do serviço/leitor; não inclui credenciais nem dados de visitantes.
 
 ## Primeira configuração
 1. No HikCentral Web Client, habilite o OpenAPI Gateway e crie um parceiro (AppKey/AppSecret) com permissões de Visitor e ACS. A conta admin do Web Client não funciona como AppKey.
-2. Abra Configurações. IP padrão: 192.168.100.102. Porta 37443 é sugestão do ambiente anterior e precisa ser conferida na instalação.
+2. Abra Configurações. O padrão deste servidor é 127.0.0.1:443. Confirme host e porta na instalação onde o aplicativo será usado.
 3. Configure AppKey, AppSecret e, se necessário, caminho da CA PEM do certificado HTTPS. O aplicativo NÃO desativa a validação TLS/hostname. Para acesso por IP, o certificado precisa ter IP em SAN, ou utilize nome DNS correspondente.
-4. Selecione conversão UID e valide o número real com um cartão no HikCentral. O UID do ACR122U não é necessariamente igual à credencial configurada na catraca.
-5. Ajuste níveis por grupo e horários de ingressos; Salve, Sincronize e faça um cadastro de teste.
+4. Selecione conversão UID e valide o número real com uma pulseira de teste no HikCentral. O UID do ACR122U não é necessariamente igual à credencial configurada na catraca.
+5. Defina explicitamente os níveis aprovados para cada grupo, ajuste os ingressos, salve e sincronize. Grupos sem níveis configurados não podem cadastrar.
+6. Antes de cada cadastro, confira a prévia de níveis e catracas. Confirme também que a pulseira de teste não está vinculada a outro visitante; a consulta de duplicidade de cartão ainda não foi homologada.
 
 ## Segurança e persistência
-Configurações ficam em %LOCALAPPDATA%\ValeCatracaSimples\settings.json; as chaves OpenAPI ficam em secrets.dpapi protegidas por DPAPI do usuário Windows. IDs de cadastros pendentes ficam em pending.json, sem fotos nem nome do hóspede. Fotos não são gravadas no disco pela aplicação. Não inclua credenciais em arquivos do GitHub.
+Configurações ficam em %LOCALAPPDATA%\ValeCatracaSimples\settings.json; as chaves OpenAPI ficam em secrets.dpapi protegidas por DPAPI do usuário Windows. pending.json e last_delivery.json guardam apenas IDs necessários à recuperação e consulta, sem fotos, nomes ou números de cartão. Fotos não são gravadas no disco pela aplicação. Não inclua credenciais em arquivos do GitHub.
 
 A senha admin compartilhada no planejamento NÃO é incorporada ao aplicativo e deve ser trocada. O uso de dados faciais depende de política de privacidade, base legal e segurança adequadas à LGPD.
 
 ## Limites da entrega
-O EXE pode ser compilado no GitHub, mas o servidor privado 192.168.100.102, leitores e catracas precisam de homologação presencial. Resposta positiva na solicitação de reaplicação não comprova entrega a todos os dispositivos. Verifique status no HikCentral.
+O servidor HikCentral, leitores e catracas precisam de homologação presencial. Resposta positiva na solicitação de reaplicação não comprova entrega a todos os dispositivos. Verifique status no HikCentral.
 
 Referência: https://enpinfo.hikvision.com/hkwsen/unzip/20260723200832_95640_doc/index.html
 
@@ -67,7 +75,7 @@ no servidor; não confie nela só porque foi mostrada em conexão não validada.
 Este modo não valida CA, hostname nem validade: use somente em ambiente interno
 autorizado e servidor cuja identidade foi confirmada.
 
-Use Diagnóstico de rede para saber se TCP 443/37443 está acessível. Ao testar
+Use Diagnóstico de rede para saber se DNS, TCP e TLS estão acessíveis. Ao testar
 a conexão, o aplicativo salva as alterações digitadas antes da chamada OpenAPI.
 Não exponha senhas/chaves em prints nem no repositório GitHub.
 

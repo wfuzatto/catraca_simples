@@ -7,8 +7,9 @@ from hikcentral import HikCentral, HikError, normalize, sign
 
 
 class Response:
-    def __init__(self, data):
+    def __init__(self, data, status_code=200):
         self.data = data
+        self.status_code = status_code
 
     def raise_for_status(self):
         return None
@@ -18,14 +19,15 @@ class Response:
 
 
 class MockSession:
-    def __init__(self, data):
+    def __init__(self, data, status_code=200):
         self.data = data
+        self.status_code = status_code
         self.calls = []
 
     def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
         data = self.data.pop(0) if isinstance(self.data, list) else self.data
-        return Response(data)
+        return Response(data, self.status_code)
 
 
 def client(response):
@@ -63,6 +65,15 @@ def test_visitor_access_levels_type_two():
     assert len(levels) == 1
     assert doors == ["DOOR-1"]
     assert b'"type":2' in session.calls[0][1]["data"]
+
+
+def test_groups_are_fetched_from_real_visitor_endpoint():
+    api, session = client({"code": "0", "data": {"VisitorGroupList": {"VisitorGroup": [
+        {"baseInfo": {"Name": "Day use"}}, {"baseInfo": {"Name": "Visitors"}},
+        {"baseInfo": {"Name": "Visitors"}}
+    ]}}})
+    assert api.visitor_groups() == ["Day use", "Visitors"]
+    assert session.calls[0][0].endswith("/artemis/api/visitor/v1/visitorgroups")
 
 
 def test_reserve_register_reapply_flow():
@@ -105,6 +116,84 @@ def test_no_appointment_ids_blocks_duplicates():
     with pytest.raises(HikError, match="appointRecordId"):
         api.create_appointment({"visitStartTime": "t1", "visitEndTime": "t2",
                                 "visitorInfoList": []}, [])
+
+
+def test_api_errors_explain_signature_permission_and_endpoint():
+    for result, pattern in [
+        ({"code": "1001", "msg": "signature invalid"}, "Artemis/HMAC"),
+        ({"code": "1002", "msg": "AppKey invalid"}, "AppKey/AppSecret recusados"),
+        ({"code": "403", "msg": "permission denied"}, "sem permissão OpenAPI"),
+    ]:
+        api, _ = client(result)
+        with pytest.raises(HikError, match=pattern):
+            api.post("/artemis/api/acs/v1/privilege/group", {"type": 2})
+    session = MockSession({}, status_code=404)
+    api = HikCentral("127.0.0.1", 443, "ak", "sk", session=session)
+    with pytest.raises(HikError, match="Endpoint Artemis inexistente"):
+        api.post("/artemis/api/acs/v1/privilege/group")
+
+
+def test_unexpected_openapi_shape_is_rejected():
+    api, _ = client(["not", "an", "object"])
+    with pytest.raises(HikError, match="não é objeto JSON"):
+        api.post("/artemis/api/visitor/v1/visitorgroups")
+
+
+def test_delivery_report_requires_face_and_card_on_each_door():
+    from hikcentral import parse_delivery_details
+    data = {"ElementDetailList": {"ElementDetail": [
+        {"elementID": "door-1", "BaseInfo": {"Name": "Porta A"},
+         "ElementStatus": [{"elementStatus": 0}],
+         "CertificateStatusList": {"CertificateStatus": [
+             {"type": 2, "status": 0}, {"type": 0, "status": 0}]}},
+        {"elementID": "door-2", "BaseInfo": {"Name": "Porta B"},
+         "ElementStatus": [{"elementStatus": 0}],
+         "CertificateStatusList": {"CertificateStatus": [
+             {"type": 2, "status": 0}, {"type": 4, "status": 2}]}}
+    ]}}
+    report = parse_delivery_details(data, ["door-1", "door-2"])
+    assert report["state"] == "failed"
+    assert report["doors"][0]["state"] == "confirmed"
+    assert report["doors"][0]["name"] == "Porta A"
+    assert report["doors"][1]["credentialState"] == "failed"
+    assert "cardNo" not in repr(report)
+
+
+def test_delivery_report_reads_only_expected_door_ids():
+    from hikcentral import parse_delivery_details
+    report = parse_delivery_details({}, ["door-1"])
+    assert report["state"] == "queued"
+    assert report["doors"] == [{"id": "door-1", "name": "door-1", "state": "queued",
+                                "faceState": "queued", "credentialState": "queued"}]
+
+
+def test_delivery_report_uses_visitor_id_and_report_endpoint():
+    api, session = client({"code": "0", "data": {}})
+    report = api.delivery_report("visitor-1", ["door-1"])
+    assert report["state"] == "queued"
+    url, call = session.calls[0]
+    assert url.endswith("/artemis/api/visitor/v1/person/ID/elementDownloadDetail")
+    assert call["data"] == b'{"id":"visitor-1"}'
+
+
+def test_network_diagnostics_accepts_only_matching_pin(monkeypatch):
+    from hikcentral import network_diagnostics
+
+    class Socket:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr("hikcentral.socket.getaddrinfo",
+                        lambda host, port, type: [(None, None, None, None, ("127.0.0.1", port))])
+    monkeypatch.setattr("hikcentral.socket.create_connection", lambda *a, **k: Socket())
+    monkeypatch.setattr("hikcentral.read_cert_sha256", lambda *a, **k: "A" * 64)
+    ok = network_diagnostics("127.0.0.1", 443, pinned_sha256="A" * 64)
+    assert "TCP 443: ACESSÍVEL" in ok
+    assert "corresponde" in ok
+    mismatch = network_diagnostics("127.0.0.1", 443, pinned_sha256="B" * 64)
+    assert "inválido ou alterado" in mismatch
 
 
 def test_normalization():

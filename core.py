@@ -2,14 +2,17 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, time
+from io import BytesIO
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import base64
 import json
 import os
 import re
+from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
+APP_VERSION = "1.0.0-preview.1"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkout": "23:59"},
@@ -25,10 +28,11 @@ def app_dir() -> Path:
 
 def default_settings() -> dict:
     return {
-        "host": "192.168.100.102", "port": 37443, "ca_file": "",
+        "host": "127.0.0.1", "port": 443, "ca_file": "",
         "cert_pin_sha256": "",
         "tickets": json.loads(json.dumps(DEFAULT_TICKETS)),
-        "group_access": {group: ACCESS_LEVELS.copy() for group in GROUPS},
+        # A recepção must assign only levels approved for each group.
+        "group_access": {group: [] for group in GROUPS},
         "card_format": "DECIMAL_BIG", "camera_index": 0
     }
 
@@ -43,6 +47,15 @@ def load_settings(base: Path | None = None) -> dict:
         for key in conf:
             if key in saved:
                 conf[key] = saved[key]
+        saved_access = conf.get("group_access")
+        if (isinstance(saved_access, dict)
+                and set(saved_access) == set(GROUPS)
+                and all(isinstance(saved_access[group], list)
+                        and set(saved_access[group]) == set(ACCESS_LEVELS)
+                        for group in GROUPS)):
+            # Older builds granted every configured level to every group by default.
+            # Require the operator to choose the approved mapping before new writes.
+            conf["group_access"] = {group: [] for group in GROUPS}
     return conf
 
 
@@ -89,7 +102,10 @@ def end_for_ticket(start: datetime, ticket: dict) -> datetime:
     days = int(ticket["days"])
     if not (1 <= days <= 365):
         raise ValueError("Duração do ingresso deve ser de 1 a 365 dias.")
-    hour, minute = map(int, ticket["checkout"].split(":"))
+    checkout = str(ticket["checkout"])
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", checkout):
+        raise ValueError("Horário de vencimento deve usar HH:MM.")
+    hour, minute = map(int, checkout.split(":"))
     end_date = start.date() + timedelta(days=days - 1)
     end = datetime.combine(end_date, time(hour, minute, 59), tzinfo=TZ)
     if end <= start:
@@ -109,21 +125,54 @@ class Visitor:
     reservation: str = ""
 
 
-def validate_visitor(v: Visitor) -> None:
+def prepare_face_jpeg(image_bytes: bytes, max_bytes: int = 2_000_000) -> bytes:
+    """Normalize a selected/captured image to an oriented, compact JPEG."""
+    if not image_bytes or len(image_bytes) > 25_000_000:
+        raise ValueError("A imagem está vazia ou excede 25 MB.")
+    try:
+        with Image.open(BytesIO(image_bytes)) as source:
+            if source.format not in {"JPEG", "PNG", "BMP"}:
+                raise ValueError("Use uma imagem JPEG, PNG ou BMP.")
+            source.load()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Não foi possível ler a imagem selecionada.") from exc
+    image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+    for quality in (88, 82, 76, 70, 64, 58, 52):
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=quality, optimize=True)
+        data = output.getvalue()
+        if len(data) <= max_bytes:
+            return data
+    raise ValueError("A foto não pôde ser reduzida para menos de 2 MB.")
+
+
+def validate_visitor(v: Visitor, now: datetime | None = None) -> None:
     if len(v.first_name.strip()) < 2 or len(v.last_name.strip()) < 2:
         raise ValueError("Informe nome e sobrenome.")
     if not v.group.strip():
         raise ValueError("Escolha um grupo de visitantes.")
-    if not v.photo_jpeg.startswith(b"\xff\xd8"):
+    try:
+        with Image.open(BytesIO(v.photo_jpeg)) as image:
+            if image.format != "JPEG":
+                raise ValueError
+            image.verify()
+    except Exception as exc:
         raise ValueError("Selecione uma foto JPEG válida.")
     if len(v.photo_jpeg) > 2_000_000:
         raise ValueError("Foto maior que 2 MB; comprima a imagem.")
     if not re.fullmatch(r"[A-Za-z0-9]{1,32}", v.card_number):
         raise ValueError("Número da pulseira deve ter 1 a 32 caracteres alfanuméricos.")
-    if v.arrival.tzinfo is None or v.departure.tzinfo is None:
+    if (v.arrival.tzinfo is None or v.departure.tzinfo is None
+            or v.arrival.utcoffset() is None or v.departure.utcoffset() is None):
         raise ValueError("Datas devem conter fuso horário.")
     if v.departure <= v.arrival:
         raise ValueError("Saída deve ser posterior à entrada.")
+    current = now or datetime.now(TZ)
+    if v.departure.astimezone(TZ) <= current.astimezone(TZ):
+        raise ValueError("O ingresso já expirou. Ajuste a data e hora de saída.")
     if len(v.reservation) > 255:
         raise ValueError("Número da reserva muito longo.")
 
@@ -162,8 +211,10 @@ def parse_ticket_lines(raw: str) -> dict:
         if len(fields) != 3 or not fields[0]:
             raise ValueError("Ingressos: use Nome;Dias;HH:MM por linha.")
         ticket = {"days": int(fields[1]), "checkout": fields[2]}
-        # Validation using a fixed morning arrival.
-        end_for_ticket(datetime(2026, 1, 1, 8, tzinfo=TZ), ticket)
+        if fields[0] in tickets:
+            raise ValueError(f"Tipo de ingresso duplicado: {fields[0]}.")
+        # Validate time and duration independent of a guest's arrival hour.
+        end_for_ticket(datetime(2026, 1, 1, 0, tzinfo=TZ), ticket)
         tickets[fields[0]] = ticket
     if not tickets:
         raise ValueError("Cadastre pelo menos um ingresso.")
@@ -180,12 +231,18 @@ def parse_access_lines(raw: str) -> dict:
         group, levels = line.split("=", 1)
         group = group.strip()
         values = list(dict.fromkeys(x.strip() for x in levels.split(",") if x.strip()))
-        if not group or not values:
-            raise ValueError("Todo grupo deve ter ao menos um nível de acesso.")
+        if not group:
+            raise ValueError("Informe o nome do grupo antes do sinal =.")
         mapping[group] = values
     if not mapping:
-        raise ValueError("Defina níveis de acesso.")
+        return {group: [] for group in GROUPS}
     return mapping
+
+
+def _write_json_atomic(path: Path, data: dict) -> None:
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(temp, path)
 
 
 def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = None,
@@ -195,20 +252,21 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
     path = (base or app_dir()) / "pending.json"
     if path.exists():
         raise RuntimeError("Há cadastro pendente. Confira o cadastro anterior antes de criar outro.")
-    path.write_text(json.dumps({
+    _write_json_atomic(path, {
         "visitor_id": visitor_id, "appointment_id": appointment_id,
         "access_ids": access_ids, "door_ids": door_ids or [],
-        "registered": registered, "assigned": []
-    }), encoding="utf-8")
+        "registration_record_id": "", "registered": registered, "assigned": []
+    })
 
 
-def mark_registered(base: Path | None = None) -> None:
+def mark_registered(registration_record_id: str = "", base: Path | None = None) -> None:
     path = (base or app_dir()) / "pending.json"
     data = load_pending(base)
     if not data:
         raise RuntimeError("Não há cadastro pendente.")
     data["registered"] = True
-    path.write_text(json.dumps(data), encoding="utf-8")
+    data["registration_record_id"] = registration_record_id
+    _write_json_atomic(path, data)
 
 
 def load_pending(base: Path | None = None) -> dict | None:
@@ -223,8 +281,25 @@ def mark_assigned(group_id: str, base: Path | None = None) -> None:
         raise RuntimeError("Nenhum cadastro pendente.")
     if group_id not in data["assigned"]:
         data["assigned"].append(group_id)
-    path.write_text(json.dumps(data), encoding="utf-8")
+    _write_json_atomic(path, data)
 
 
 def clear_pending(base: Path | None = None) -> None:
     ((base or app_dir()) / "pending.json").unlink(missing_ok=True)
+
+
+def save_last_delivery(visitor_id: str, door_ids: list[str], base: Path | None = None) -> None:
+    """Store only IDs needed to recheck delivery; no visitor PII or credentials."""
+    if not visitor_id or not door_ids:
+        raise ValueError("Visitante e catracas são obrigatórios para consultar a entrega.")
+    dest = base or app_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(dest / "last_delivery.json", {
+        "visitor_id": str(visitor_id),
+        "door_ids": list(dict.fromkeys(str(x) for x in door_ids))
+    })
+
+
+def load_last_delivery(base: Path | None = None) -> dict | None:
+    path = (base or app_dir()) / "last_delivery.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None

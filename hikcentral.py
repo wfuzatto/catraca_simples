@@ -100,7 +100,7 @@ def pinned_https_post(host: str, port: int, path: str, data: bytes,
 
 
 def network_diagnostics(host: str, port: int, ca_file: str = "",
-                        timeout: float = 3.0) -> str:
+                        timeout: float = 3.0, pinned_sha256: str = "") -> str:
     """Diagnóstico não autenticado, sem alterar firewall/TLS nem enviar credenciais."""
     host = host.strip()
     if not host or any(x in host for x in ("/", "\\", "://")):
@@ -115,6 +115,15 @@ def network_diagnostics(host: str, port: int, ca_file: str = "",
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             lines.append(f"TCP {port}: ACESSÍVEL")
+            if pinned_sha256:
+                expected = normalize_pin(pinned_sha256)
+                actual = read_cert_sha256(host, port, timeout)
+                if not hmac.compare_digest(actual, expected):
+                    lines.append("TLS: certificado inválido ou alterado; impressão SHA-256 não confere.")
+                    return "\n".join(lines)
+                lines.append("TLS: certificado corresponde à impressão SHA-256 aprovada.")
+                lines.append("Pronto para testar autenticação OpenAPI.")
+                return "\n".join(lines)
             context = ssl.create_default_context(cafile=ca_file or None)
             try:
                 with context.wrap_socket(sock, server_hostname=host) as tls:
@@ -177,20 +186,17 @@ class HikCentral:
         if self.pinned_sha256:
             status, raw = pinned_https_post(
                 self.host, self.port, path, body, headers, self.pinned_sha256)
-            if status >= 400:
-                raise HikError(f"HikCentral HTTP {status} (certificado confirmado). "
-                               "Confira chave, permissão da OpenAPI e caminho Artemis.")
             try:
                 result = json.loads(raw.decode("utf-8"))
             except (ValueError, UnicodeDecodeError) as exc:
+                if status >= 400:
+                    raise HikError(_http_failure(status, {}, path)) from exc
                 raise HikError("Resposta do serviço não é JSON válido da OpenAPI.") from exc
         else:
             try:
                 response = self.session.post(self.url + path, data=body,
                                              headers=headers, timeout=(7, 25),
                                              verify=self.verify)
-                response.raise_for_status()
-                result = response.json()
             except requests.exceptions.SSLError as exc:
                 raise HikError("Falha no certificado TLS ou nome/IP não corresponde ao certificado. "
                                "Configure CA/hostname ou fixe o certificado SHA-256 "
@@ -207,15 +213,24 @@ class HikCentral:
                 raise HikError(f"HikCentral HTTP {status}. Confira OpenAPI e autorização.") from exc
             except requests.exceptions.RequestException as exc:
                 raise HikError(f"Falha HTTP no HikCentral: {type(exc).__name__}: {exc}") from exc
+            status = response.status_code
+            try:
+                result = response.json()
             except ValueError as exc:
+                if status >= 400:
+                    raise HikError(_http_failure(status, {}, path)) from exc
                 raise HikError("A porta respondeu, mas não retornou JSON da OpenAPI. "
                                "Confira host, porta e caminho do Gateway.") from exc
         if not isinstance(result, dict):
             raise HikError("Resposta OpenAPI inesperada (não é objeto JSON).")
-        code = str(result.get("code", result.get("ResponseStatus", {}).get("ErrorCode", "0")))
+        if status >= 400:
+            raise HikError(_http_failure(status, result, path))
+        response_status = result.get("ResponseStatus")
+        if not isinstance(response_status, dict):
+            response_status = {}
+        code = str(result.get("code", response_status.get("ErrorCode", "0")))
         if code != "0" and code.lower() != "success":
-            msg = result.get("msg") or result.get("ResponseStatus", {}).get("ErrorDescription", "Erro sem descrição")
-            raise HikError(f"HikCentral rejeitou a operação ({code}): {str(msg)[:300]}")
+            raise HikError(_http_failure(status, result, path, code))
         return result
 
     def access_levels(self) -> list[dict]:
@@ -244,15 +259,25 @@ class HikCentral:
         data = self.post("/artemis/api/visitor/v1/visitorgroups", {
             "SearchCriteria": {"visitorGroupName": ""}
         }).get("data") or {}
-        obj = data.get("VisitorGroupList") or {}
-        rows = obj.get("VisitorGroup") or []
+        obj = data.get("VisitorGroupList") or data.get("visitorGroupList") or {}
+        rows = (obj.get("VisitorGroup") or obj.get("visitorGroup") or obj.get("list") or []) \
+            if isinstance(obj, dict) else []
         groups = []
         for row in rows:
-            name = (row.get("baseInfo") or {}).get("name") or row.get("name")
+            if not isinstance(row, dict):
+                continue
+            base = (row.get("baseInfo") or row.get("BaseInfo")
+                    or row.get("visitorGroupBaseInfo") or {})
+            name = (base.get("name") or base.get("Name") or base.get("visitorGroupName")
+                    or row.get("visitorGroupName") or row.get("VisitorGroupName")
+                    or row.get("name"))
             if name and name not in groups:
                 groups.append(name)
         if not groups:
-            raise HikError("A consulta de grupos Visitor retornou lista vazia ou outro formato.")
+            fields = ", ".join(sorted(data.keys())) if isinstance(data, dict) else type(data).__name__
+            row_fields = ", ".join(sorted(rows[0].keys())) if rows and isinstance(rows[0], dict) else "nenhum"
+            raise HikError("A consulta de grupos Visitor não retornou nomes utilizáveis. "
+                           f"Campos: {fields}; campos do primeiro grupo: {row_fields}.")
         return groups
 
     def resolve_levels(self, requested: list[str]) -> tuple[list[dict], list[str]]:
@@ -346,3 +371,114 @@ class HikCentral:
             "personIds": visitor_id,
             "doorIndexCodes": ",".join(doors)
         })
+
+    def delivery_report(self, visitor_id: str, door_ids: list[str]) -> dict:
+        if not visitor_id or not door_ids:
+            raise HikError("Visitante e IDs das catracas são obrigatórios para consultar a entrega.")
+        data = self.post("/artemis/api/visitor/v1/person/ID/elementDownloadDetail",
+                         {"id": visitor_id}).get("data") or {}
+        if not isinstance(data, dict):
+            raise HikError("Resposta de entrega do HikCentral tem formato inesperado.")
+        return parse_delivery_details(data, door_ids)
+
+
+def _http_failure(status: int, result: dict, path: str, code: str = "") -> str:
+    response_status = result.get("ResponseStatus") or {}
+    if not isinstance(response_status, dict):
+        response_status = {}
+    message = str(result.get("msg") or response_status.get("ErrorDescription") or "")
+    code = str(code or result.get("code") or response_status.get("ErrorCode") or "")
+    detail = (code + " " + message).casefold()
+    if "60051" in detail:
+        return "HikCentral recusou o cadastro: há um visitante/reserva conflitante para o documento ou período. Consulte o registro antes de tentar novamente."
+    if any(term in detail for term in ("signature", "hmac", "sign error", "assinatura")):
+        return f"Assinatura Artemis/HMAC recusada ({code or status}). Confira relógio, payload e assinatura."
+    if any(term in detail for term in ("appkey", "app key", "appsecret", "app secret", "invalid key", "invalid secret")):
+        return f"AppKey/AppSecret recusados pelo HikCentral ({code or status}). Confira as credenciais do parceiro OpenAPI."
+    if status == 403 or any(term in detail for term in ("permission", "privilege", "forbidden", "not authorized", "sem permissão")):
+        return f"Parceiro sem permissão OpenAPI para {path} ({code or status}). Solicite somente as permissões Visitor/ACS necessárias."
+    if status == 404:
+        return f"Endpoint Artemis inexistente (HTTP 404): {path}. Confira versão e módulo habilitado."
+    if status == 401:
+        return "Autenticação OpenAPI recusada (HTTP 401). Confira assinatura HMAC, horário do servidor e AppKey/AppSecret."
+    if message:
+        return f"HikCentral rejeitou a operação ({code or status}): {message[:300]}"
+    return f"HikCentral HTTP {status} para {path}. Confira endpoint, autenticação e permissão OpenAPI."
+
+
+def parse_delivery_details(data: dict, door_ids: list[str], *,
+                           expect_face: bool = True, expect_card: bool = True) -> dict:
+    """Summarize only per-door face/card delivery states; never return credential data."""
+    detail_list = data.get("ElementDetailList") or {}
+    if isinstance(detail_list, list):
+        rows = detail_list
+    elif isinstance(detail_list, dict):
+        rows = detail_list.get("ElementDetail") or []
+    else:
+        rows = []
+    if isinstance(rows, dict):
+        rows = [rows]
+    indexed = {}
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict):
+            element_id = str(row.get("elementID") or row.get("ID") or "")
+            if element_id:
+                indexed[element_id] = row
+    doors = []
+    for raw_id in dict.fromkeys(str(value) for value in door_ids):
+        detail = indexed.get(raw_id, {})
+        element_statuses = detail.get("ElementStatus") or []
+        if isinstance(element_statuses, dict):
+            element_statuses = [element_statuses]
+        element_status = element_statuses[0].get("elementStatus") if element_statuses and isinstance(element_statuses[0], dict) else None
+        try:
+            element_status = int(element_status) if element_status is not None else None
+        except (TypeError, ValueError):
+            element_status = None
+        certificate_list = detail.get("CertificateStatusList") or {}
+        certificate_rows = (certificate_list.get("CertificateStatus") or []
+                            if isinstance(certificate_list, dict) else [])
+        if isinstance(certificate_rows, dict):
+            certificate_rows = [certificate_rows]
+        face_state = "not_required" if not expect_face else "queued"
+        card_state = "not_required" if not expect_card else "queued"
+        all_certificates_confirmed = bool(certificate_rows)
+        certificate_failed = False
+        for cert in certificate_rows if isinstance(certificate_rows, list) else []:
+            if not isinstance(cert, dict):
+                continue
+            try:
+                kind, status = int(cert.get("type", -1)), int(cert.get("status", -1))
+            except (TypeError, ValueError):
+                continue
+            if status != 0:
+                all_certificates_confirmed = False
+            if status == 2:
+                certificate_failed = True
+            state = "confirmed" if status == 0 else "failed" if status == 2 else "queued"
+            if kind == 2 and expect_face:
+                face_state = state
+            elif kind in (0, 4) and expect_card:
+                card_state = state
+        failed = certificate_failed or element_status == 2 or "failed" in (face_state, card_state)
+        confirmed = (element_status == 0
+                     and all_certificates_confirmed
+                     and (not expect_face or face_state == "confirmed")
+                     and (not expect_card or card_state == "confirmed"))
+        base = detail.get("BaseInfo") or {}
+        if not isinstance(base, dict):
+            base = {}
+        element_name = base.get("Name") or detail.get("elementName") or raw_id
+        doors.append({
+            "id": raw_id,
+            "name": str(element_name),
+            "state": "confirmed" if confirmed else "failed" if failed else "queued",
+            "faceState": face_state,
+            "credentialState": card_state,
+        })
+    states = [door["state"] for door in doors]
+    state = "failed" if "failed" in states else "confirmed" if doors and all(x == "confirmed" for x in states) else "queued"
+    message = ("HikCentral confirmou face e pulseira em todas as catracas consultadas."
+               if state == "confirmed" else "Uma ou mais catracas recusaram uma credencial. Consulte os detalhes."
+               if state == "failed" else "Entrega ainda pendente ou sem confirmação em todas as catracas.")
+    return {"state": state, "message": message, "doors": doors}

@@ -1,25 +1,30 @@
 """Vale Cadastro Facial / NFC - aplicacao Windows local."""
 from __future__ import annotations
 import io
+import json
+import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 from pathlib import Path
-from PIL import Image, ImageOps, ImageTk
+from PIL import Image, ImageTk
 
-from core import (GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
+from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
+                  prepare_face_jpeg,
                   parse_ticket_lines, parse_access_lines, load_pending, save_pending,
-                  mark_assigned, mark_registered, clear_pending)
-from devices import read_uid, to_card_number
+                  mark_assigned, mark_registered, clear_pending,
+                  save_last_delivery, load_last_delivery)
+from devices import list_readers, read_uid, to_card_number
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
 
 
 class ValeApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Vale - Cadastro Facial / NFC")
+        self.title(f"Vale - Cadastro Facial / NFC v{APP_VERSION}")
         self.geometry("920x730")
         self.minsize(820, 660)
         self.settings = load_settings()
@@ -64,7 +69,10 @@ class ValeApp(tk.Tk):
         self.book.add(self.settings_tab, text="Configurações")
         self._registration()
         self._settings()
-        self.status = tk.StringVar(value="Informe AppKey/AppSecret em Configurações e sincronize.")
+        initial_status = ("Credenciais protegidas carregadas. Sincronize os grupos e níveis antes do cadastro."
+                          if self.key and self.secret else
+                          "Informe AppKey/AppSecret em Configurações e sincronize.")
+        self.status = tk.StringVar(value=initial_status)
         ttk.Label(self, textvariable=self.status).pack(fill="x", padx=18, pady=10)
 
     def _registration(self):
@@ -72,6 +80,7 @@ class ValeApp(tk.Tk):
         actions.pack(fill="x", pady=5)
         ttk.Button(actions, text="Sincronizar grupos e níveis", command=self.connect).pack(side="left")
         ttk.Button(actions, text="Concluir pendente", command=self.resume).pack(side="left", padx=12)
+        ttk.Button(actions, text="Verificar última entrega", command=self.verify_last_delivery).pack(side="right")
 
         frame = ttk.LabelFrame(self.registration_tab, text="Visitante", padding=10)
         frame.pack(fill="x", pady=9)
@@ -136,7 +145,7 @@ class ValeApp(tk.Tk):
         self._entry(frame, 0, 0, "IP/DNS", self.s_host)
         self._entry(frame, 0, 1, "Porta OpenAPI", self.s_port)
         self._entry(frame, 1, 0, "CA (PEM opcional)", self.s_ca)
-        self._entry(frame, 2, 0, "AppKey", self.s_key)
+        self._entry(frame, 2, 0, "AppKey", self.s_key, show="*")
         self._entry(frame, 2, 1, "AppSecret", self.s_secret, show="*")
         self._entry(frame, 3, 0, "SHA-256 cert. local", self.s_cert_pin)
         ttk.Button(frame, text="Ler e conferir certificado", command=self.pin_certificate).grid(
@@ -164,6 +173,9 @@ class ValeApp(tk.Tk):
         access.grid(row=0, column=1, sticky="nsew", padx=6)
         self.access_text = tk.Text(access, height=8, width=44, font=("Consolas", 9), wrap="word")
         self.access_text.pack(fill="both", expand=True)
+        ttk.Label(self.settings_tab,
+                  text="Defina apenas os níveis aprovados para cada grupo. Grupos sem níveis ficam bloqueados para cadastro.",
+                  wraplength=850).pack(anchor="w", padx=8)
         ttk.Button(self.settings_tab, text="Salvar", command=self.save_config).pack(side="right", pady=5)
         ttk.Button(self.settings_tab, text="Testar conexão", command=self.connect).pack(side="right", padx=9)
         ttk.Button(self.settings_tab, text="Diagnóstico de rede",
@@ -316,13 +328,10 @@ class ValeApp(tk.Tk):
             levels = client.access_levels()
             if not levels:
                 raise RuntimeError("HikCentral respondeu, mas não retornou níveis Visitor type=2.")
-            try:
-                groups = client.visitor_groups()
-                source = "consultados no HikCentral"
-            except Exception:
-                groups = GROUPS[:]
-                source = "pré-configurados (consulta de grupos não confirmada pela API)"
-            return groups, levels, source
+            groups = client.visitor_groups()
+            if not groups:
+                raise RuntimeError("A API não confirmou grupos Visitor; cadastro bloqueado.")
+            return groups, levels
 
         def finish(value, error):
             if error:
@@ -330,24 +339,22 @@ class ValeApp(tk.Tk):
                 self.status.set(str(error))
                 messagebox.showerror("Conexão", str(error))
                 return
-            groups, levels, source = value
+            groups, levels = value
             self.connected_groups = groups
             self.groups_box["values"] = groups
             if self.group.get() not in groups:
                 self.group.set(groups[0])
             self.verified = True
-            self.status.set(f"OpenAPI conectada: {len(levels)} níveis Visitor. Grupos {source}.")
+            self.status.set(f"OpenAPI conectada: {len(groups)} grupos e {len(levels)} níveis Visitor confirmados.")
             self.book.select(self.registration_tab)
 
         self.task(work, finish)
 
     def use_photo(self, source):
         try:
-            img = ImageOps.exif_transpose(Image.open(source)).convert("RGB")
-            img.thumbnail((900, 900))
-            out = io.BytesIO()
-            img.save(out, format="JPEG", quality=86, optimize=True)
-            self.photo_data = out.getvalue()
+            raw = Path(source).read_bytes() if isinstance(source, (str, Path)) else source.read()
+            self.photo_data = prepare_face_jpeg(raw)
+            img = Image.open(io.BytesIO(self.photo_data))
             thumb = img.copy()
             thumb.thumbnail((145, 125))
             self.preview = ImageTk.PhotoImage(thumb)
@@ -367,23 +374,89 @@ class ValeApp(tk.Tk):
             cam = cv2.VideoCapture(int(self.settings["camera_index"]), cv2.CAP_DSHOW)
             if not cam.isOpened():
                 raise RuntimeError("Webcam indisponível.")
-            try:
-                for _ in range(8):
-                    ok, frame = cam.read()
-                if not ok:
-                    raise RuntimeError("Webcam sem imagem.")
-                ok, jpg = cv2.imencode(".jpg", frame)
-                if not ok:
-                    raise RuntimeError("Erro JPEG.")
-            finally:
+            window = tk.Toplevel(self)
+            window.title("Captura da foto facial")
+            window.transient(self)
+            window.resizable(False, False)
+            video = tk.Label(window, text="Abrindo câmera…", width=72, height=28, bg="#17212b", fg="white")
+            video.pack(padx=12, pady=12)
+            controls = ttk.Frame(window)
+            controls.pack(fill="x", padx=12, pady=(0, 12))
+            state = {"frame": None, "captured": None, "image": None, "closed": False}
+
+            def close():
+                if state["closed"]:
+                    return
+                state["closed"] = True
                 cam.release()
-            self.use_photo(io.BytesIO(jpg.tobytes()))
+                if window.winfo_exists():
+                    window.destroy()
+
+            def show_frame(frame):
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                preview = Image.fromarray(rgb)
+                preview.thumbnail((720, 480))
+                state["image"] = ImageTk.PhotoImage(preview)
+                video.configure(image=state["image"], text="", width=720, height=480)
+
+            def update_preview():
+                if state["closed"] or not window.winfo_exists() or state["captured"] is not None:
+                    return
+                ok, frame = cam.read()
+                if ok:
+                    state["frame"] = frame.copy()
+                    show_frame(frame)
+                else:
+                    video.configure(text="Câmera conectada, mas sem imagem.", image="")
+                window.after(35, update_preview)
+
+            def capture():
+                if state["frame"] is None:
+                    messagebox.showwarning("Webcam", "A câmera ainda não forneceu uma imagem.", parent=window)
+                    return
+                state["captured"] = state["frame"].copy()
+                show_frame(state["captured"])
+                capture_button.configure(state="disabled")
+                retake_button.configure(state="normal")
+                use_button.configure(state="normal")
+
+            def retake():
+                state["captured"] = None
+                capture_button.configure(state="normal")
+                retake_button.configure(state="disabled")
+                use_button.configure(state="disabled")
+                update_preview()
+
+            def use_capture():
+                if state["captured"] is None:
+                    return
+                ok, jpg = cv2.imencode(".jpg", state["captured"], [cv2.IMWRITE_JPEG_QUALITY, 94])
+                if not ok:
+                    messagebox.showerror("Webcam", "Não foi possível preparar a foto.", parent=window)
+                    return
+                try:
+                    self.use_photo(io.BytesIO(jpg.tobytes()))
+                finally:
+                    close()
+
+            capture_button = ttk.Button(controls, text="Capturar", command=capture)
+            capture_button.pack(side="left")
+            retake_button = ttk.Button(controls, text="Refazer", command=retake, state="disabled")
+            retake_button.pack(side="left", padx=8)
+            use_button = ttk.Button(controls, text="Usar foto", command=use_capture, state="disabled")
+            use_button.pack(side="left")
+            ttk.Button(controls, text="Cancelar", command=close).pack(side="right")
+            window.protocol("WM_DELETE_WINDOW", close)
+            update_preview()
         except Exception as exc:
             messagebox.showerror("Webcam", str(exc))
 
     def scan(self):
         def work():
-            reader, uid = read_uid()
+            names = list_readers()
+            if not names:
+                raise RuntimeError("Nenhum leitor PC/SC encontrado. Conecte o ACR122U.")
+            reader, uid = read_uid(names[0])
             return reader, uid, to_card_number(uid, self.settings["card_format"])
         def finish(value, error):
             if error:
@@ -391,8 +464,10 @@ class ValeApp(tk.Tk):
                 return
             reader, uid, number = value
             self.card.set(number)
-            self.uid.set(f"UID HEX: {uid.hex().upper()}  |  {reader[:32]}")
+            self.uid.set(f"HEX {uid.hex().upper()} | DEC big {to_card_number(uid, 'DECIMAL_BIG')} | "
+                         f"DEC little {to_card_number(uid, 'DECIMAL_LITTLE')} | {reader[:28]}")
             self.status.set("Pulseira lida; confirme número no HikCentral.")
+        self.uid.set("Detectando leitor PC/SC; aproxime a pulseira se conectado.")
         self.task(work, finish)
 
     def register(self):
@@ -408,59 +483,164 @@ class ValeApp(tk.Tk):
                 raise ValueError("Grupo não confirmado pela API.")
             if group not in self.settings["group_access"]:
                 raise ValueError("Configure níveis de acesso para este grupo.")
+            requested_levels = self.settings["group_access"][group]
+            if not requested_levels:
+                raise ValueError("Este grupo ainda não tem níveis aprovados. Configure o mapeamento antes do cadastro.")
             obj = Visitor(self.first.get(), self.last.get(), group, self.photo_data,
                           self.card.get().strip(), parse_local(self.start.get()),
                           parse_local(self.end.get()).replace(second=59), self.reservation.get())
             payload = registration_payload(obj)
-            levels = self.settings["group_access"][group]
         except Exception as exc:
             messagebox.showerror("Dados", str(exc))
             return
 
-        def work():
-            client = self.client()
-            selected, door_ids = client.resolve_levels(levels)
-            appointment_id, visitor_id = client.create_appointment(payload, selected)
-            # Guarda checkpoint antes do check-in para não duplicar a reserva
-            # se houver falha de rede durante a segunda etapa.
-            access_ids = [level["id"] for level in selected]
-            save_pending(visitor_id, access_ids, appointment_id=appointment_id,
-                         door_ids=door_ids, registered=False)
-            client.register_visitor(payload, selected, appointment_id, visitor_id)
-            mark_registered()
-            for level_id in access_ids:
-                client.assign_access(visitor_id, level_id)
-                mark_assigned(level_id)
-            client.apply(visitor_id, door_ids)
-            clear_pending()
-            return visitor_id
+        def preflight():
+            return self.client().resolve_levels(requested_levels)
 
-        def finish(visitor_id, error):
+        def preflight_done(value, error):
             if error:
-                pending = load_pending()
-                if pending:
-                    if not pending.get("registered", True):
-                        advice = ("A reserva foi criada, mas o check-in não está confirmado. "
-                                  "Confirme o estado no HikCentral antes de retomar ou repetir. "
-                                  "Não faça uma segunda reserva.")
-                    else:
-                        advice = "Use CONCLUIR PENDENTE para reaplicar acessos, sem criar outro visitante."
-                    messagebox.showwarning("Cadastro parcial",
-                        f"Visitante ID {pending['visitor_id']}.\n{error}\n\n{advice}")
-                else:
-                    messagebox.showerror("Resultado incerto",
-                        f"{error}\nConfira se a pessoa já existe no HikCentral antes de tentar novamente.")
-                self.status.set("Operação não concluída.")
+                self.status.set(str(error))
+                messagebox.showerror("Prévia de acesso", str(error))
                 return
-            messagebox.showinfo("Cadastro enviado",
-                f"Visitor ID: {visitor_id}\nPermissões reaplicadas. Verifique distribuição nos terminais.")
-            self.status.set(f"Check-in criado no HikCentral: {visitor_id}")
-            for var in (self.first, self.last, self.card, self.reservation):
-                var.set("")
-            self.uid.set("UID não lido")
-            self.photo_data, self.preview = b"", None
-            self.photo_widget.configure(image="", text="SEM FOTO", width=20, height=7)
+            selected, door_ids = value
+            door_names = {}
+            level_lines = []
+            for level in selected:
+                level_lines.append(f"• {level['name']} (ID {level['id']})")
+                for entry in level.get("elements", []):
+                    element = entry.get("Element") or {}
+                    element_id = str(element.get("ID") or "")
+                    if element_id:
+                        name = (element.get("BaseInfo") or {}).get("Name") or element_id
+                        door_names[element_id] = str(name)
+            door_lines = [f"• {door_names.get(door_id, door_id)} (ID {door_id})" for door_id in door_ids]
+            confirmation = (
+                f"Visitante: {obj.first_name.strip()} {obj.last_name.strip()}\n"
+                f"Grupo: {group}\n"
+                f"Entrada: {obj.arrival.strftime('%d/%m/%Y %H:%M %Z')}\n"
+                f"Saída: {obj.departure.strftime('%d/%m/%Y %H:%M %Z')}\n\n"
+                "Níveis Visitor que serão associados:\n" + "\n".join(level_lines) +
+                "\n\nCatracas alcançadas por esses níveis:\n" + "\n".join(door_lines) +
+                "\n\nA próxima etapa enviará foto facial e número da pulseira. "
+                "Confirme também que a pulseira de teste não está vinculada a outro visitante.\n\n"
+                "Prosseguir com a reserva e o check-in?"
+            )
+            if not messagebox.askyesno("Confirmar níveis e catracas", confirmation, parent=self):
+                self.status.set("Cadastro cancelado antes do envio.")
+                return
+
+            def work():
+                client = self.client()
+                appointment_id, visitor_id = client.create_appointment(payload, selected)
+                # Checkpoint immediately after the reservation to prevent duplicates.
+                access_ids = [level["id"] for level in selected]
+                save_pending(visitor_id, access_ids, appointment_id=appointment_id,
+                             door_ids=door_ids, registered=False)
+                registration_record_id = client.register_visitor(payload, selected,
+                                                                  appointment_id, visitor_id)
+                mark_registered(registration_record_id)
+                for level_id in access_ids:
+                    client.assign_access(visitor_id, level_id)
+                    mark_assigned(level_id)
+                client.apply(visitor_id, door_ids)
+                save_last_delivery(visitor_id, door_ids)
+                clear_pending()
+                try:
+                    report = self._poll_delivery(client, visitor_id, door_ids)
+                    report_error = ""
+                except Exception as exc:
+                    report, report_error = None, str(exc)
+                return {"visitor_id": visitor_id, "appointment_id": appointment_id,
+                        "registration_record_id": registration_record_id,
+                        "report": report, "report_error": report_error}
+
+            def finish(result, error):
+                if error:
+                    pending = load_pending()
+                    if pending:
+                        if not pending.get("registered", True):
+                            advice = ("A reserva foi criada, mas o check-in não está confirmado. "
+                                      "Confira o estado no HikCentral antes de retomar ou repetir. "
+                                      "Não faça uma segunda reserva.")
+                        else:
+                            advice = "Use CONCLUIR PENDENTE para reaplicar acessos sem criar outro visitante."
+                        messagebox.showwarning("Cadastro parcial",
+                            f"Visitante ID {pending['visitor_id']}.\n{error}\n\n{advice}")
+                    else:
+                        messagebox.showerror("Resultado incerto",
+                            f"{error}\nConfira no HikCentral antes de tentar novamente.")
+                    self.status.set("Operação não concluída.")
+                    return
+                report = result["report"]
+                if report:
+                    detail = "\n".join(f"• {d['name']}: face {d['faceState']}; pulseira {d['credentialState']}"
+                                        for d in report["doors"])
+                    text = (f"Visitor ID: {result['visitor_id']}\nReserva: {result['appointment_id']}\n"
+                            f"Registro de check-in: {result['registration_record_id']}\n\n"
+                            f"{report['message']}\n{detail}")
+                    if report["state"] == "confirmed":
+                        messagebox.showinfo("Entrega confirmada", text)
+                    elif report["state"] == "failed":
+                        messagebox.showwarning("Falha de entrega", text)
+                    else:
+                        messagebox.showwarning("Entrega pendente", text +
+                                               "\n\nUse Verificar última entrega para consultar novamente.")
+                    self.status.set(f"Cadastro concluído; entrega {report['state']}.")
+                else:
+                    messagebox.showwarning("Entrega não verificada",
+                        f"Visitor ID: {result['visitor_id']}\nSolicitação de reaplicação enviada.\n"
+                        f"A consulta de entrega falhou: {result['report_error']}\n\n"
+                        "Use Verificar última entrega para repetir somente a consulta.")
+                    self.status.set("Cadastro concluído; entrega ainda não verificada.")
+                for var in (self.first, self.last, self.card, self.reservation):
+                    var.set("")
+                self.uid.set("UID não lido")
+                self.photo_data, self.preview = b"", None
+                self.photo_widget.configure(image="", text="SEM FOTO", width=20, height=7)
+
+            self.task(work, finish)
+
+        self.status.set("Consultando níveis e catracas para prévia; nenhum cadastro será enviado ainda.")
+        self.task(preflight, preflight_done)
+
+    def verify_last_delivery(self):
+        try:
+            data = load_last_delivery()
+            if not data:
+                messagebox.showinfo("Entrega", "Ainda não há cadastro recente para consultar.")
+                return
+        except Exception as exc:
+            messagebox.showerror("Entrega", str(exc))
+            return
+
+        def work():
+            return self.client().delivery_report(data["visitor_id"], data["door_ids"])
+
+        def finish(report, error):
+            if error:
+                self.status.set("Não foi possível consultar a entrega.")
+                messagebox.showerror("Entrega", str(error))
+                return
+            lines = [report["message"]]
+            lines.extend(f"• {door['name']} (ID {door['id']}): face {door['faceState']}; "
+                         f"pulseira {door['credentialState']}" for door in report["doors"])
+            self.status.set(f"Última entrega: {report['state']}.")
+            if report["state"] == "confirmed":
+                messagebox.showinfo("Última entrega", "\n".join(lines))
+            else:
+                messagebox.showwarning("Última entrega", "\n".join(lines))
+
         self.task(work, finish)
+
+    @staticmethod
+    def _poll_delivery(client, visitor_id, door_ids):
+        report = client.delivery_report(visitor_id, door_ids)
+        for _ in range(2):
+            if report["state"] != "queued":
+                break
+            time.sleep(2)
+            report = client.delivery_report(visitor_id, door_ids)
+        return report
 
     def resume(self):
         data = load_pending()
@@ -488,17 +668,96 @@ class ValeApp(tk.Tk):
                     client.assign_access(pending["visitor_id"], level)
                     mark_assigned(level)
             client.apply(pending["visitor_id"], pending["door_ids"])
+            save_last_delivery(pending["visitor_id"], pending["door_ids"])
             clear_pending()
-            return pending["visitor_id"]
+            try:
+                report = self._poll_delivery(client, pending["visitor_id"], pending["door_ids"])
+                report_error = ""
+            except Exception as exc:
+                report, report_error = None, str(exc)
+            return {"visitor_id": pending["visitor_id"], "report": report,
+                    "report_error": report_error}
 
         def finish(value, error):
             if error:
                 messagebox.showerror("Pendente", str(error))
                 return
-            self.status.set(f"Reaplicação solicitada para {value}.")
-            messagebox.showinfo("Pendente", "Concluído. Confira distribuição nos dispositivos.")
+            report = value["report"]
+            if report:
+                lines = [report["message"]]
+                lines.extend(f"• {door['name']}: face {door['faceState']}; "
+                             f"pulseira {door['credentialState']}" for door in report["doors"])
+                self.status.set(f"Reaplicação concluída; entrega {report['state']}.")
+                if report["state"] == "confirmed":
+                    messagebox.showinfo("Pendente", "\n".join(lines))
+                else:
+                    messagebox.showwarning("Pendente", "\n".join(lines))
+            else:
+                self.status.set("Reaplicação concluída; entrega não verificada.")
+                messagebox.showwarning("Pendente",
+                    f"Solicitação enviada para {value['visitor_id']}, mas a consulta falhou: "
+                    f"{value['report_error']}\nUse Verificar última entrega para consultar novamente.")
         self.task(work, finish)
 
 
+def readonly_api_check(report_path: Path) -> int:
+    """Read-only smoke check for the frozen EXE; output contains no credentials or PII."""
+    try:
+        import cv2
+        opencv_imported = True
+        opencv_version = cv2.__version__
+    except Exception as exc:
+        opencv_imported = False
+        opencv_version = type(exc).__name__
+    try:
+        from smartcard.System import readers
+        pcsc_library_imported = True
+        try:
+            reader_count = len(readers())
+            pcsc_status = "reader_found" if reader_count else "no_reader"
+        except Exception as exc:
+            reader_count = None
+            pcsc_status = ("service_stopped" if "0x8010001D" in str(exc)
+                           else "reader_service_error")
+    except Exception as exc:
+        pcsc_library_imported = False
+        reader_count = None
+        pcsc_status = type(exc).__name__
+
+    try:
+        settings = load_settings()
+        key, secret = load_api_keys()
+        client = HikCentral(settings["host"], settings["port"], key, secret,
+                            settings["ca_file"], pinned_sha256=settings.get("cert_pin_sha256", ""))
+        levels = client.access_levels()
+        groups = client.visitor_groups()
+        if not groups or not levels:
+            raise RuntimeError("OpenAPI não retornou grupos e níveis Visitor.")
+        runtime_ok = opencv_imported and pcsc_library_imported
+        report = {
+            "ok": runtime_ok,
+            "version": APP_VERSION,
+            "endpoint": f"{settings['host']}:{settings['port']}",
+            "certificate_pin_configured": bool(settings.get("cert_pin_sha256")),
+            "visitor_group_count": len(groups),
+            "visitor_level_count": len(levels),
+            "opencv_imported": opencv_imported,
+            "opencv_version": opencv_version,
+            "pcsc_library_imported": pcsc_library_imported,
+            "pcsc_status": pcsc_status,
+            "pcsc_reader_count": reader_count,
+            "checked_at": datetime.now(TZ).isoformat(timespec="seconds"),
+        }
+        result = 0 if runtime_ok else 1
+    except Exception as exc:
+        report = {"ok": False, "version": APP_VERSION, "error": str(exc)}
+        result = 1
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return result
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--check-openapi":
+        raise SystemExit(readonly_api_check(Path(sys.argv[2])))
     ValeApp().mainloop()
