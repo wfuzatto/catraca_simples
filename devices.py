@@ -19,6 +19,7 @@ def list_readers() -> list[str]:
 
 
 def to_card_number(uid: bytes, mode: str) -> str:
+    """Conversões explícitas: inverter bytes NÃO é o mesmo que inverter bits."""
     if not uid:
         raise ValueError("UID vazio.")
     if mode == "HEX":
@@ -27,6 +28,13 @@ def to_card_number(uid: bytes, mode: str) -> str:
         return str(int.from_bytes(uid, "big"))
     if mode == "DECIMAL_LITTLE":
         return str(int.from_bytes(uid, "little"))
+    if mode == "DECIMAL_BITS_REVERSED":
+        # Reversão de toda a sequência de bits do UID, mantendo o comprimento.
+        inverted = int(f"{int.from_bytes(uid, 'big'):0{8*len(uid)}b}"[::-1], 2)
+        return str(inverted)
+    if mode == "DECIMAL_EACH_BYTE_BITS_REVERSED":
+        inverted = bytes(int(f"{byte:08b}"[::-1], 2) for byte in uid)
+        return str(int.from_bytes(inverted, "big"))
     raise ValueError("Formato de pulseira não suportado.")
 
 
