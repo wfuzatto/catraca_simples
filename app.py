@@ -38,6 +38,7 @@ class ValeApp(tk.Tk):
         self.photo_data = b""
         self.preview = None
         self.busy = False
+        self._recovery_attempts = 0
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(".", font=("Segoe UI", 10))
@@ -339,7 +340,9 @@ class ValeApp(tk.Tk):
             self.register_button.pack_forget()
 
     def _startup_sync(self):
-        if self.key and self.secret:
+        if self.busy:
+            self.after(10000, self._startup_sync)
+        elif self.key and self.secret:
             self.connect(silent=True)
         else:
             self.status.set("Configure a conexão OpenAPI em Configurações.")
@@ -367,6 +370,9 @@ class ValeApp(tk.Tk):
             if error:
                 self.verified = False
                 self.status.set("Sincronização automática indisponível: " + str(error))
+                if silent and self.key and self.secret:
+                    # Reconecta sem exigir botão quando HikCentral volta a responder.
+                    self.after(60000, self._startup_sync)
                 if not silent:
                     messagebox.showerror("Conexão", str(error))
                 return
@@ -532,6 +538,8 @@ class ValeApp(tk.Tk):
             messagebox.showerror("Dados", str(exc))
             return
 
+        self._recovery_attempts = 0
+
         def preflight():
             return self.client().resolve_levels(requested_levels)
 
@@ -617,7 +625,9 @@ class ValeApp(tk.Tk):
                     else:
                         messagebox.showerror("Resultado incerto",
                             f"{error}\nConfira no HikCentral antes de tentar novamente.")
-                    self.status.set("Operação não concluída.")
+                    self.status.set("Operação não concluída; verificando recuperação automática.")
+                    if pending:
+                        self.after(4000, self._auto_resume_pending)
                     return
                 report = result["report"]
                 if report:
@@ -698,7 +708,10 @@ class ValeApp(tk.Tk):
     def _auto_resume_pending(self):
         """Retoma operações confirmadas; não repete check-in com resultado incerto."""
         data = load_pending()
-        if not data or self.busy or not self.verified:
+        if not data or not self.verified:
+            return
+        if self.busy:
+            self.after(7000, self._auto_resume_pending)
             return
         if not data.get("door_ids"):
             self.status.set("Cadastro anterior exige conciliação: IDs das catracas indisponíveis.")
@@ -741,7 +754,15 @@ class ValeApp(tk.Tk):
             elif "unresolved" in value:
                 self.status.set(value["unresolved"])
             else:
+                self._recovery_attempts = 0
                 self.status.set("Cadastro pendente recuperado automaticamente; entrega " + value["state"] + ".")
+                return
+            self._recovery_attempts += 1
+            if self._recovery_attempts < 3:
+                self.after(15000, self._auto_resume_pending)
+            else:
+                self.status.set("Cadastro ainda pendente: confira o registro no HikCentral. "
+                                "Nenhum cadastro duplicado será criado.")
 
         self.status.set("Recuperando cadastro anterior com segurança...")
         self.task(work, finish)
