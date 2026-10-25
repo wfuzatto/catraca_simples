@@ -12,7 +12,7 @@ import re
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.5"
+APP_VERSION = "1.0.0-preview.6"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkout": "23:59"},
@@ -33,7 +33,7 @@ def default_settings() -> dict:
         "tickets": json.loads(json.dumps(DEFAULT_TICKETS)),
         # A recepção must assign only levels approved for each group.
         "group_access": {group: [] for group in GROUPS},
-        "card_format": "DECIMAL_BIG", "camera_index": 0
+        "card_format": "DECIMAL_LITTLE", "camera_index": 0
     }
 
 
@@ -199,8 +199,8 @@ def registration_payload(v: Visitor) -> dict:
     if v.card_number.strip():
         visitor_info["cards"] = [{"cardNo": v.card_number.strip()}]
     return {
-        "visitStartTime": v.arrival.isoformat(timespec="seconds"),
-        "visitEndTime": v.departure.isoformat(timespec="seconds"),
+        "visitStartTime": v.arrival.astimezone(TZ).isoformat(timespec="seconds"),
+        "visitEndTime": v.departure.astimezone(TZ).isoformat(timespec="seconds"),
         "visitPurposeType": 4,
         "visitPurpose": "Hospedagem / Day use",
         "visitorInfoList": [{"VisitorInfo": visitor_info}]
@@ -253,7 +253,7 @@ def _write_json_atomic(path: Path, data: dict) -> None:
 def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = None,
                  *, appointment_id: str = "", door_ids: list[str] | None = None,
                  registered: bool = True, expect_face: bool = True,
-                 expect_card: bool = True) -> None:
+                 expect_card: bool = True, entry_at: str = "", exit_at: str = "") -> None:
     """Checkpoint mínimo após reserva; nunca armazena foto, cartão, segredo ou nome."""
     path = (base or app_dir()) / "pending.json"
     if not expect_face and not expect_card:
@@ -264,7 +264,8 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
         "visitor_id": visitor_id, "appointment_id": appointment_id,
         "access_ids": access_ids, "door_ids": door_ids or [],
         "expect_face": bool(expect_face), "expect_card": bool(expect_card),
-        "registration_record_id": "", "registered": registered, "assigned": []
+        "registration_record_id": "", "registered": registered, "assigned": [],
+        "entry_at": entry_at, "exit_at": exit_at
     })
 
 
