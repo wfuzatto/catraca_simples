@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.7` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.8` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -95,3 +95,10 @@ Não exponha senhas/chaves em prints nem no repositório GitHub.
 - Datas enviadas como `YYYY-MM-DDTHH:MM:SS-03:00`, iguais ao fluxo PHP legado. A mesma data de saída vai em `appointEndTime` (reserva) e `visitEndTime` (check-in). Há testes automatizados cobrindo viradas de dia, mês e ano.
 - **Importante:** não foi possível consultar o HikCentral do hotel deste ambiente. A data exibida na interface do HikCentral precisa ser confrontada com o payload real no servidor de recepção para confirmar se há conversão de fuso/representação do lado do HikCentral. Não altere o fuso arbitrariamente.
 - Para NFC, a configuração antiga `DECIMAL_BIG` permanece se tiver sido salva anteriormente. O padrão de novas instalações é `DECIMAL_LITTLE`; revise o formato nas Configurações e confirme com uma pulseira conhecida. Não presuma equivalência entre inversão de bits, ordem dos bytes e formato Wiegand.
+
+## Alterações da preview.8
+
+- Grupos Visitor exibidos somente depois da consulta OpenAPI ao HikCentral; a lista interna serve apenas como referência inicial do sistema, sem popular o seletor antes da sincronização. Se a consulta falhar, novos cadastros continuam bloqueados.
+- A aba Configurações exige senha a cada acesso. A senha fornecida pelo administrador é verificada por um hash PBKDF2-SHA256 com sal; **o projeto não armazena nem distribui a senha em texto puro**. Não há botão para mostrar senha nem recuperação no programa.
+- Essa senha protege a interface contra alterações ocasionais na recepção, mas **não substitui permissões e proteção da conta Windows**; operadores com acesso ao código ou execução administrativa ainda podem modificar a aplicação.
+
