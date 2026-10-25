@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.11` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.12` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -120,4 +120,16 @@ Não exponha senhas/chaves em prints nem no repositório GitHub.
 - A preferência é persistida em `%LOCALAPPDATA%\\ValeCatracaSimples\\settings.json`, chave `preferred_group`, por usuário Windows / computador de atendimento. Cada ponto deve configurar sua própria preferência.
 - Se a API estiver indisponível, salvar outras configurações não cria grupos fictícios nem substitui a preferência que estava gravada.
 - A preferência **não altera permissões ou a composição de grupos** no HikCentral; as permissões continuam sendo definidas pelo mapeamento de níveis por grupo.
+
+
+
+## Interface moderna — preview.12
+
+- Nova apresentação inspirada no mockup aprovado: navegação lateral escura, cabeçalho compacto, cartões claros com cantos arredondados, resumo de configuração, credenciais lado a lado e botão de cadastro destacado.
+- Visual feito com CustomTkinter; os serviços e métodos de HikCentral, Artemis, NFC/ACR122U, webcam, TLS, cartões, datas, ingressos e recuperação permanecem no código já existente.
+- "Visitors" continua oculto e só são exibidos grupos retornados pela OpenAPI; o grupo preferencial é apenas sugestão por ponto de venda.
+- A aba Configurações segue protegida por senha. As ações Salvar, Testar conexão e Diagnóstico de rede permanecem fixas no rodapé da aba e não são encobertas por campos longos.
+- O aplicativo possui rolagem vertical e suporta janelas menores, preservando as ações de cadastro.
+- A tela é uma implementação nativa Windows, fiel à linguagem visual do mockup; diferenças menores de renderização podem ocorrer conforme escala de tela e tema do Windows.
+- Nenhuma credencial deve ser publicada no repositório. A confirmação da operação real com catracas continua dependendo de teste local no hotel.
 
