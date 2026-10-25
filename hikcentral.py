@@ -12,6 +12,7 @@ import socket
 import ssl
 import time
 import unicodedata
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 import requests
 
@@ -361,6 +362,61 @@ class HikCentral:
             raise HikError("Check-in enviado, mas registro não confirmado. "
                            "Confira o HikCentral antes de tentar novamente.")
         return record
+
+    def find_existing_registration(self, visitor_id: str, start_iso: str, end_iso: str) -> str | None:
+        """Somente leitura: verifica check-in anterior antes de qualquer recuperação.
+
+        Retorna recordId somente com correspondência única de visitante e período.
+        Em caso de ambiguidade, falha fechada. NÃO cria nem registra novamente.
+        """
+        if not visitor_id or not start_iso or not end_iso:
+            raise HikError("IDs e datas são obrigatórios para conciliar o check-in.")
+        try:
+            start = datetime.fromisoformat(start_iso)
+            end = datetime.fromisoformat(end_iso)
+            if start.tzinfo is None or end.tzinfo is None or end <= start:
+                raise ValueError("Intervalo inválido")
+            if end - start > timedelta(days=27):
+                raise ValueError("Intervalo grande demais para conciliação automática")
+        except ValueError as exc:
+            raise HikError(f"Período inválido para recuperar check-in: {exc}") from exc
+        query_start = (start - timedelta(days=1)).isoformat(timespec="seconds")
+        query_end = (end + timedelta(days=1)).isoformat(timespec="seconds")
+        matches = []
+        for page in range(1, 11):
+            data = self.post("/artemis/api/visitor/v1/register/getVistorRegisterRecord", {
+                "pageNo": page, "pageSize": 499,
+                "visitStartTime": query_start, "visitEndTime": query_end,
+                "sortField": "visitingTime", "orderType": "0",
+            }).get("data") or {}
+            rows = data.get("list")
+            if not isinstance(rows, list):
+                raise HikError("Consulta de registros retornou formato inesperado.")
+            for row in rows:
+                base = row.get("visitorBaseInfo") or {}
+                if str(base.get("visitorId") or "") != visitor_id:
+                    continue
+                record_id = str(row.get("recordId") or "")
+                if not record_id:
+                    continue
+                try:
+                    row_start = datetime.fromisoformat(str(base.get("visitStartTime") or ""))
+                    row_end = datetime.fromisoformat(str(base.get("visitEndTime") or ""))
+                    if row_start.tzinfo is None or row_end.tzinfo is None:
+                        continue
+                except ValueError:
+                    continue
+                if row_start == start and row_end == end:
+                    matches.append(record_id)
+            total = int(data.get("totalNum", 0) or 0)
+            if len(rows) < 499 or (total and page * 499 >= total):
+                break
+        else:
+            raise HikError("Conciliação atingiu limite de registros; intervenção necessária.")
+        matches = list(dict.fromkeys(matches))
+        if len(matches) > 1:
+            raise HikError("Múltiplos registros de check-in encontrados; não é seguro reaplicar automaticamente.")
+        return matches[0] if matches else None
 
     def assign_access(self, visitor_id: str, level_id: str) -> None:
         self.post("/artemis/api/acs/v1/privilege/group/single/addPersons", {
