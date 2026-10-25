@@ -57,7 +57,7 @@ def test_settings_requires_password_and_locks_again(monkeypatch):
     root = app.ValeApp()
     try:
         root.update()
-        assert root.groups_box["values"] == ()  # Antes da consulta: nada hardcoded no combo.
+        assert not root.groups_box["values"]  # Antes da consulta: nada hardcoded no combo.
         assert root.group.get() == ""
         root.book.select(root.settings_tab)
         root.update()
