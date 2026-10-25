@@ -274,3 +274,42 @@ def test_configured_pin_uses_pinned_transport(monkeypatch):
     assert api.post("/artemis/api/acs/v1/privilege/group", {"type": 2})["data"]["ok"]
     assert calls[0][0][0:2] == ("127.0.0.1", 443)
     assert calls[0][0][5] == "A" * 64
+
+def test_registration_and_appointment_transmit_identical_local_checkout():
+    import json
+    api, session = client([
+        {"code": "0", "data": {"appointRecordId": "appointment", "visitorId": "visitor"}},
+        {"code": "0", "data": {"appointRecordId": "registration"}},
+    ])
+    levels = [{"id": "1", "name": "Day use", "elements": [{"Element": {"ID": "a"}}]}]
+    info = {"visitStartTime": "2099-10-31T18:00:00-03:00",
+            "visitEndTime": "2099-11-01T23:59:59-03:00",
+            "visitorInfoList": [{"VisitorInfo": {"visitorGivenName": "Teste", "visitorFamilyName": "UID"}}]}
+    appoint, visitor = api.create_appointment(info, levels)
+    api.register_visitor(info, levels, appoint, visitor)
+    appointment_payload = json.loads(session.calls[0][1]["data"])
+    checkin_payload = json.loads(session.calls[1][1]["data"])
+    assert appointment_payload["appointEndTime"] == "2099-11-01T23:59:59-03:00"
+    assert checkin_payload["visitEndTime"] == appointment_payload["appointEndTime"]
+
+
+def test_find_registration_unique_readonly_and_no_creation():
+    api, session = client({"code": "0", "data": {"list": [
+        {"recordId": "REC01", "visitorBaseInfo": {
+            "visitorId": "vis-1", "visitStartTime": "2099-10-31T12:00:00-03:00",
+            "visitEndTime": "2099-11-01T23:59:59-03:00"}},
+        {"recordId": "OTHER", "visitorBaseInfo": {
+            "visitorId": "vis-2", "visitStartTime": "2099-10-31T12:00:00-03:00",
+            "visitEndTime": "2099-11-01T23:59:59-03:00"}},
+    ], "totalNum": 2}})
+    found = api.find_existing_registration("vis-1", "2099-10-31T12:00:00-03:00",
+                                           "2099-11-01T23:59:59-03:00")
+    assert found == "REC01"
+    assert len(session.calls) == 1
+    assert session.calls[0][0].endswith("/artemis/api/visitor/v1/register/getVistorRegisterRecord")
+
+
+def test_find_registration_missing_stays_unresolved():
+    api, session = client({"code": "0", "data": {"list": [], "totalNum": 0}})
+    assert api.find_existing_registration("v1", "2099-10-31T12:00:00-03:00",
+                                          "2099-11-01T23:59:59-03:00") is None
