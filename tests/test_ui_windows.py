@@ -150,6 +150,7 @@ def test_preferred_group_change_saves_and_is_reselected(monkeypatch, tmp_path):
     save_settings(original, tmp_path)
     monkeypatch.setattr(app, "load_settings", lambda: load_settings(tmp_path))
     monkeypatch.setattr(app, "load_api_keys", lambda: ("test-key", "test-secret"))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
     saved_keys = []
     monkeypatch.setattr(app, "save_api_keys", lambda k, s: saved_keys.append((k, s)))
     monkeypatch.setattr(app, "save_settings", lambda value: save_settings(value, tmp_path))
