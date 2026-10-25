@@ -12,7 +12,7 @@ import re
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.11"
+APP_VERSION = "1.0.0-preview.12"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkout": "23:59"},
