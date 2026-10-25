@@ -175,3 +175,62 @@ def test_preferred_group_change_saves_and_is_reselected(monkeypatch, tmp_path):
         assert saved_keys
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Geometria requer Windows")
+def test_modern_dashboard_keeps_all_original_actions_and_visible_settings_save(monkeypatch):
+    import app
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.simpledialog, "askstring", lambda *a, **kw: "test-password")
+    monkeypatch.setattr(app, "verify_settings_password", lambda candidate: candidate == "test-password")
+    root = app.ValeApp()
+    try:
+        root.geometry("1020x700")
+        root.update()
+        assert root.nav_registration.winfo_exists()
+        assert root.nav_settings.winfo_exists()
+        assert root.register_button.winfo_manager() == "pack"
+        assert root.delivery_button.winfo_manager() == "pack"
+        assert root.connection_label_var.get() != "Conectado"
+        assert root.first_entry.winfo_exists()
+        assert root.groups_box.cget("state") == "readonly"
+        assert root.preferred_box.cget("state") == "disabled"
+        assert root.book.select() == str(root.registration_tab)
+        root.book.select(root.settings_tab)
+        root.update()
+        assert root.book.select() == str(root.settings_tab)
+        assert root.register_button.winfo_manager() == ""
+        assert root.delivery_button.winfo_manager() == ""
+        assert root.save_button.winfo_manager() == "pack"
+        save = root.save_button
+        # The Settings action stays pinned above the bottom of a minimum-size window.
+        assert save.winfo_rooty() > root.winfo_rooty()
+        assert save.winfo_rooty() + save.winfo_height() <= root.winfo_rooty() + root.winfo_height()
+        root.book.select(root.registration_tab)
+        root.update()
+        assert root.register_button.winfo_manager() == "pack"
+        assert root.delivery_button.winfo_manager() == "pack"
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Tk requer Windows")
+def test_modern_group_chips_follow_real_groups_and_preserve_selection(monkeypatch):
+    import app
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    root = app.ValeApp()
+    try:
+        root.update()
+        root._apply_live_groups(["Visitors", "Day use", "Hóspedes Vale"])
+        assert len(root.group_chips_frame.winfo_children()) == 2
+        assert root.group.get() == "Day use"
+        root.group.set("Hóspedes Vale")
+        assert root.group.get() == "Hóspedes Vale"
+        assert len(root.group_chips_frame.winfo_children()) == 2
+        assert root.groups_box["values"] == ("Day use", "Hóspedes Vale")
+    finally:
+        root.destroy()
