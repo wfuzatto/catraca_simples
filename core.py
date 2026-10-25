@@ -12,7 +12,7 @@ import re
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.9"
+APP_VERSION = "1.0.0-preview.10"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkout": "23:59"},
@@ -30,11 +30,20 @@ def default_settings() -> dict:
     return {
         "host": "127.0.0.1", "port": 443, "ca_file": "",
         "cert_pin_sha256": "",
+        "preferred_group": "",  # Sugestão local, nunca substitui consulta da OpenAPI.
         "tickets": json.loads(json.dumps(DEFAULT_TICKETS)),
         # A recepção must assign only levels approved for each group.
         "group_access": {group: [] for group in GROUPS},
         "card_format": "DECIMAL_LITTLE", "camera_index": 0
     }
+
+
+def initial_visitor_group(available: list[str], preferred: str = "") -> str:
+    """Sugestão inicial; só seleciona um grupo retornado pela consulta real."""
+    if preferred and preferred in available:
+        return preferred
+    return available[0] if available else ""
+
 
 
 def load_settings(base: Path | None = None) -> dict:
