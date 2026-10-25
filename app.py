@@ -46,8 +46,8 @@ class ValeApp(tk.Tk):
         style.configure("TNotebook.Tab", padding=(16, 8))
         self._build()
         self._fill_settings()
-        if load_pending():
-            self.status.set("Há um visitante pendente; use CONCLUIR PENDENTE antes do próximo.")
+        # A sincronização e a retomada segura acontecem sem botões manuais.
+        self.after(120, self._startup_sync)
 
     def _entry(self, frame, row, col, label, var, show=None):
         ttk.Label(frame, text=label).grid(row=row, column=col * 2, sticky="w", padx=4, pady=6)
@@ -62,6 +62,20 @@ class ValeApp(tk.Tk):
                  font=("Segoe UI", 18, "bold")).pack(side="left", padx=18, pady=15)
         tk.Label(top, text="Integração local HikCentral", bg="#143c5d",
                  fg="#c7dce9").pack(side="right", padx=18)
+        # Rodapé fixo: o botão nunca desaparece com a altura do Notebook.
+        footer = tk.Frame(self, bg="#e7eef4", height=65)
+        footer.pack(side="bottom", fill="x")
+        self.status = tk.StringVar(value="Verificando configurações do HikCentral...")
+        self.register_button = tk.Button(
+            footer, text="CADASTRAR VISITANTE", command=self.register,
+            font=("Segoe UI", 11, "bold"), fg="white", bg="#17734f",
+            activebackground="#135b3e", activeforeground="white",
+            relief="raised", bd=1, padx=20, pady=11, cursor="hand2")
+        self.register_button.pack(side="right", padx=18, pady=8)
+        tk.Label(footer, textvariable=self.status, bg="#e7eef4",
+                 fg="#244c63", anchor="w", wraplength=580,
+                 justify="left").pack(side="left", fill="x", expand=True, padx=15)
+
         self.book = ttk.Notebook(self)
         self.book.pack(fill="both", expand=True, padx=13, pady=10)
         self.registration_tab = ttk.Frame(self.book, padding=12)
@@ -70,18 +84,15 @@ class ValeApp(tk.Tk):
         self.book.add(self.settings_tab, text="Configurações")
         self._registration()
         self._settings()
-        initial_status = ("Credenciais protegidas carregadas. Sincronize os grupos e níveis antes do cadastro."
-                          if self.key and self.secret else
-                          "Informe AppKey/AppSecret em Configurações e sincronize.")
-        self.status = tk.StringVar(value=initial_status)
-        ttk.Label(self, textvariable=self.status).pack(fill="x", padx=18, pady=10)
+        self.book.bind("<<NotebookTabChanged>>", self._tab_changed)
+        self.status.set("Sincronização automática ao iniciar..." if self.key and self.secret
+                        else "Configure AppKey/AppSecret em Configurações.")
 
     def _registration(self):
         actions = ttk.Frame(self.registration_tab)
         actions.pack(fill="x", pady=5)
-        ttk.Button(actions, text="Sincronizar grupos e níveis", command=self.connect).pack(side="left")
-        ttk.Button(actions, text="Concluir pendente", command=self.resume).pack(side="left", padx=12)
-        ttk.Button(actions, text="Verificar última entrega", command=self.verify_last_delivery).pack(side="right")
+        ttk.Button(actions, text="Verificar última entrega",
+                   command=self.verify_last_delivery).pack(side="right")
 
         frame = ttk.LabelFrame(self.registration_tab, text="Visitante", padding=10)
         frame.pack(fill="x", pady=9)
@@ -94,7 +105,7 @@ class ValeApp(tk.Tk):
         ttk.Label(frame, text="Grupo Visitor").grid(row=1, column=0, sticky="w", padx=4)
         self.groups_box = ttk.Combobox(frame, textvariable=self.group, state="readonly", values=GROUPS)
         self.groups_box.grid(row=1, column=1, sticky="ew", padx=4)
-        self._entry(frame, 1, 1, "Reserva (opcional)", self.reservation)
+        self._entry(frame, 1, 1, "Reserva ou Apartamento", self.reservation)
 
         card = ttk.LabelFrame(self.registration_tab, text="Credenciais: reconhecimento facial e/ou pulseira NFC", padding=10)
         card.pack(fill="x", pady=7)
@@ -105,10 +116,8 @@ class ValeApp(tk.Tk):
         ttk.Label(card_left, text="N\u00famero do cart\u00e3o / pulseira para HikCentral (opcional)").pack(anchor="w")
         ttk.Entry(card_left, textvariable=self.card, width=35).pack(fill="x", pady=7)
         ttk.Button(card_left, text="Ler ACR122U (PC/SC)", command=self.scan).pack(anchor="w")
-        ttk.Label(card_left, textvariable=self.uid).pack(anchor="w", pady=6)
-        ttk.Label(card_left, text="Confira conversão HEX/decimal no primeiro teste.").pack(anchor="w")
-        ttk.Label(card_left, text="Obrigat\u00f3rio: facial ou pulseira; pode informar ambos.").pack(
-            anchor="w", pady=(5, 0))
+        # Resultados técnicos do UID não ocupam a tela de cadastro.
+        # O cartão convertido continua visível no campo acima.
         self.photo_widget = tk.Label(card, text="SEM FOTO", width=20, height=7, bg="#e5edf3")
         self.photo_widget.pack(side="left", padx=10)
         controls = ttk.Frame(card)
@@ -125,15 +134,10 @@ class ValeApp(tk.Tk):
         self.ticket_box = ttk.Combobox(period, textvariable=self.ticket, state="readonly")
         self.ticket_box.grid(row=0, column=1, sticky="ew", padx=4)
         self.ticket_box.bind("<<ComboboxSelected>>", lambda _: self.calculate())
-        ttk.Button(period, text="Calcular saída", command=self.calculate).grid(row=0, column=2, columnspan=2, sticky="e")
+        self.start.trace_add("write", lambda *_: self.calculate())
         self._entry(period, 1, 0, "Entrada", self.start)
         self._entry(period, 1, 1, "Saída", self.end)
-        ttk.Label(period, text="DD/MM/AAAA HH:MM • Saída ajustável manualmente").grid(row=2, column=0, columnspan=4, sticky="w")
-
-        buttons = ttk.Frame(self.registration_tab)
-        buttons.pack(fill="x", pady=(8, 4))
-        ttk.Button(buttons, text="CADASTRAR", width=18, style="Register.TButton",
-                   command=self.register).pack(side="right")
+        # Campos permanecem editáveis; o horário final é recalculado ao editar a entrada.
 
     def _settings(self):
         self.s_host, self.s_port, self.s_ca = tk.StringVar(), tk.StringVar(), tk.StringVar()
@@ -158,7 +162,8 @@ class ValeApp(tk.Tk):
         device.pack(fill="x", pady=6)
         ttk.Label(device, text="Formato do UID").pack(side="left")
         ttk.Combobox(device, textvariable=self.s_format, state="readonly",
-                     values=["DECIMAL_BIG", "DECIMAL_LITTLE", "HEX"], width=18).pack(side="left", padx=8)
+                     values=["DECIMAL_LITTLE", "DECIMAL_BIG", "DECIMAL_BITS_REVERSED",
+                             "DECIMAL_EACH_BYTE_BITS_REVERSED", "HEX"], width=30).pack(side="left", padx=8)
         ttk.Label(device, text="Índice da webcam").pack(side="left")
         ttk.Spinbox(device, from_=0, to=9, textvariable=self.s_camera, width=4).pack(side="left", padx=6)
 
@@ -204,11 +209,16 @@ class ValeApp(tk.Tk):
         self.calculate()
 
     def calculate(self):
+        """Recálculo automático apenas quando data de entrada e ingresso são válidos."""
         try:
-            result = end_for_ticket(parse_local(self.start.get()), self.settings["tickets"][self.ticket.get()])
-            self.end.set(result.strftime("%d/%m/%Y %H:%M"))
-        except (KeyError, ValueError) as exc:
-            self.status.set(str(exc))
+            result = end_for_ticket(parse_local(self.start.get()),
+                                    self.settings["tickets"][self.ticket.get()])
+        except (KeyError, ValueError):
+            # Enquanto o operador digita, mantém a saída anterior até a entrada estar válida.
+            return
+        formatted = result.strftime("%d/%m/%Y %H:%M")
+        if self.end.get() != formatted:
+            self.end.set(formatted)
 
     def save_config(self, silent=False):
         try:
@@ -240,7 +250,8 @@ class ValeApp(tk.Tk):
                 self.ticket.set(next(iter(conf["tickets"])))
             self.calculate()
             if not silent:
-                messagebox.showinfo("Configuração", "Salvo. Sincronize novamente antes do cadastro.")
+                messagebox.showinfo("Configuração", "Configurações salvas. A sincronização será automática.")
+                self.after(100, lambda: self.connect(silent=True))
             return True
         except Exception as exc:
             messagebox.showerror("Configuração", str(exc))
@@ -320,10 +331,26 @@ class ValeApp(tk.Tk):
 
         self.task(lambda: network_diagnostics(host, port, cafile), done)
 
-    def connect(self):
-        # Corrige falha anterior: Testar conexão usava valores salvos antigos,
-        # ignorando host/porta/AppKey recém digitados na tela.
-        if not self.save_config(silent=True):
+    def _tab_changed(self, _event=None):
+        if self.book.select() == str(self.registration_tab):
+            if not self.register_button.winfo_manager():
+                self.register_button.pack(side="right", padx=18, pady=8)
+        else:
+            self.register_button.pack_forget()
+
+    def _startup_sync(self):
+        if self.key and self.secret:
+            self.connect(silent=True)
+        else:
+            self.status.set("Configure a conexão OpenAPI em Configurações.")
+
+    def connect(self, silent=False):
+        # Testes manuais usam os campos atuais, mesmo antes de clicar em Salvar.
+        if not silent and not self.save_config(silent=True):
+            return
+        if not self.key or not self.secret:
+            self.verified = False
+            self.status.set("Configure AppKey e AppSecret para sincronizar.")
             return
 
         def work():
@@ -339,8 +366,9 @@ class ValeApp(tk.Tk):
         def finish(value, error):
             if error:
                 self.verified = False
-                self.status.set(str(error))
-                messagebox.showerror("Conexão", str(error))
+                self.status.set("Sincronização automática indisponível: " + str(error))
+                if not silent:
+                    messagebox.showerror("Conexão", str(error))
                 return
             groups, levels = value
             self.connected_groups = groups
@@ -348,8 +376,11 @@ class ValeApp(tk.Tk):
             if self.group.get() not in groups:
                 self.group.set(groups[0])
             self.verified = True
-            self.status.set(f"OpenAPI conectada: {len(groups)} grupos e {len(levels)} níveis Visitor confirmados.")
-            self.book.select(self.registration_tab)
+            self.status.set(f"Conectado: {len(groups)} grupos e {len(levels)} níveis Visitor.")
+            if not silent:
+                self.book.select(self.registration_tab)
+            # Retomada segura de operações incompletas, sem botão na interface.
+            self.after(80, self._auto_resume_pending)
 
         self.task(work, finish)
 
@@ -467,18 +498,21 @@ class ValeApp(tk.Tk):
                 return
             reader, uid, number = value
             self.card.set(number)
-            self.uid.set(f"HEX {uid.hex().upper()} | DEC big {to_card_number(uid, 'DECIMAL_BIG')} | "
-                         f"DEC little {to_card_number(uid, 'DECIMAL_LITTLE')} | {reader[:28]}")
-            self.status.set("Pulseira lida; confirme número no HikCentral.")
-        self.uid.set("Detectando leitor PC/SC; aproxime a pulseira se conectado.")
+            self.uid.set("Pulseira lida")
+            self.status.set("Pulseira lida; número convertido preenchido.")
+        self.status.set("Aproxime a pulseira do leitor NFC.")
         self.task(work, finish)
 
     def register(self):
         if load_pending():
-            messagebox.showwarning("Pendente", "Conclua o visitante anterior primeiro.")
+            messagebox.showwarning("Cadastro em recuperação",
+                                   "O cadastro anterior ainda não foi concluído ou conciliado. "
+                                   "A recuperação automática preserva os dados existentes "
+                                   "para evitar registros duplicados.")
+            self._auto_resume_pending()
             return
         if not self.verified:
-            messagebox.showwarning("Verificação", "Sincronize os grupos antes de cadastrar.")
+            messagebox.showwarning("Verificação", "Aguardando a sincronização automática do HikCentral.")
             return
         try:
             group = self.group.get()
@@ -545,7 +579,9 @@ class ValeApp(tk.Tk):
                 access_ids = [level["id"] for level in selected]
                 save_pending(visitor_id, access_ids, appointment_id=appointment_id,
                              door_ids=door_ids, registered=False,
-                             expect_face=expect_face, expect_card=expect_card)
+                             expect_face=expect_face, expect_card=expect_card,
+                             entry_at=payload["visitStartTime"],
+                             exit_at=payload["visitEndTime"])
                 registration_record_id = client.register_visitor(payload, selected,
                                                                   appointment_id, visitor_id)
                 mark_registered(registration_record_id)
@@ -575,7 +611,7 @@ class ValeApp(tk.Tk):
                                       "Confira o estado no HikCentral antes de retomar ou repetir. "
                                       "Não faça uma segunda reserva.")
                         else:
-                            advice = "Use CONCLUIR PENDENTE para reaplicar acessos sem criar outro visitante."
+                            advice = "A recuperação automática tentará reaplicar os acessos, sem criar outro visitante."
                         messagebox.showwarning("Cadastro parcial",
                             f"Visitante ID {pending['visitor_id']}.\n{error}\n\n{advice}")
                     else:
@@ -659,65 +695,55 @@ class ValeApp(tk.Tk):
                                             expect_face=expect_face, expect_card=expect_card)
         return report
 
-    def resume(self):
+    def _auto_resume_pending(self):
+        """Retoma operações confirmadas; não repete check-in com resultado incerto."""
         data = load_pending()
-        if not data:
-            messagebox.showinfo("Pendências", "Nenhum visitante pendente.")
-            return
-        if not data.get("registered", True):
-            messagebox.showwarning("Check-in não confirmado",
-                "A reserva já foi criada no HikCentral, mas a resposta do check-in "
-                "não foi confirmada. Confira o visitante/registro no painel e conclua "
-                "o check-in manualmente. Não crie outra reserva. "
-                "O programa não repete essa etapa automaticamente, para evitar duplicação.")
+        if not data or self.busy or not self.verified:
             return
         if not data.get("door_ids"):
-            messagebox.showwarning("Dados de versão anterior",
-                "Esta pendência não contém IDs de portas; consulte o HikCentral "
-                "antes de reaplicar credenciais.")
+            self.status.set("Cadastro anterior exige conciliação: IDs das catracas indisponíveis.")
             return
 
         def work():
             client = self.client()
             pending = load_pending()
+            if not pending.get("registered", False):
+                entry_at, exit_at = pending.get("entry_at"), pending.get("exit_at")
+                if not entry_at or not exit_at:
+                    return {"unresolved": "Cadastro anterior sem intervalo para conferir check-in."}
+                record_id = client.find_existing_registration(
+                    pending["visitor_id"], entry_at, exit_at)
+                if not record_id:
+                    return {"unresolved": "Check-in não confirmado na consulta de leitura. "
+                                          "Revisar a visita no HikCentral; nenhuma nova reserva foi criada."}
+                mark_registered(record_id)
+                pending = load_pending()
             for level in pending["access_ids"]:
                 if level not in pending["assigned"]:
                     client.assign_access(pending["visitor_id"], level)
                     mark_assigned(level)
             client.apply(pending["visitor_id"], pending["door_ids"])
-            expect_face = pending.get("expect_face", True)
-            expect_card = pending.get("expect_card", True)
+            expect_face, expect_card = pending.get("expect_face", True), pending.get("expect_card", True)
             save_last_delivery(pending["visitor_id"], pending["door_ids"],
                                expect_face=expect_face, expect_card=expect_card)
             clear_pending()
             try:
                 report = self._poll_delivery(client, pending["visitor_id"], pending["door_ids"],
                                              expect_face=expect_face, expect_card=expect_card)
-                report_error = ""
-            except Exception as exc:
-                report, report_error = None, str(exc)
-            return {"visitor_id": pending["visitor_id"], "report": report,
-                    "report_error": report_error}
+                status = report["state"]
+            except Exception:
+                status = "não verificada"
+            return {"visitor_id": pending["visitor_id"], "state": status}
 
         def finish(value, error):
             if error:
-                messagebox.showerror("Pendente", str(error))
-                return
-            report = value["report"]
-            if report:
-                lines = [report["message"]]
-                lines.extend(f"• {door['name']}: face {door['faceState']}; "
-                             f"pulseira {door['credentialState']}" for door in report["doors"])
-                self.status.set(f"Reaplicação concluída; entrega {report['state']}.")
-                if report["state"] == "confirmed":
-                    messagebox.showinfo("Pendente", "\n".join(lines))
-                else:
-                    messagebox.showwarning("Pendente", "\n".join(lines))
+                self.status.set("Recuperação pendente: " + str(error))
+            elif "unresolved" in value:
+                self.status.set(value["unresolved"])
             else:
-                self.status.set("Reaplicação concluída; entrega não verificada.")
-                messagebox.showwarning("Pendente",
-                    f"Solicitação enviada para {value['visitor_id']}, mas a consulta falhou: "
-                    f"{value['report_error']}\nUse Verificar última entrega para consultar novamente.")
+                self.status.set("Cadastro pendente recuperado automaticamente; entrega " + value["state"] + ".")
+
+        self.status.set("Recuperando cadastro anterior com segurança...")
         self.task(work, finish)
 
 
