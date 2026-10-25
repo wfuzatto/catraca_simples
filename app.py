@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageTk
@@ -19,6 +19,7 @@ from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings
                   save_last_delivery, load_last_delivery)
 from devices import list_readers, read_uid, to_card_number
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
+from settings_auth import verify_settings_password
 
 
 class ValeApp(tk.Tk):
@@ -39,6 +40,8 @@ class ValeApp(tk.Tk):
         self.preview = None
         self.busy = False
         self._recovery_attempts = 0
+        self._settings_unlocked = False
+        self._settings_auth_prompt_queued = False
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(".", font=("Segoe UI", 10))
@@ -97,12 +100,12 @@ class ValeApp(tk.Tk):
         frame.pack(fill="x", pady=9)
         frame.columnconfigure(1, weight=1)
         frame.columnconfigure(3, weight=1)
-        self.first, self.last, self.group = tk.StringVar(), tk.StringVar(), tk.StringVar(value=GROUPS[0])
+        self.first, self.last, self.group = tk.StringVar(), tk.StringVar(), tk.StringVar()
         self.reservation = tk.StringVar()
         self._entry(frame, 0, 0, "Nome", self.first)
         self._entry(frame, 0, 1, "Sobrenome", self.last)
         ttk.Label(frame, text="Grupo Visitor").grid(row=1, column=0, sticky="w", padx=4)
-        self.groups_box = ttk.Combobox(frame, textvariable=self.group, state="readonly", values=GROUPS)
+        self.groups_box = ttk.Combobox(frame, textvariable=self.group, state="readonly", values=())
         self.groups_box.grid(row=1, column=1, sticky="ew", padx=4)
         self._entry(frame, 1, 1, "Reserva ou Apartamento", self.reservation)
 
@@ -331,7 +334,17 @@ class ValeApp(tk.Tk):
         self.task(lambda: network_diagnostics(host, port, cafile), done)
 
     def _tab_changed(self, _event=None):
-        if self.book.select() == str(self.registration_tab):
+        current = self.book.select()
+        if current == str(self.settings_tab) and not self._settings_unlocked:
+            # Devolve imediatamente para Cadastro antes de solicitar a senha.
+            # Também protege acessos por teclado e seleções programáticas.
+            self.book.select(self.registration_tab)
+            if not self._settings_auth_prompt_queued:
+                self._settings_auth_prompt_queued = True
+                self.after_idle(self._request_settings_password)
+            return
+        if current == str(self.registration_tab):
+            self._settings_unlocked = False
             if not self.register_button.winfo_manager():
                 self.register_button.pack(side="right", padx=(8, 18), pady=8)
             if not self.delivery_button.winfo_manager():
@@ -339,6 +352,21 @@ class ValeApp(tk.Tk):
         else:
             self.register_button.pack_forget()
             self.delivery_button.pack_forget()
+
+    def _request_settings_password(self):
+        self._settings_auth_prompt_queued = False
+        if not self.winfo_exists():
+            return
+        candidate = simpledialog.askstring(
+            "Configurações protegidas", "Digite a senha para acessar Configurações:",
+            parent=self, show="*")
+        if candidate is None:
+            return
+        if not verify_settings_password(candidate):
+            messagebox.showerror("Acesso negado", "Senha incorreta.", parent=self)
+            return
+        self._settings_unlocked = True
+        self.book.select(self.settings_tab)
 
     def _startup_sync(self):
         if self.busy:
