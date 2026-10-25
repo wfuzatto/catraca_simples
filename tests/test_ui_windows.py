@@ -26,10 +26,10 @@ def test_register_button_visible_and_form_is_simplified(monkeypatch):
         root.update_idletasks()
         assert root.end.get() == "01/11/2099 23:59"
         root.book.select(root.settings_tab)
-        root.update_idletasks()
+        root.update()
         assert root.register_button.winfo_manager() == ""
         root.book.select(root.registration_tab)
-        root.update_idletasks()
+        root.update()
         assert root.register_button.winfo_manager() == "pack"
     finally:
         root.destroy()
