@@ -192,3 +192,24 @@ def test_pending_auto_recovery_has_date_interval(tmp_path):
     mark_registered("record-abc", tmp_path)
     assert load_pending(tmp_path)["registered"] is True
     clear_pending(tmp_path)
+
+
+def test_preferred_group_is_per_workstation_and_survives_restart(tmp_path):
+    from core import initial_visitor_group
+    point_a = tmp_path / "caixa_1"
+    point_b = tmp_path / "caixa_2"
+    conf_a = default_settings()
+    conf_b = default_settings()
+    assert conf_a["preferred_group"] == ""
+    conf_a["preferred_group"] = "Hóspedes Vale"
+    conf_b["preferred_group"] = "Day use"
+    save_settings(conf_a, point_a)
+    save_settings(conf_b, point_b)
+    assert load_settings(point_a)["preferred_group"] == "Hóspedes Vale"
+    assert load_settings(point_b)["preferred_group"] == "Day use"
+    real_groups = ["Day use", "Hóspedes Serra", "Hóspedes Vale"]
+    assert initial_visitor_group(real_groups, load_settings(point_a)["preferred_group"]) == "Hóspedes Vale"
+    assert initial_visitor_group(real_groups, load_settings(point_b)["preferred_group"]) == "Day use"
+    assert initial_visitor_group(real_groups, "Outro grupo") == "Day use"
+    assert initial_visitor_group(real_groups, "") == "Day use"
+    assert initial_visitor_group([], "Hóspedes Vale") == ""
