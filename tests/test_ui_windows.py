@@ -105,3 +105,72 @@ def test_hikcentral_groups_hide_only_generic_visitors():
     assert selectable_visitor_groups(["Visitantes", "VISITOR", "Day use"]) == [
         "Visitantes", "VISITOR", "Day use"
     ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Interface Tk exige Windows.")
+def test_preferred_group_select_only_after_api_and_manual_override(monkeypatch):
+    import app
+    from core import default_settings
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    settings = default_settings()
+    settings["preferred_group"] = "Hóspedes Vale"
+    monkeypatch.setattr(app, "load_settings", lambda: settings)
+    monkeypatch.setattr(app.simpledialog, "askstring", lambda *a, **kw: "test")
+    monkeypatch.setattr(app, "verify_settings_password", lambda _: True)
+    root = app.ValeApp()
+    try:
+        root.update()
+        assert root.preferred_box.cget("state") == "disabled"
+        assert root.group.get() == ""
+        assert not root.groups_box["values"]
+        root._apply_live_groups(["Visitors", "Day use", "Hóspedes Serra", "Hóspedes Vale"])
+        assert root.preferred_box.cget("state") == "readonly"
+        assert "Visitors" not in root.preferred_box["values"]
+        assert tuple(root.groups_box["values"]) == ("Day use", "Hóspedes Serra", "Hóspedes Vale")
+        assert root.s_preferred_group.get() == "Hóspedes Vale"
+        assert root.group.get() == "Hóspedes Vale"
+        # Manual operator switch is not overridden by refresh.
+        root.group.set("Hóspedes Serra")
+        root._apply_live_groups(["Hóspedes Vale", "Day use", "Hóspedes Serra"])
+        assert root.group.get() == "Hóspedes Serra"
+        # If a previously preferred group ceases to exist, fallback comes from API.
+        root._apply_live_groups(["Visitors", "Day use"])
+        assert root.group.get() == "Day use"
+        assert root.s_preferred_group.get() == app.PREFERRED_AUTOMATIC
+        assert "Hóspedes Vale" not in root.preferred_box["values"]
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Interface Tk exige Windows.")
+def test_preferred_group_change_saves_and_is_reselected(monkeypatch, tmp_path):
+    import app
+    from core import default_settings, save_settings, load_settings
+    original = default_settings()
+    save_settings(original, tmp_path)
+    monkeypatch.setattr(app, "load_settings", lambda: load_settings(tmp_path))
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("test-key", "test-secret"))
+    saved_keys = []
+    monkeypatch.setattr(app, "save_api_keys", lambda k, s: saved_keys.append((k, s)))
+    monkeypatch.setattr(app, "save_settings", lambda value: save_settings(value, tmp_path))
+    monkeypatch.setattr(app.simpledialog, "askstring", lambda *a, **kw: "test")
+    monkeypatch.setattr(app, "verify_settings_password", lambda _: True)
+    root = app.ValeApp()
+    try:
+        root.update()
+        root._apply_live_groups(["Day use", "Hóspedes Vale", "Hóspedes Serra"])
+        root.group.set("Day use")
+        root.s_preferred_group.set("Hóspedes Serra")
+        # Does not call the real API. Saving persists preference and updates next sync.
+        assert root.save_config(silent=True) is True
+        assert load_settings(tmp_path)["preferred_group"] == "Hóspedes Serra"
+        root._apply_live_groups(["Day use", "Hóspedes Vale", "Hóspedes Serra"])
+        assert root.group.get() == "Hóspedes Serra"
+        assert root.s_preferred_group.get() == "Hóspedes Serra"
+        # User may switch freely and saving must not change this choice.
+        root.group.set("Day use")
+        root._apply_live_groups(["Hóspedes Serra", "Day use"])
+        assert root.group.get() == "Day use"
+        assert saved_keys
+    finally:
+        root.destroy()
