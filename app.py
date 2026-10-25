@@ -21,6 +21,7 @@ from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings
 from devices import list_readers, read_uid, to_card_number
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
 from settings_auth import verify_settings_password
+import modern_ui
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -84,40 +85,9 @@ class ValeApp(tk.Tk):
         return field
 
     def _build(self):
-        top = tk.Frame(self, bg="#143c5d")
-        top.pack(fill="x")
-        tk.Label(top, text="VALE  |  Cadastro Facial e NFC", bg="#143c5d", fg="white",
-                 font=("Segoe UI", 18, "bold")).pack(side="left", padx=18, pady=15)
-        tk.Label(top, text="Integração local HikCentral", bg="#143c5d",
-                 fg="#c7dce9").pack(side="right", padx=18)
-        # Rodapé fixo: o botão nunca desaparece com a altura do Notebook.
-        footer = tk.Frame(self, bg="#e7eef4", height=65)
-        footer.pack(side="bottom", fill="x")
-        self.status = tk.StringVar(value="Verificando configurações do HikCentral...")
-        self.register_button = tk.Button(
-            footer, text="CADASTRAR VISITANTE", command=self.register,
-            font=("Segoe UI", 11, "bold"), fg="white", bg="#17734f",
-            activebackground="#135b3e", activeforeground="white",
-            relief="raised", bd=1, padx=20, pady=11, cursor="hand2")
-        self.register_button.pack(side="right", padx=(8, 18), pady=8)
-        self.delivery_button = ttk.Button(
-            footer, text="Verificar última entrega", command=self.verify_last_delivery)
-        self.delivery_button.pack(side="right", padx=(8, 0), pady=8)
-        tk.Label(footer, textvariable=self.status, bg="#e7eef4",
-                 fg="#244c63", anchor="w", wraplength=580,
-                 justify="left").pack(side="left", fill="x", expand=True, padx=15)
-
-        self.book = ttk.Notebook(self)
-        self.book.pack(fill="both", expand=True, padx=13, pady=10)
-        self.registration_tab = ttk.Frame(self.book, padding=12)
-        self.settings_tab = ttk.Frame(self.book, padding=12)
-        self.book.add(self.registration_tab, text="Cadastro")
-        self.book.add(self.settings_tab, text="Configurações")
-        self._registration()
-        self._settings()
-        self.book.bind("<<NotebookTabChanged>>", self._tab_changed)
-        self.status.set("Sincronização automática ao iniciar..." if self.key and self.secret
-                        else "Configure AppKey/AppSecret em Configurações.")
+        """Modern visual shell; registration and OpenAPI logic stay unchanged."""
+        self._build_version = APP_VERSION
+        modern_ui.build(self)
 
     def _registration(self):
         frame = ttk.LabelFrame(self.registration_tab, text="Visitante", padding=10)
@@ -300,6 +270,7 @@ class ValeApp(tk.Tk):
             if conf["preferred_group"] != self.settings.get("preferred_group", ""):
                 self._force_preferred_on_sync = True
             self.settings, self.key, self.secret = conf, key, secret
+            modern_ui.refresh_summary(self)
             self.verified = False
             self.ticket_box["values"] = list(conf["tickets"])
             if self.ticket.get() not in conf["tickets"]:
@@ -406,6 +377,7 @@ class ValeApp(tk.Tk):
         else:
             self.register_button.pack_forget()
             self.delivery_button.pack_forget()
+        modern_ui.update_navigation(self)
 
     def _request_settings_password(self):
         self._settings_auth_prompt_queued = False
@@ -438,6 +410,7 @@ class ValeApp(tk.Tk):
         previous = self.group.get()
         self.connected_groups = groups
         self.groups_box["values"] = groups
+        modern_ui.refresh_group_chips(self, groups)
         self.preferred_box.configure(
             values=[PREFERRED_AUTOMATIC, *groups], state="readonly")
         self._preferred_groups_synced = True
@@ -473,6 +446,8 @@ class ValeApp(tk.Tk):
             if error:
                 self.verified = False
                 self.connected_groups = []
+                self.connection_label_var.set("Sem conexão")
+                modern_ui.refresh_group_chips(self, [])
                 self.groups_box["values"] = ()
                 self.group.set("")
                 self._preferred_groups_synced = False
@@ -488,6 +463,7 @@ class ValeApp(tk.Tk):
             groups, levels = value
             self._apply_live_groups(groups)
             self.verified = True
+            self.connection_label_var.set("Conectado")
             self.status.set(f"Conectado: {len(groups)} grupos e {len(levels)} níveis Visitor.")
             if not silent:
                 self.book.select(self.registration_tab)
@@ -504,7 +480,7 @@ class ValeApp(tk.Tk):
             thumb = img.copy()
             thumb.thumbnail((145, 125))
             self.preview = ImageTk.PhotoImage(thumb)
-            self.photo_widget.configure(image=self.preview, text="", width=145, height=125)
+            self.photo_widget.configure(image=self.preview, text="")
             self.status.set("Foto selecionada; não armazenada permanentemente.")
         except Exception as exc:
             messagebox.showerror("Imagem", str(exc))
@@ -763,7 +739,7 @@ class ValeApp(tk.Tk):
                 self.group.set(initial_visitor_group(
                     self.connected_groups, self.settings.get("preferred_group", "")))
                 self.photo_data, self.preview = b"", None
-                self.photo_widget.configure(image="", text="SEM FOTO", width=20, height=7)
+                self.photo_widget.configure(image="", text="SEM FOTO")
 
             self.task(work, finish)
 
