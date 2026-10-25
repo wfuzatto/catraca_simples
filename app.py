@@ -72,7 +72,10 @@ class ValeApp(tk.Tk):
             font=("Segoe UI", 11, "bold"), fg="white", bg="#17734f",
             activebackground="#135b3e", activeforeground="white",
             relief="raised", bd=1, padx=20, pady=11, cursor="hand2")
-        self.register_button.pack(side="right", padx=18, pady=8)
+        self.register_button.pack(side="right", padx=(8, 18), pady=8)
+        self.delivery_button = ttk.Button(
+            footer, text="Verificar última entrega", command=self.verify_last_delivery)
+        self.delivery_button.pack(side="right", padx=(8, 0), pady=8)
         tk.Label(footer, textvariable=self.status, bg="#e7eef4",
                  fg="#244c63", anchor="w", wraplength=580,
                  justify="left").pack(side="left", fill="x", expand=True, padx=15)
@@ -90,11 +93,6 @@ class ValeApp(tk.Tk):
                         else "Configure AppKey/AppSecret em Configurações.")
 
     def _registration(self):
-        actions = ttk.Frame(self.registration_tab)
-        actions.pack(fill="x", pady=5)
-        ttk.Button(actions, text="Verificar última entrega",
-                   command=self.verify_last_delivery).pack(side="right")
-
         frame = ttk.LabelFrame(self.registration_tab, text="Visitante", padding=10)
         frame.pack(fill="x", pady=9)
         frame.columnconfigure(1, weight=1)
@@ -335,9 +333,12 @@ class ValeApp(tk.Tk):
     def _tab_changed(self, _event=None):
         if self.book.select() == str(self.registration_tab):
             if not self.register_button.winfo_manager():
-                self.register_button.pack(side="right", padx=18, pady=8)
+                self.register_button.pack(side="right", padx=(8, 18), pady=8)
+            if not self.delivery_button.winfo_manager():
+                self.delivery_button.pack(side="right", padx=(8, 0), pady=8)
         else:
             self.register_button.pack_forget()
+            self.delivery_button.pack_forget()
 
     def _startup_sync(self):
         if self.busy:
