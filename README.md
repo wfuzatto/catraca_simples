@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.8` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.9` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -102,3 +102,8 @@ Não exponha senhas/chaves em prints nem no repositório GitHub.
 - A aba Configurações exige senha a cada acesso. A senha fornecida pelo administrador é verificada por um hash PBKDF2-SHA256 com sal; **o projeto não armazena nem distribui a senha em texto puro**. Não há botão para mostrar senha nem recuperação no programa.
 - Essa senha protege a interface contra alterações ocasionais na recepção, mas **não substitui permissões e proteção da conta Windows**; operadores com acesso ao código ou execução administrativa ainda podem modificar a aplicação.
 
+
+## Alterações da preview.9
+
+- O seletor Grupo Visitor usa apenas grupos reais retornados pela OpenAPI e oculta exclusivamente o grupo genérico `Visitors` (ignorando maiúsculas/minúsculas e espaços adicionais). Outros grupos cadastrados no HikCentral continuam disponíveis.
+- Quando a API não retorna outro grupo ou falha, o campo é esvaziado e o cadastro é bloqueado. Não remove nem modifica o grupo `Visitors` no HikCentral.
