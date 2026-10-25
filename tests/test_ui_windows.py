@@ -9,6 +9,8 @@ def test_register_button_visible_and_form_is_simplified(monkeypatch):
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.simpledialog, "askstring", lambda *a, **kw: "test-only-password")
+    monkeypatch.setattr(app, "verify_settings_password", lambda _: True)
     root = app.ValeApp()
     try:
         root.update()
