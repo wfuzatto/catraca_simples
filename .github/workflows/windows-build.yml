@@ -27,7 +27,7 @@ jobs:
       - name: Empacotar EXE autocontido
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ValeCadastroFacialNFC --collect-all smartcard --hidden-import win32crypt app.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ValeCadastroFacialNFC --collect-all customtkinter --collect-all smartcard --hidden-import win32crypt app.py
           if (!(Test-Path dist/ValeCadastroFacialNFC.exe)) { throw "EXE nao gerado" }
       - name: Disponibilizar executavel
         uses: actions/upload-artifact@v4
