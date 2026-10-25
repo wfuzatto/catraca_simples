@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: windows-2022
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,3 +33,21 @@ jobs:
           path: dist/ValeCadastroFacialNFC.exe
           if-no-files-found: error
           retention-days: 30
+      - name: Publicar executavel permanente no GitHub Releases
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $match = Select-String -Path core.py -Pattern '^APP_VERSION\s*=\s*["'']([^"'']+)["'']'
+          if (!$match) { throw "APP_VERSION nao encontrada" }
+          $version = $match.Matches[0].Groups[1].Value
+          $tag = "v$version"
+          gh release view $tag --repo $env:GH_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release existente preservada: $tag"
+          } else {
+            gh release create $tag dist/ValeCadastroFacialNFC.exe --repo $env:GH_REPO --target $env:GITHUB_SHA --title "Vale Cadastro Facial e NFC $tag" --notes "Executavel Windows autocontido. Versao tecnica de testes, ainda nao homologada nas catracas do hotel." --prerelease
+            if ($LASTEXITCODE -ne 0) { throw "Falha ao publicar GitHub Release" }
+          }
