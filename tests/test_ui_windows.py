@@ -93,3 +93,15 @@ def test_bad_settings_password_never_opens_tab(monkeypatch):
         assert len(warnings) == 1
     finally:
         root.destroy()
+
+
+def test_hikcentral_groups_hide_only_generic_visitors():
+    from app import selectable_visitor_groups
+    source = ["Visitors", "Day use", "Hóspedes Vale", "Hóspedes Serra", "Visitors", "Guests", " visitors "]
+    assert selectable_visitor_groups(source) == [
+        "Day use", "Hóspedes Vale", "Hóspedes Serra", "Guests"
+    ]
+    assert selectable_visitor_groups(["Visitors", " visitors "]) == []
+    assert selectable_visitor_groups(["Visitantes", "VISITOR", "Day use"]) == [
+        "Visitantes", "VISITOR", "Day use"
+    ]
