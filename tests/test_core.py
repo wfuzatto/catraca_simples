@@ -159,3 +159,36 @@ def test_windows_dpapi_round_trip(tmp_path):
     encrypted = (tmp_path / "secrets.dpapi").read_bytes()
     assert b"test-app-secret" not in encrypted
     assert load_api_keys(tmp_path) == ("test-app-key", "test-app-secret")
+
+def test_checkout_rollover_month_and_year_and_payload_timezone():
+    from core import parse_local
+    from datetime import datetime
+    cases = [
+        ("31/10/2099 20:45", "2 dias", "01/11/2099 23:59"),
+        ("31/12/2099 11:00", "3 dias", "02/01/2100 23:59"),
+        ("24/10/2099 20:45", "1 dia", "24/10/2099 23:59"),
+    ]
+    for start_text, ticket_name, expected in cases:
+        start = parse_local(start_text)
+        end = end_for_ticket(start, default_settings()["tickets"][ticket_name])
+        assert end.strftime("%d/%m/%Y %H:%M") == expected
+        visitor = Visitor("Teste", "Sobrenome", "Day use", b"", "12345", start, end)
+        payload = registration_payload(visitor)
+        sent_end = datetime.fromisoformat(payload["visitEndTime"])
+        assert sent_end.astimezone(TZ).date() == end.date()
+        assert sent_end.hour == 23 and sent_end.minute == 59 and sent_end.second == 59
+        assert payload["visitEndTime"].endswith("-03:00")
+
+
+def test_pending_auto_recovery_has_date_interval(tmp_path):
+    save_pending("v001", ["level"], tmp_path, appointment_id="appointment1",
+                 door_ids=["door1"], registered=False, expect_face=False, expect_card=True,
+                 entry_at="2099-10-31T12:00:00-03:00",
+                 exit_at="2099-11-01T23:59:59-03:00")
+    pending = load_pending(tmp_path)
+    assert pending["registered"] is False
+    assert pending["entry_at"].startswith("2099-10-31")
+    assert pending["exit_at"].startswith("2099-11-01")
+    mark_registered("record-abc", tmp_path)
+    assert load_pending(tmp_path)["registered"] is True
+    clear_pending(tmp_path)
