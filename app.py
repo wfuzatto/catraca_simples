@@ -22,6 +22,24 @@ from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normal
 from settings_auth import verify_settings_password
 
 
+
+
+def selectable_visitor_groups(groups: list[str]) -> list[str]:
+    """Mostra grupos reais da API, exceto o grupo genérico Visitors."""
+    selected = []
+    seen = set()
+    for value in groups:
+        if not isinstance(value, str):
+            continue
+        name = value.strip()
+        if not name or name.casefold() == "visitors":
+            continue
+        if name.casefold() not in seen:
+            selected.append(name)
+            seen.add(name.casefold())
+    return selected
+
+
 class ValeApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -390,14 +408,19 @@ class ValeApp(tk.Tk):
             levels = client.access_levels()
             if not levels:
                 raise RuntimeError("HikCentral respondeu, mas não retornou níveis Visitor type=2.")
-            groups = client.visitor_groups()
+            groups = selectable_visitor_groups(client.visitor_groups())
             if not groups:
-                raise RuntimeError("A API não confirmou grupos Visitor; cadastro bloqueado.")
+                raise RuntimeError(
+                    "A API não retornou grupos disponíveis além de Visitors. "
+                    "Cadastro bloqueado; confira os grupos no HikCentral.")
             return groups, levels
 
         def finish(value, error):
             if error:
                 self.verified = False
+                self.connected_groups = []
+                self.groups_box["values"] = ()
+                self.group.set("")
                 self.status.set("Sincronização automática indisponível: " + str(error))
                 if silent and self.key and self.secret:
                     # Reconecta sem exigir botão quando HikCentral volta a responder.
