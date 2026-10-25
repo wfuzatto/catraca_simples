@@ -12,6 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageTk
 
 from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
+                  initial_visitor_group,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   prepare_face_jpeg,
                   parse_ticket_lines, parse_access_lines, load_pending, save_pending,
@@ -20,6 +21,9 @@ from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings
 from devices import list_readers, read_uid, to_card_number
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
 from settings_auth import verify_settings_password
+
+PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
+PREFERRED_PENDING = "Aguardando grupos do HikCentral"
 
 
 
@@ -54,6 +58,8 @@ class ValeApp(tk.Tk):
             messagebox.showwarning("Segredos", str(exc))
         self.connected_groups = []
         self.verified = False
+        self._preferred_groups_synced = False
+        self._force_preferred_on_sync = False
         self.photo_data = b""
         self.preview = None
         self.busy = False
@@ -187,6 +193,18 @@ class ValeApp(tk.Tk):
         ttk.Label(device, text="Índice da webcam").pack(side="left")
         ttk.Spinbox(device, from_=0, to=9, textvariable=self.s_camera, width=4).pack(side="left", padx=6)
 
+        local = ttk.LabelFrame(self.settings_tab, text="Padrão deste ponto de venda", padding=(10, 7))
+        local.pack(fill="x", pady=(4, 3))
+        ttk.Label(local, text="Grupo preferencial").pack(side="left", padx=(0, 8))
+        self.s_preferred_group = tk.StringVar(value=PREFERRED_PENDING)
+        self.preferred_box = ttk.Combobox(
+            local, textvariable=self.s_preferred_group, state="disabled",
+            values=(), width=29)
+        self.preferred_box.pack(side="left", padx=(0, 14))
+        ttk.Label(
+            local, text="Carregado do HikCentral. Apenas sugere o grupo inicial; operador pode mudar."
+        ).pack(side="left")
+
         options = ttk.Frame(self.settings_tab)
         options.pack(fill="both", expand=True, pady=9)
         options.columnconfigure(0, weight=1)
@@ -217,6 +235,10 @@ class ValeApp(tk.Tk):
         self.s_key.set(self.key)
         self.s_secret.set(self.secret)
         self.s_cert_pin.set(s.get("cert_pin_sha256", ""))
+        # Não preencher o select com grupos presumidos ou valores antigos.
+        self.s_preferred_group.set(PREFERRED_PENDING)
+        self.preferred_box.configure(values=(), state="disabled")
+        self._preferred_groups_synced = False
         self.tickets_text.delete("1.0", tk.END)
         self.tickets_text.insert("1.0", "\n".join(
             f"{name};{opt['days']};{opt['checkout']}" for name, opt in s["tickets"].items()))
@@ -242,11 +264,23 @@ class ValeApp(tk.Tk):
 
     def save_config(self, silent=False):
         try:
+            # Preferência só é editável após a consulta real ao HikCentral.
+            # Sem sincronização, salvar outras configurações preserva a preferência antiga.
+            preferred = self.settings.get("preferred_group", "")
+            if self._preferred_groups_synced:
+                choice = self.s_preferred_group.get()
+                if choice == PREFERRED_AUTOMATIC:
+                    preferred = ""
+                elif choice in self.connected_groups:
+                    preferred = choice
+                else:
+                    raise ValueError("Escolha um grupo retornado pelo HikCentral ou Sem preferência.")
             conf = {
                 "host": self.s_host.get().strip(),
                 "port": int(self.s_port.get()),
                 "ca_file": self.s_ca.get().strip(),
                 "cert_pin_sha256": normalize_pin(self.s_cert_pin.get()),
+                "preferred_group": preferred,
                 "card_format": self.s_format.get(),
                 "camera_index": int(self.s_camera.get()),
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
@@ -263,6 +297,8 @@ class ValeApp(tk.Tk):
                 raise ValueError("Configure a AppKey e AppSecret (OpenAPI).")
             save_api_keys(key, secret)
             save_settings(conf)
+            if conf["preferred_group"] != self.settings.get("preferred_group", ""):
+                self._force_preferred_on_sync = True
             self.settings, self.key, self.secret = conf, key, secret
             self.verified = False
             self.ticket_box["values"] = list(conf["tickets"])
@@ -394,6 +430,24 @@ class ValeApp(tk.Tk):
         else:
             self.status.set("Configure a conexão OpenAPI em Configurações.")
 
+    def _apply_live_groups(self, groups: list[str]) -> None:
+        """Usa exclusivamente os grupos sincronizados; mantém a troca manual no cadastro."""
+        groups = selectable_visitor_groups(groups)
+        if not groups:
+            raise ValueError("Nenhum grupo Visitor elegível foi encontrado no HikCentral.")
+        previous = self.group.get()
+        self.connected_groups = groups
+        self.groups_box["values"] = groups
+        self.preferred_box.configure(
+            values=[PREFERRED_AUTOMATIC, *groups], state="readonly")
+        self._preferred_groups_synced = True
+        preferred = self.settings.get("preferred_group", "")
+        self.s_preferred_group.set(
+            preferred if preferred in groups else PREFERRED_AUTOMATIC)
+        if self._force_preferred_on_sync or previous not in groups:
+            self.group.set(initial_visitor_group(groups, preferred))
+        self._force_preferred_on_sync = False
+
     def connect(self, silent=False):
         # Testes manuais usam os campos atuais, mesmo antes de clicar em Salvar.
         if not silent and not self.save_config(silent=True):
@@ -421,6 +475,9 @@ class ValeApp(tk.Tk):
                 self.connected_groups = []
                 self.groups_box["values"] = ()
                 self.group.set("")
+                self._preferred_groups_synced = False
+                self.preferred_box.configure(values=(), state="disabled")
+                self.s_preferred_group.set(PREFERRED_PENDING)
                 self.status.set("Sincronização automática indisponível: " + str(error))
                 if silent and self.key and self.secret:
                     # Reconecta sem exigir botão quando HikCentral volta a responder.
@@ -429,10 +486,7 @@ class ValeApp(tk.Tk):
                     messagebox.showerror("Conexão", str(error))
                 return
             groups, levels = value
-            self.connected_groups = groups
-            self.groups_box["values"] = groups
-            if self.group.get() not in groups:
-                self.group.set(groups[0])
+            self._apply_live_groups(groups)
             self.verified = True
             self.status.set(f"Conectado: {len(groups)} grupos e {len(levels)} níveis Visitor.")
             if not silent:
@@ -705,6 +759,9 @@ class ValeApp(tk.Tk):
                 for var in (self.first, self.last, self.card, self.reservation):
                     var.set("")
                 self.uid.set("UID não lido")
+                # Próxima venda começa no grupo preferencial, sem impedir trocas manuais.
+                self.group.set(initial_visitor_group(
+                    self.connected_groups, self.settings.get("preferred_group", "")))
                 self.photo_data, self.preview = b"", None
                 self.photo_widget.configure(image="", text="SEM FOTO", width=20, height=7)
 
