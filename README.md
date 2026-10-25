@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.9` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.10` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -107,3 +107,17 @@ Não exponha senhas/chaves em prints nem no repositório GitHub.
 
 - O seletor Grupo Visitor usa apenas grupos reais retornados pela OpenAPI e oculta exclusivamente o grupo genérico `Visitors` (ignorando maiúsculas/minúsculas e espaços adicionais). Outros grupos cadastrados no HikCentral continuam disponíveis.
 - Quando a API não retorna outro grupo ou falha, o campo é esvaziado e o cadastro é bloqueado. Não remove nem modifica o grupo `Visitors` no HikCentral.
+
+
+## Alterações da preview.10 — Grupo preferencial por ponto de venda
+
+- Na aba protegida **Configurações**, escolha **Grupo preferencial** em **Padrão deste ponto de venda**.
+- O seletor permanece desabilitado até a sincronização dos grupos reais pela OpenAPI do HikCentral. Somente os grupos válidos são listados; `Visitors` permanece oculto.
+- A opção **Sem preferência (primeiro disponível)** deixa a lista seguir a ordem retornada pelo servidor.
+- Ao iniciar o programa e sincronizar, o grupo preferido salvo é apenas **pré-selecionado** no Cadastro, caso exista na API. Se tiver sido excluído no HikCentral, o sistema utiliza o primeiro grupo válido.
+- O operador pode escolher outro grupo a qualquer momento. Uma nova sincronização não substitui a escolha manual se o grupo continuar válido.
+- Depois de concluir o cadastro de um visitante, o formulário volta ao grupo preferencial para o próximo atendimento.
+- A preferência é persistida em `%LOCALAPPDATA%\\ValeCatracaSimples\\settings.json`, chave `preferred_group`, por usuário Windows / computador de atendimento. Cada ponto deve configurar sua própria preferência.
+- Se a API estiver indisponível, salvar outras configurações não cria grupos fictícios nem substitui a preferência que estava gravada.
+- A preferência **não altera permissões ou a composição de grupos** no HikCentral; as permissões continuam sendo definidas pelo mapeamento de níveis por grupo.
+
