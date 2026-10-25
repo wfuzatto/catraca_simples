@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.5` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.6` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -8,15 +8,15 @@ Aplicativo Windows para check-in de visitantes diretamente no HikCentral Profess
 - Nome, sobrenome e grupos Visitor reais obtidos no HikCentral.
 - Foto via webcam ou arquivo, enviada via Base64 JPEG. A webcam tem prévia ao vivo, captura e opção de refazer.
 - Cadastro aceita reconhecimento facial, pulseira/cartão ou ambos; ao menos um método é obrigatório.
-- Pulseira NFC por ACR122U/PC-SC, com conversão configurável (HEX, decimal big-endian, decimal little-endian) e número editável.
+- Pulseira NFC ACR122U/PC-SC com número editável e conversão configurável: HEX, decimal big-endian, decimal little-endian (bytes invertidos), inversão de todos os bits e inversão dos bits de cada byte. Essas opções não são equivalentes; a correspondência real deve ser confirmada com um cartão cadastrado no HikCentral.
 - Ingressos de 1, 2 ou 3 dias, personalizáveis. Por padrão a saída é às 23:59:59 do último dia incluído.
-- Entrada e saída editáveis, com fuso America/Sao_Paulo.
-- Reserva opcional no campo VisitorInfo.remark.
+- Entrada e saída editáveis, com fuso America/Sao_Paulo. A saída é recalculada automaticamente ao alterar a entrada ou tipo de ingresso; não há botão de cálculo.
+- Campo **Reserva ou Apartamento**, opcional, armazenado no VisitorInfo.remark.
 - Ao clicar em CADASTRAR, o aplicativo cria a reserva e registra o check-in na mesma operação, após a confirmação da prévia de acesso.
 - Níveis de acesso configurados por grupo. O padrão não concede níveis; o operador precisa definir a política aprovada.
 - Antes de enviar, mostra os níveis e catracas que receberão a operação e pede confirmação.
 - Consulta apenas os métodos enviados em cada catraca após solicitar a reaplicação.
-- Recurso Concluir pendente retoma distribuição sem criar novo visitante caso falhe após criação.
+- Recuperação automática: após falha, a aplicação guarda um checkpoint sem dados faciais; em nova conexão, consulta o registro de check-in sem gravar novamente e reaplica níveis pendentes. Se a consulta não conseguir provar um check-in único, interrompe a recuperação e mantém o cadastro bloqueado até conciliação segura. Não há botão manual.
 
 Grupos iniciais conforme as imagens: Day use, Hóspedes Serra, Hóspedes Vale, Visitors. A lista real sempre é consultada antes da operação.
 
@@ -45,7 +45,7 @@ Para validar a conexão e as dependências sem abrir a interface ou alterar visi
 2. Abra Configurações. O padrão deste servidor é 127.0.0.1:443. Confirme host e porta na instalação onde o aplicativo será usado.
 3. Configure AppKey, AppSecret e, se necessário, caminho da CA PEM do certificado HTTPS. O aplicativo NÃO desativa a validação TLS/hostname. Para acesso por IP, o certificado precisa ter IP em SAN, ou utilize nome DNS correspondente.
 4. Selecione conversão UID e valide o número real com uma pulseira de teste no HikCentral. O UID do ACR122U não é necessariamente igual à credencial configurada na catraca.
-5. Defina explicitamente os níveis aprovados para cada grupo, ajuste os ingressos, salve e sincronize. Grupos sem níveis configurados não podem cadastrar.
+5. Defina explicitamente os níveis aprovados para cada grupo, ajuste os ingressos e salve. O programa sincroniza grupos/níveis automaticamente ao abrir e após salvar configurações, com tentativas de reconexão. Grupos sem níveis configurados não podem cadastrar.
 6. Antes de cada cadastro, confira a prévia de níveis e catracas. Confirme também que a pulseira de teste não está vinculada a outro visitante; a consulta de duplicidade de cartão ainda não foi homologada.
 
 ## Segurança e persistência
@@ -81,3 +81,13 @@ Use Diagnóstico de rede para saber se DNS, TCP e TLS estão acessíveis. Ao tes
 a conexão, o aplicativo salva as alterações digitadas antes da chamada OpenAPI.
 Não exponha senhas/chaves em prints nem no repositório GitHub.
 
+
+
+## Alterações da preview.6
+
+- Botão CADASTRAR VISITANTE fixado no rodapé da janela para não ser ocultado por controles longos ou resoluções menores.
+- Sincronização e recuperação segura automáticas, sem botões de sincronizar ou concluir pendências na tela.
+- Removidas dicas técnicas sob o leitor e botão Calcular saída.
+- Datas enviadas como `YYYY-MM-DDTHH:MM:SS-03:00`, iguais ao fluxo PHP legado. A mesma data de saída vai em `appointEndTime` (reserva) e `visitEndTime` (check-in). Há testes automatizados cobrindo viradas de dia, mês e ano.
+- **Importante:** não foi possível consultar o HikCentral do hotel deste ambiente. A data exibida na interface do HikCentral precisa ser confrontada com o payload real no servidor de recepção para confirmar se há conversão de fuso/representação do lado do HikCentral. Não altere o fuso arbitrariamente.
+- Para NFC, a configuração antiga `DECIMAL_BIG` permanece se tiver sido salva anteriormente. O padrão de novas instalações é `DECIMAL_LITTLE`; revise o formato nas Configurações e confirme com uma pulseira conhecida. Não presuma equivalência entre inversão de bits, ordem dos bytes e formato Wiegand.
