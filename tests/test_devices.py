@@ -70,3 +70,12 @@ def test_pcsc_rejects_invalid_uid_status(monkeypatch):
     install_readers(monkeypatch, lambda: [reader])
     with pytest.raises(RuntimeError, match="SW=6300"):
         read_uid()
+
+def test_byte_swap_is_not_bit_inversion():
+    uid = bytes.fromhex("0102")
+    assert to_card_number(uid, "DECIMAL_BIG") == str(0x0102)
+    assert to_card_number(uid, "DECIMAL_LITTLE") == str(0x0201)
+    # Reversão dos 16 bits (01 02 -> 40 80) não equivale a inverter bytes.
+    assert to_card_number(uid, "DECIMAL_BITS_REVERSED") == str(0x4080)
+    assert to_card_number(uid, "DECIMAL_EACH_BYTE_BITS_REVERSED") == str(0x8040)
+    assert to_card_number(uid, "HEX") == "0102"
