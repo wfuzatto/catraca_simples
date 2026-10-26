@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.13` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.14` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -134,7 +134,7 @@ Não exponha senhas/chaves em prints nem no repositório GitHub.
 - Nenhuma credencial deve ser publicada no repositório. A confirmação da operação real com catracas continua dependendo de teste local no hotel.
 
 
-## Alterações da preview.13
+## Alterações da preview.14
 
 - **Cadastro com somente um seletor de grupo Visitor**, sem cartões ou botões duplicados.
 - **Grupo preferencial obrigatório por ponto de venda**, quando salvo em Configurações: após consultar a lista de grupos reais do HikCentral, o seletor Cadastro permanece bloqueado no grupo configurado. A seleção é novamente validada antes de cadastrar; se o grupo não existir mais na OpenAPI, o aplicativo bloqueia novas vendas até atualizar a preferência.
