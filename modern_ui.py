@@ -329,7 +329,7 @@ def _settings(app):
     app.preferred_box = _combo(preferred_area, "Grupo preferencial", app.s_preferred_group,
                                state="disabled")
     app.preferred_box.configure(values=(), state="disabled")
-    _text(local, "Escolhido após sincronizar os grupos reais; o operador poderá alterar no cadastro.",
+    _text(local, "Grupo selecionado bloqueia o Cadastro neste caixa. Sem preferência permite escolher livremente.",
           size=11, color=MUTED).pack(anchor="w", pady=(9, 0))
 
     # Ticket catalog and access levels. Editable text preserves all original semantics.
