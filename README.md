@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.12` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.13` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -133,3 +133,14 @@ Não exponha senhas/chaves em prints nem no repositório GitHub.
 - A tela é uma implementação nativa Windows, fiel à linguagem visual do mockup; diferenças menores de renderização podem ocorrer conforme escala de tela e tema do Windows.
 - Nenhuma credencial deve ser publicada no repositório. A confirmação da operação real com catracas continua dependendo de teste local no hotel.
 
+
+## Alterações da preview.13
+
+- **Cadastro com somente um seletor de grupo Visitor**, sem cartões ou botões duplicados.
+- **Grupo preferencial obrigatório por ponto de venda**, quando salvo em Configurações: após consultar a lista de grupos reais do HikCentral, o seletor Cadastro permanece bloqueado no grupo configurado. A seleção é novamente validada antes de cadastrar; se o grupo não existir mais na OpenAPI, o aplicativo bloqueia novas vendas até atualizar a preferência.
+- Quando selecionado **Sem preferência**, o operador continua podendo escolher livremente qualquer grupo elegível da OpenAPI.
+- Coluna direita de Resumo de configuração e Dica removida; o formulário ocupa toda a área à direita do menu.
+- **Janela responsiva**: dimensão inicial baseada na tela e reserva de área da barra de tarefas do Windows. Se o cliente usa resolução menor ou escala maior, os formulários passam a uma coluna, com rolagem e botões Cadastro/Verificar última entrega e Salvar/Testar/Diagnosticar fixos e acessíveis.
+- O serviço HikCentral, NFC, webcam, datas, ingressos, recuperação de cadastros, permissões e armazenamento de segredos não tiveram seus protocolos alterados.
+
+A compatibilidade visual e resolução é testada automaticamente com geometria dinâmica; a validação funcional completa exige executar o EXE nos computadores reais do hotel.
