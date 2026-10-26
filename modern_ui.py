@@ -290,12 +290,16 @@ def _settings(app):
     grid = ctk.CTkFrame(gateway, fg_color="transparent")
     grid.pack(fill="x")
     grid.grid_columnconfigure((0, 1), weight=1, uniform="gateway")
-    _setting_field(grid, 0, 0, "IP/DNS", app.s_host)
-    _setting_field(grid, 0, 1, "Porta OpenAPI", app.s_port)
-    _setting_field(grid, 1, 0, "AppKey", app.s_key, secret=True)
-    _setting_field(grid, 1, 1, "AppSecret", app.s_secret, secret=True)
-    _setting_field(grid, 2, 0, "CA (PEM opcional)", app.s_ca)
-    pin = _setting_field(grid, 2, 1, "SHA-256 do certificado", app.s_cert_pin)
+    app.gateway_grid = grid
+    app.gateway_cells = [
+        _setting_field(grid, 0, 0, "IP/DNS", app.s_host),
+        _setting_field(grid, 0, 1, "Porta OpenAPI", app.s_port),
+        _setting_field(grid, 1, 0, "AppKey", app.s_key, secret=True),
+        _setting_field(grid, 1, 1, "AppSecret", app.s_secret, secret=True),
+        _setting_field(grid, 2, 0, "CA (PEM opcional)", app.s_ca),
+        _setting_field(grid, 2, 1, "SHA-256 do certificado", app.s_cert_pin)
+    ]
+    pin = app.gateway_cells[-1]
     _secondary(pin, "Ler e conferir certificado", app.pin_certificate, width=192).pack(
         anchor="w", pady=(8, 0))
     _text(gateway, "Verificação TLS obrigatória: CA confiável ou certificado SHA-256 aprovado.",
@@ -307,6 +311,7 @@ def _settings(app):
     localrow = ctk.CTkFrame(local, fg_color="transparent")
     localrow.pack(fill="x")
     localrow.grid_columnconfigure((0, 1), weight=1, uniform="local")
+    app.local_grid = localrow
     format_area = ctk.CTkFrame(localrow, fg_color="transparent")
     format_area.grid(row=0, column=0, sticky="ew", padx=(0, 9), pady=(0, 10))
     uid_combo = _combo(format_area, "Formato do UID", app.s_format)
@@ -318,6 +323,7 @@ def _settings(app):
     _text(camera_area, "Índice da webcam", size=12, bold=True).pack(anchor="w", pady=(0, 6))
     ttk.Spinbox(camera_area, from_=0, to=9, textvariable=app.s_camera,
                 font=("Segoe UI", 12), width=8).pack(anchor="w", ipady=7)
+    app.local_cells = [format_area, camera_area]
     preferred_area = ctk.CTkFrame(local, fg_color="transparent")
     preferred_area.pack(fill="x")
     app.preferred_box = _combo(preferred_area, "Grupo preferencial", app.s_preferred_group,
@@ -332,6 +338,7 @@ def _settings(app):
     editors = ctk.CTkFrame(catalog, fg_color="transparent")
     editors.pack(fill="x")
     editors.grid_columnconfigure((0, 1), weight=1, uniform="editors")
+    app.editors_grid = editors
     ticket_edit = ctk.CTkFrame(editors, fg_color="transparent")
     ticket_edit.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
     _text(ticket_edit, "Ingressos · Nome;Dias;HH:MM", size=12, bold=True).pack(anchor="w", pady=(0, 6))
@@ -348,14 +355,17 @@ def _settings(app):
         relief="flat", highlightthickness=1, highlightbackground="#D5DFEB",
         font=("Consolas", 10), wrap="word", padx=11, pady=9)
     app.access_text.pack(fill="both", expand=True)
+    app.editor_cells = [ticket_edit, levels_edit]
     _text(catalog, "Use apenas os níveis Visitor autorizados no HikCentral. Grupos sem níveis ficam bloqueados.",
           size=11, color=MUTED).pack(anchor="w", pady=(8, 0))
 
 
 def build(app):
     ctk.set_appearance_mode("light")
-    app.geometry("1420x920")
-    app.minsize(1020, 700)
+    width, height, x, y = responsive_ui.initial_geometry(
+        app.winfo_screenwidth(), app.winfo_screenheight())
+    app.geometry(f"{width}x{height}+{x}+{y}")
+    app.minsize(min(870, width), min(540, height))
     app.configure(bg=BG)
     style = ttk.Style()
     style.theme_use("clam")
@@ -376,6 +386,7 @@ def build(app):
 
     sidebar = ctk.CTkFrame(
         app.main_shell, width=220, corner_radius=0, fg_color=NAVY)
+    app.sidebar = sidebar
     sidebar.pack(side="left", fill="y")
     sidebar.pack_propagate(False)
     logo = ctk.CTkFrame(sidebar, fg_color="transparent")
@@ -396,9 +407,11 @@ def build(app):
     heading = ctk.CTkFrame(top, fg_color="transparent")
     heading.pack(side="left", padx=30, pady=20)
     _text(heading, "Cadastro de Visitante", size=24, bold=True).pack(anchor="w")
-    _text(heading, "Registro facial e NFC com integração local ao HikCentral",
-          size=12, color=MUTED).pack(anchor="w")
+    app.header_subtitle = _text(heading, "Registro facial e NFC com integração local ao HikCentral",
+                                size=12, color=MUTED)
+    app.header_subtitle.pack(anchor="w")
     connection = ctk.CTkFrame(top, fg_color="transparent")
+    app.connection_header = connection
     connection.pack(side="right", padx=24, pady=25)
     _text(connection, "●  HikCentral (local)", size=13, bold=True).pack(anchor="w")
     ctk.CTkLabel(connection, textvariable=app.connection_label_var,
@@ -426,6 +439,8 @@ def build(app):
 
     _registration(app)
     _settings(app)
+    responsive_ui.apply(app, width)
+    app.bind("<Configure>", lambda event: responsive_ui.on_resize(app, event), add="+")
     app.book.bind("<<NotebookTabChanged>>", app._tab_changed)
     app.status.set("Sincronização automática ao iniciar..." if app.key and app.secret
                    else "Configure AppKey/AppSecret em Configurações.")
