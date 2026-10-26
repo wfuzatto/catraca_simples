@@ -38,6 +38,25 @@ def default_settings() -> dict:
     }
 
 
+def validate_visitor_group_selection(
+    selected: str, available: list[str], preferred: str = ""
+) -> str:
+    """Falha fechada se houver preferência obrigatória inválida ou burlada."""
+    if preferred and preferred not in available:
+        raise ValueError(
+            f"Grupo preferencial '{preferred}' não existe mais no HikCentral. "
+            "Altere o grupo em Configurações antes de cadastrar."
+        )
+    if preferred and selected != preferred:
+        raise ValueError(
+            "Grupo bloqueado neste ponto de venda. "
+            f"Somente '{preferred}' está autorizado pela configuração local."
+        )
+    if selected not in available:
+        raise ValueError("Grupo não confirmado pelos grupos reais do HikCentral.")
+    return selected
+
+
 def initial_visitor_group(available: list[str], preferred: str = "") -> str:
     """Sugestão inicial; só seleciona um grupo retornado pela consulta real."""
     if preferred and preferred in available:
