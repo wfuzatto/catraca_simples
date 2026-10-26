@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageTk
 
 from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
-                  initial_visitor_group,
+                  initial_visitor_group, validate_visitor_group_selection,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   prepare_face_jpeg,
                   parse_ticket_lines, parse_access_lines, load_pending, save_pending,
@@ -270,7 +270,6 @@ class ValeApp(tk.Tk):
             if conf["preferred_group"] != self.settings.get("preferred_group", ""):
                 self._force_preferred_on_sync = True
             self.settings, self.key, self.secret = conf, key, secret
-            modern_ui.refresh_summary(self)
             self.verified = False
             self.ticket_box["values"] = list(conf["tickets"])
             if self.ticket.get() not in conf["tickets"]:
@@ -402,24 +401,32 @@ class ValeApp(tk.Tk):
         else:
             self.status.set("Configure a conexão OpenAPI em Configurações.")
 
-    def _apply_live_groups(self, groups: list[str]) -> None:
-        """Usa exclusivamente os grupos sincronizados; mantém a troca manual no cadastro."""
+    def _apply_live_groups(self, groups: list[str]) -> bool:
+        """Sincroniza grupos reais; preferência salva fixa a seleção neste caixa."""
         groups = selectable_visitor_groups(groups)
         if not groups:
             raise ValueError("Nenhum grupo Visitor elegível foi encontrado no HikCentral.")
         previous = self.group.get()
         self.connected_groups = groups
         self.groups_box["values"] = groups
-        modern_ui.refresh_group_chips(self, groups)
         self.preferred_box.configure(
             values=[PREFERRED_AUTOMATIC, *groups], state="readonly")
         self._preferred_groups_synced = True
         preferred = self.settings.get("preferred_group", "")
-        self.s_preferred_group.set(
-            preferred if preferred in groups else PREFERRED_AUTOMATIC)
+        if preferred:
+            # Preferência explícita funciona como trava administrativa do caixa.
+            # Não aplicar fallback em grupo inexistente: impedir venda incorreta.
+            self.s_preferred_group.set(preferred)
+            self.groups_box.configure(state="disabled")
+            self.group.set(preferred if preferred in groups else "")
+            self._force_preferred_on_sync = False
+            return preferred in groups
+        self.s_preferred_group.set(PREFERRED_AUTOMATIC)
+        self.groups_box.configure(state="readonly")
         if self._force_preferred_on_sync or previous not in groups:
-            self.group.set(initial_visitor_group(groups, preferred))
+            self.group.set(initial_visitor_group(groups))
         self._force_preferred_on_sync = False
+        return True
 
     def connect(self, silent=False):
         # Testes manuais usam os campos atuais, mesmo antes de clicar em Salvar.
@@ -447,8 +454,8 @@ class ValeApp(tk.Tk):
                 self.verified = False
                 self.connected_groups = []
                 self.connection_label_var.set("Sem conexão")
-                modern_ui.refresh_group_chips(self, [])
                 self.groups_box["values"] = ()
+                self.groups_box.configure(state="disabled")
                 self.group.set("")
                 self._preferred_groups_synced = False
                 self.preferred_box.configure(values=(), state="disabled")
@@ -461,9 +468,17 @@ class ValeApp(tk.Tk):
                     messagebox.showerror("Conexão", str(error))
                 return
             groups, levels = value
-            self._apply_live_groups(groups)
-            self.verified = True
-            self.connection_label_var.set("Conectado")
+            ready = self._apply_live_groups(groups)
+            self.verified = ready
+            self.connection_label_var.set("Conectado" if ready else "Grupo indisponível")
+            if not ready:
+                preferred = self.settings.get("preferred_group", "")
+                self.status.set(
+                    f"Grupo preferencial '{preferred}' indisponível no HikCentral. "
+                    "Cadastro bloqueado. Abra Configurações, escolha outro grupo válido e salve.")
+                if not silent:
+                    messagebox.showwarning("Grupo indisponível", self.status.get())
+                return
             self.status.set(f"Conectado: {len(groups)} grupos e {len(levels)} níveis Visitor.")
             if not silent:
                 self.book.select(self.registration_tab)
@@ -603,9 +618,9 @@ class ValeApp(tk.Tk):
             messagebox.showwarning("Verificação", "Aguardando a sincronização automática do HikCentral.")
             return
         try:
-            group = self.group.get()
-            if group not in self.connected_groups:
-                raise ValueError("Grupo não confirmado pela API.")
+            group = validate_visitor_group_selection(
+                self.group.get(), self.connected_groups,
+                self.settings.get("preferred_group", ""))
             if group not in self.settings["group_access"]:
                 raise ValueError("Configure níveis de acesso para este grupo.")
             requested_levels = self.settings["group_access"][group]
@@ -735,9 +750,11 @@ class ValeApp(tk.Tk):
                 for var in (self.first, self.last, self.card, self.reservation):
                     var.set("")
                 self.uid.set("UID não lido")
-                # Próxima venda começa no grupo preferencial, sem impedir trocas manuais.
-                self.group.set(initial_visitor_group(
-                    self.connected_groups, self.settings.get("preferred_group", "")))
+                # Próxima venda respeita grupo bloqueado ou escolha livre do caixa.
+                preferred = self.settings.get("preferred_group", "")
+                self.group.set(
+                    preferred if preferred in self.connected_groups
+                    else (self.connected_groups[0] if not preferred and self.connected_groups else ""))
                 self.photo_data, self.preview = b"", None
                 self.photo_widget.configure(image="", text="SEM FOTO")
 
