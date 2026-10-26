@@ -113,46 +113,6 @@ def _summary_line(parent, label, variable, *, fg=MUTED):
     ctk.CTkFrame(parent, height=1, fg_color="#EDF1F6").pack(fill="x")
 
 
-def _group_chip(app, parent, name):
-    active = app.group.get() == name
-    return ctk.CTkButton(
-        parent, text=name, height=35, corner_radius=8,
-        fg_color=BLUE if active else "#FAFCFF",
-        text_color=WHITE if active else INK,
-        hover_color=BLUE_HOVER if active else "#E7F0FC",
-        border_width=0 if active else 1,
-        border_color="#D9E4F0", font=("Segoe UI", 12, "bold" if active else "normal"),
-        command=lambda: app.group.set(name))
-
-
-def refresh_group_chips(app, groups=None):
-    frame = getattr(app, "group_chips_frame", None)
-    if frame is None:
-        return
-    for child in frame.winfo_children():
-        child.destroy()
-    active = groups if groups is not None else getattr(app, "connected_groups", [])
-    if not active:
-        _text(frame, "Grupos disponíveis após sincronização com o HikCentral",
-              size=11, color=MUTED).pack(anchor="w", pady=2)
-        return
-    for group in active:
-        _group_chip(app, frame, group).pack(side="left", padx=(0, 7), pady=3)
-
-
-def refresh_summary(app):
-    if not hasattr(app, "ui_host"):
-        return
-    settings = app.settings
-    app.ui_host.set(str(settings.get("host", "—")))
-    app.ui_port.set(str(settings.get("port", "—")))
-    app.ui_tls.set("Configurado" if (
-        settings.get("cert_pin_sha256") or settings.get("ca_file")) else "TLS padrão")
-    app.ui_camera.set(str(settings.get("camera_index", 0)))
-    preferred = settings.get("preferred_group", "")
-    app.ui_preferred.set(preferred or "Primeiro disponível")
-
-
 def _registration(app):
     page = app.registration_tab
     page.configure(style="Vale.Page.TFrame")
@@ -178,17 +138,13 @@ def _registration(app):
     # tk/ctk packing order: footer anchored to bottom, content fills remaining space.
     content = ctk.CTkFrame(outer, fg_color=BG, corner_radius=0)
     content.pack(fill="both", expand=True, padx=14, pady=11)
-    content.grid_columnconfigure(0, weight=8)
-    content.grid_columnconfigure(1, weight=3, minsize=252)
+    # Única coluna: formulário ocupa toda a área útil; rolagem permanece.
+    content.grid_columnconfigure(0, weight=1)
     content.grid_rowconfigure(0, weight=1)
     left = ctk.CTkScrollableFrame(
         content, fg_color=BG, corner_radius=0,
         scrollbar_button_color="#CBD8E8", scrollbar_button_hover_color="#ACBDD5")
-    left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-    right = ctk.CTkScrollableFrame(
-        content, fg_color=BG, corner_radius=0,
-        scrollbar_button_color="#D4DDEB")
-    right.grid(row=0, column=1, sticky="nsew")
+    left.grid(row=0, column=0, sticky="nsew")
 
     # 1. Visitor identity.
     details = _card(left)
@@ -212,10 +168,6 @@ def _registration(app):
     reservation_area.grid(row=1, column=1, sticky="ew", padx=(10, 0))
     _field(reservation_area, "Reserva ou apartamento (opcional)", app.reservation,
            placeholder="Ex.: Reserva 101, apto 23")
-    app.group_chips_frame = ctk.CTkFrame(details, fg_color="transparent")
-    app.group_chips_frame.pack(fill="x", pady=(13, 0))
-    app.group.trace_add("write", lambda *_: refresh_group_chips(app))
-    refresh_group_chips(app)
 
     # 2. Credentials.
     credentials = _card(left)
@@ -279,28 +231,6 @@ def _registration(app):
     app.start.trace_add("write", lambda *_: app.calculate())
     _text(period, "Saída calculada pelo ingresso; você pode ajustar o horário.",
           color=MUTED, size=11).pack(anchor="w", pady=(10, 0))
-
-    # Right: configuration glance. Never display AppKey, secret or full fingerprints.
-    summary = _card(right, padx=15, pady=17)
-    _text(summary, "⚙  Resumo da configuração", size=15, bold=True).pack(anchor="w", pady=(0, 5))
-    _text(summary, "Conexão e dispositivos", color=MUTED, size=11).pack(anchor="w", pady=(0, 12))
-    app.ui_host = tk.StringVar()
-    app.ui_port = tk.StringVar()
-    app.ui_tls = tk.StringVar()
-    app.ui_camera = tk.StringVar()
-    app.ui_preferred = tk.StringVar()
-    _summary_line(summary, "IP/DNS", app.ui_host)
-    _summary_line(summary, "Porta OpenAPI", app.ui_port)
-    _summary_line(summary, "TLS", app.ui_tls, fg="#18835C")
-    _summary_line(summary, "Webcam", app.ui_camera)
-    _summary_line(summary, "Grupo preferencial", app.ui_preferred, fg=BLUE)
-    refresh_summary(app)
-
-    hint = _card(right, padx=15, pady=16)
-    _text(hint, "✦  Dica", size=15, bold=True).pack(anchor="w", pady=(0, 9))
-    _text(hint, "Você pode ajustar o grupo inicial e outros parâmetros em Configurações.",
-          color=MUTED, size=12).pack(anchor="w", pady=(0, 14))
-    _secondary(hint, "Abrir configurações", lambda: app.book.select(app.settings_tab), width=180).pack(fill="x")
 
 
 def _setting_field(parent, row, column, title, variable, *, secret=False):
