@@ -213,3 +213,29 @@ def test_preferred_group_is_per_workstation_and_survives_restart(tmp_path):
     assert initial_visitor_group(real_groups, "Outro grupo") == "Day use"
     assert initial_visitor_group(real_groups, "") == "Day use"
     assert initial_visitor_group([], "Hóspedes Vale") == ""
+
+
+def test_group_lock_validation_after_sync():
+    import pytest
+    from core import validate_visitor_group_selection
+    groups = ["Day use", "Hóspedes Vale", "Hóspedes Serra"]
+    assert validate_visitor_group_selection("Day use", groups) == "Day use"
+    assert validate_visitor_group_selection("Hóspedes Vale", groups, "Hóspedes Vale") == "Hóspedes Vale"
+    with pytest.raises(ValueError, match="bloqueado"):
+        validate_visitor_group_selection("Day use", groups, "Hóspedes Vale")
+    with pytest.raises(ValueError, match="não existe"):
+        validate_visitor_group_selection("Day use", groups, "Grupo desativado")
+    with pytest.raises(ValueError, match="não confirmado"):
+        validate_visitor_group_selection("Visitors", groups)
+
+
+def test_window_geometry_respects_display_and_taskbar():
+    from responsive_ui import initial_geometry
+    for screen_width, screen_height in ((1920, 1080), (1366, 768), (1280, 720), (1024, 768), (800, 600)):
+        width, height, x, y = initial_geometry(screen_width, screen_height)
+        assert 0 <= x < screen_width
+        assert 0 <= y < screen_height
+        assert width + x <= screen_width
+        assert height + y <= screen_height
+        assert width < screen_width
+        assert height < screen_height
