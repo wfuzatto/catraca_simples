@@ -129,15 +129,16 @@ def test_preferred_group_select_only_after_api_and_manual_override(monkeypatch):
         assert tuple(root.groups_box["values"]) == ("Day use", "Hóspedes Serra", "Hóspedes Vale")
         assert root.s_preferred_group.get() == "Hóspedes Vale"
         assert root.group.get() == "Hóspedes Vale"
-        # Manual operator switch is not overridden by refresh.
+        # Preferência salva impõe bloqueio visual e na próxima sincronização.
+        assert root.groups_box.cget("state") == "disabled"
         root.group.set("Hóspedes Serra")
-        root._apply_live_groups(["Hóspedes Vale", "Day use", "Hóspedes Serra"])
-        assert root.group.get() == "Hóspedes Serra"
-        # If a previously preferred group ceases to exist, fallback comes from API.
-        root._apply_live_groups(["Visitors", "Day use"])
-        assert root.group.get() == "Day use"
-        assert root.s_preferred_group.get() == app.PREFERRED_AUTOMATIC
-        assert "Hóspedes Vale" not in root.preferred_box["values"]
+        assert root._apply_live_groups(["Hóspedes Vale", "Day use", "Hóspedes Serra"])
+        assert root.group.get() == "Hóspedes Vale"
+        # Se o grupo deixar de existir, não substituir por outro acesso.
+        assert root._apply_live_groups(["Visitors", "Day use"]) is False
+        assert root.group.get() == ""
+        assert root.groups_box.cget("state") == "disabled"
+        assert root.s_preferred_group.get() == "Hóspedes Vale"
     finally:
         root.destroy()
 
@@ -168,10 +169,11 @@ def test_preferred_group_change_saves_and_is_reselected(monkeypatch, tmp_path):
         root._apply_live_groups(["Day use", "Hóspedes Vale", "Hóspedes Serra"])
         assert root.group.get() == "Hóspedes Serra"
         assert root.s_preferred_group.get() == "Hóspedes Serra"
-        # User may switch freely and saving must not change this choice.
+        # Escolha de grupo bloqueada não muda após nova sincronização.
         root.group.set("Day use")
         root._apply_live_groups(["Hóspedes Serra", "Day use"])
-        assert root.group.get() == "Day use"
+        assert root.group.get() == "Hóspedes Serra"
+        assert root.groups_box.cget("state") == "disabled"
         assert saved_keys
     finally:
         root.destroy()
@@ -217,7 +219,7 @@ def test_modern_dashboard_keeps_all_original_actions_and_visible_settings_save(m
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Tk requer Windows")
-def test_modern_group_chips_follow_real_groups_and_preserve_selection(monkeypatch):
+def test_only_combo_is_visible_and_group_is_free_without_preference(monkeypatch):
     import app
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
@@ -225,12 +227,43 @@ def test_modern_group_chips_follow_real_groups_and_preserve_selection(monkeypatc
     root = app.ValeApp()
     try:
         root.update()
-        root._apply_live_groups(["Visitors", "Day use", "Hóspedes Vale"])
-        assert len(root.group_chips_frame.winfo_children()) == 2
+        assert not hasattr(root, "group_chips_frame")
+        assert root._apply_live_groups(["Visitors", "Day use", "Hóspedes Vale"])
         assert root.group.get() == "Day use"
+        assert root.groups_box.cget("state") == "readonly"
         root.group.set("Hóspedes Vale")
         assert root.group.get() == "Hóspedes Vale"
-        assert len(root.group_chips_frame.winfo_children()) == 2
-        assert root.groups_box["values"] == ("Day use", "Hóspedes Vale")
+        assert root._apply_live_groups(["Day use", "Hóspedes Vale"])
+        assert root.group.get() == "Hóspedes Vale"
+        assert tuple(root.groups_box["values"]) == ("Day use", "Hóspedes Vale")
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Tk requer Windows")
+def test_responsive_ui_compact_screen_and_settings_footer(monkeypatch):
+    import app
+    import responsive_ui
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.simpledialog, "askstring", lambda *a, **kw: "test")
+    monkeypatch.setattr(app, "verify_settings_password", lambda _: True)
+    root = app.ValeApp()
+    try:
+        for size in (1366, 1024, 890):
+            responsive_ui.apply(root, size)
+            root.geometry(f"{size}x650")
+            root.update()
+            assert root.visitor_grid.winfo_exists()
+            assert root.registration_footer.winfo_exists()
+            assert root.registration_status_widget.winfo_manager() == "pack"
+            assert root.register_button.winfo_manager() == "pack"
+            assert root.delivery_button.winfo_manager() == "pack"
+            assert root.register_button.winfo_rootx() + root.register_button.winfo_width() <= root.winfo_rootx() + root.winfo_width()
+        root.book.select(root.settings_tab)
+        root.update()
+        assert root.save_button.winfo_manager() == "pack"
+        assert root.save_button.winfo_rooty() + root.save_button.winfo_height() <= root.winfo_rooty() + root.winfo_height()
     finally:
         root.destroy()
