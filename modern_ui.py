@@ -8,6 +8,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
+import responsive_ui
 
 NAVY = "#14263B"
 NAVY_2 = "#1B324A"
@@ -131,9 +132,12 @@ def _registration(app):
     app.delivery_button = _secondary(
         footer, "Verificar última entrega", app.verify_last_delivery, width=187)
     app.delivery_button.pack(side="right", padx=(8, 0), pady=13)
-    ctk.CTkLabel(footer, textvariable=app.status, anchor="w",
-                 text_color=MUTED, font=("Segoe UI", 11), width=325,
-                 wraplength=390).pack(side="left", fill="x", expand=True, padx=21)
+    app.registration_footer = footer
+    app.registration_status_widget = ctk.CTkLabel(
+        footer, textvariable=app.status, anchor="w",
+        text_color=MUTED, font=("Segoe UI", 11), width=250,
+        wraplength=370)
+    app.registration_status_widget.pack(side="left", fill="x", expand=True, padx=18)
 
     # tk/ctk packing order: footer anchored to bottom, content fills remaining space.
     content = ctk.CTkFrame(outer, fg_color=BG, corner_radius=0)
@@ -152,6 +156,7 @@ def _registration(app):
     columns = ctk.CTkFrame(details, fg_color="transparent")
     columns.pack(fill="x")
     columns.grid_columnconfigure((0, 1), weight=1, uniform="visitor")
+    app.visitor_grid = columns
     app.first, app.last, app.group, app.reservation = (
         tk.StringVar(), tk.StringVar(), tk.StringVar(), tk.StringVar())
     name_area = ctk.CTkFrame(columns, fg_color="transparent")
@@ -168,6 +173,7 @@ def _registration(app):
     reservation_area.grid(row=1, column=1, sticky="ew", padx=(10, 0))
     _field(reservation_area, "Reserva ou apartamento (opcional)", app.reservation,
            placeholder="Ex.: Reserva 101, apto 23")
+    app.visitor_cells = [name_area, surname_area, group_area, reservation_area]
 
     # 2. Credentials.
     credentials = _card(left)
@@ -176,6 +182,7 @@ def _registration(app):
     creds_row = ctk.CTkFrame(credentials, fg_color="transparent")
     creds_row.pack(fill="x")
     creds_row.grid_columnconfigure((0, 1), weight=1, uniform="credentials")
+    app.credential_grid = creds_row
     nfc_panel = ctk.CTkFrame(creds_row, fg_color="#ECF9F5", corner_radius=12)
     nfc_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
     _text(nfc_panel, "▣   Cartão / Pulseira NFC", size=14, bold=True).pack(anchor="w", padx=13, pady=(14, 7))
@@ -209,6 +216,7 @@ def _registration(app):
     _primary(choices, "Escolher foto facial", app.browse_photo, width=174).pack(
         fill="x", pady=(7, 8))
     _secondary(choices, "Foto pela webcam", app.camera, width=174).pack(fill="x")
+    app.credential_cells = [nfc_panel, photo_panel]
 
     # 3. Ticket.
     period = _card(left)
@@ -217,6 +225,7 @@ def _registration(app):
     ticket_row = ctk.CTkFrame(period, fg_color="transparent")
     ticket_row.pack(fill="x")
     ticket_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="validity")
+    app.ticket_grid = ticket_row
     app.ticket, app.start, app.end = tk.StringVar(), tk.StringVar(), tk.StringVar()
     ticket_area = ctk.CTkFrame(ticket_row, fg_color="transparent")
     ticket_area.grid(row=0, column=0, sticky="ew", padx=(0, 9))
@@ -228,6 +237,7 @@ def _registration(app):
     end_area = ctk.CTkFrame(ticket_row, fg_color="transparent")
     end_area.grid(row=0, column=2, sticky="ew", padx=(9, 0))
     _field(end_area, "Saída", app.end, required=True)
+    app.ticket_cells = [ticket_area, start_area, end_area]
     app.start.trace_add("write", lambda *_: app.calculate())
     _text(period, "Saída calculada pelo ingresso; você pode ajustar o horário.",
           color=MUTED, size=11).pack(anchor="w", pady=(10, 0))
@@ -254,12 +264,15 @@ def _settings(app):
     app.save_button = _primary(
         actions, "Salvar configurações", app.save_config, width=192)
     app.save_button.pack(side="right", padx=(9, 18), pady=13)
-    _secondary(actions, "Testar conexão", app.connect, width=150).pack(
-        side="right", padx=(9, 0), pady=13)
-    _secondary(actions, "Diagnóstico de rede", app.diagnose, width=164).pack(
-        side="right", padx=(9, 0), pady=13)
-    _text(actions, "Alterações só são gravadas ao clicar em Salvar.",
-          size=11, color=MUTED).pack(side="left", padx=18)
+    app.settings_test_button = _secondary(actions, "Testar conexão", app.connect, width=150)
+    app.settings_test_button.pack(side="right", padx=(9, 0), pady=13)
+    app.settings_diagnostic_button = _secondary(
+        actions, "Diagnóstico de rede", app.diagnose, width=164)
+    app.settings_diagnostic_button.pack(side="right", padx=(9, 0), pady=13)
+    app.settings_notice = _text(actions,
+        "Alterações só são gravadas ao clicar em Salvar.", size=11, color=MUTED)
+    app.settings_notice.pack(side="left", padx=18)
+    app.settings_footer = actions
 
     scroller = ctk.CTkScrollableFrame(
         wrapper, fg_color=BG, corner_radius=0,
