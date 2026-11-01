@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.14` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.15` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -144,3 +144,19 @@ Não exponha senhas/chaves em prints nem no repositório GitHub.
 - O serviço HikCentral, NFC, webcam, datas, ingressos, recuperação de cadastros, permissões e armazenamento de segredos não tiveram seus protocolos alterados.
 
 A compatibilidade visual e resolução é testada automaticamente com geometria dinâmica; a validação funcional completa exige executar o EXE nos computadores reais do hotel.
+
+
+## Preview.15 — Foto e funcionamento diário dos ingressos
+
+- A prévia facial agora usa a área inteira do quadro (crop proporcional central com PIL ImageOps.fit); não modifica a foto enviada ao HikCentral.
+- Ingressos agora usam Nome;Dias;Entrada;Saída, por exemplo:
+  - 1 dia;1;09:00;17:00
+  - 2 dias;2;09:00;17:00
+  - 3 dias;3;09:00;17:00
+- Em instalações novas, abertura 09:00 e encerramento 17:00, inclusive último dia. Um ingresso de 3 dias com início em 01/11 às 09:00 vence em 03/11 às 17:00.
+- Migração conservadora: ingressos antigos de 3 campos preservam horário anterior de saída (ex.: 23:59) e recebem abertura padrão 09:00. Corrija manualmente e clique Salvar; não alteramos regra operacional silenciosamente.
+- **Importante:** data de entrada no primeiro dia e saída no último NÃO impede acesso noturno entre os dias. É necessário configurar Access Schedule Template 09:00–17:00 para TODOS os dias e feriados em cada nível Visitor efetivamente usado, aplicar nos terminais e testar acesso antes/depois do horário.
+- Configurações inclui campo Agendas diárias verificadas, formato Nome do Nível=09:00-17:00. Preencha SOMENTE depois de conferir o modelo de agenda nos níveis e dispositivos. É confirmação administrativa, não inspeção automatizada de configuração do HikCentral.
+- O programa bloqueia o cadastro quando os níveis selecionados não têm confirmação para os horários configurados; horários diferentes exigem níveis diferentes.
+- Não restrinja saídas de emergência nem rotas de evacuação; os horários operacionais não substituem as medidas de segurança.
+- Testes automatizados cobrem multi-dia, fuso horário, migração, bloqueio sem agenda confirmada e proporção da foto.
