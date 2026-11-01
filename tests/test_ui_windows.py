@@ -199,6 +199,8 @@ def test_modern_dashboard_keeps_all_original_actions_and_visible_settings_save(m
         assert root.first_entry.winfo_exists()
         assert root.groups_box.cget("state") == "readonly"
         assert root.preferred_box.cget("state") == "disabled"
+        assert root.schedule_text.winfo_exists()
+        assert "1 dia;1;09:00;17:00" in root.tickets_text.get("1.0", "end")
         assert root.book.select() == str(root.registration_tab)
         root.book.select(root.settings_tab)
         root.update()
