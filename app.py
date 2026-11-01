@@ -14,8 +14,9 @@ from PIL import Image, ImageTk
 from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   initial_visitor_group, validate_visitor_group_selection,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
-                  prepare_face_jpeg,
-                  parse_ticket_lines, parse_access_lines, load_pending, save_pending,
+                  prepare_face_jpeg, face_cover_preview, normalize_ticket_start,
+                  validate_ticket_period, require_confirmed_daily_schedule,
+                  parse_ticket_lines, parse_access_lines, parse_schedule_lines, load_pending, save_pending,
                   mark_assigned, mark_registered, clear_pending,
                   save_last_delivery, load_last_delivery)
 from devices import list_readers, read_uid, to_card_number
@@ -211,7 +212,12 @@ class ValeApp(tk.Tk):
         self._preferred_groups_synced = False
         self.tickets_text.delete("1.0", tk.END)
         self.tickets_text.insert("1.0", "\n".join(
-            f"{name};{opt['days']};{opt['checkout']}" for name, opt in s["tickets"].items()))
+            f"{name};{opt['days']};{opt.get('checkin', '09:00')};{opt['checkout']}"
+            for name, opt in s["tickets"].items()))
+        self.schedule_text.delete("1.0", tk.END)
+        self.schedule_text.insert("1.0", "\n".join(
+            f"{name}={window}" for name, window in
+            s.get("schedule_windows", {}).items()))
         self.access_text.delete("1.0", tk.END)
         self.access_text.insert("1.0", "\n".join(
             f"{name}={','.join(levels)}" for name, levels in s["group_access"].items()))
@@ -221,12 +227,18 @@ class ValeApp(tk.Tk):
         self.calculate()
 
     def calculate(self):
-        """Recálculo automático apenas quando data de entrada e ingresso são válidos."""
+        """Respeita início/fim do expediente do ingresso e calcula último dia."""
         try:
-            result = end_for_ticket(parse_local(self.start.get()),
-                                    self.settings["tickets"][self.ticket.get()])
+            ticket = self.settings["tickets"][self.ticket.get()]
+            requested = parse_local(self.start.get())
+            aligned = normalize_ticket_start(requested, ticket)
+            if aligned != requested:
+                formatted_start = aligned.strftime("%d/%m/%Y %H:%M")
+                if self.start.get() != formatted_start:
+                    self.start.set(formatted_start)
+                    return  # trace recalcula novamente com a data já normalizada
+            result = end_for_ticket(aligned, ticket)
         except (KeyError, ValueError):
-            # Enquanto o operador digita, mantém a saída anterior até a entrada estar válida.
             return
         formatted = result.strftime("%d/%m/%Y %H:%M")
         if self.end.get() != formatted:
@@ -254,7 +266,9 @@ class ValeApp(tk.Tk):
                 "card_format": self.s_format.get(),
                 "camera_index": int(self.s_camera.get()),
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
-                "group_access": parse_access_lines(self.access_text.get("1.0", tk.END))
+                "group_access": parse_access_lines(self.access_text.get("1.0", tk.END)),
+                "schedule_windows": parse_schedule_lines(
+                    self.schedule_text.get("1.0", tk.END))
             }
             if not conf["host"] or not 1 <= conf["port"] <= 65535:
                 raise ValueError("Host/porta inválidos.")
@@ -491,10 +505,10 @@ class ValeApp(tk.Tk):
         try:
             raw = Path(source).read_bytes() if isinstance(source, (str, Path)) else source.read()
             self.photo_data = prepare_face_jpeg(raw)
-            img = Image.open(io.BytesIO(self.photo_data))
-            thumb = img.copy()
-            thumb.thumbnail((145, 125))
-            self.preview = ImageTk.PhotoImage(thumb)
+            width = max(100, self.photo_widget.winfo_width() - 2)
+            height = max(100, self.photo_widget.winfo_height() - 2)
+            image = face_cover_preview(self.photo_data, width, height)
+            self.preview = ImageTk.PhotoImage(image)
             self.photo_widget.configure(image=self.preview, text="")
             self.status.set("Foto selecionada; não armazenada permanentemente.")
         except Exception as exc:
@@ -626,9 +640,14 @@ class ValeApp(tk.Tk):
             requested_levels = self.settings["group_access"][group]
             if not requested_levels:
                 raise ValueError("Este grupo ainda não tem níveis aprovados. Configure o mapeamento antes do cadastro.")
+            ticket = self.settings["tickets"][self.ticket.get()]
+            start = parse_local(self.start.get())
+            end = parse_local(self.end.get())
+            validate_ticket_period(start, end, ticket)
+            require_confirmed_daily_schedule(
+                requested_levels, ticket, self.settings.get("schedule_windows", {}))
             obj = Visitor(self.first.get(), self.last.get(), group, self.photo_data,
-                          self.card.get().strip(), parse_local(self.start.get()),
-                          parse_local(self.end.get()).replace(second=59), self.reservation.get())
+                          self.card.get().strip(), start, end, self.reservation.get())
             payload = registration_payload(obj)
             expect_face, expect_card = bool(obj.photo_jpeg), bool(obj.card_number.strip())
         except Exception as exc:
@@ -664,7 +683,9 @@ class ValeApp(tk.Tk):
                 f"Visitante: {obj.first_name.strip()} {obj.last_name.strip()}\n"
                 f"Grupo: {group}\n"
                 f"Entrada: {obj.arrival.strftime('%d/%m/%Y %H:%M %Z')}\n"
-                f"Sa\u00edda: {obj.departure.strftime('%d/%m/%Y %H:%M %Z')}\n\n"
+                f"Sa\u00edda: {obj.departure.strftime('%d/%m/%Y %H:%M %Z')}\n"
+                f"Janela diária autorizada: {ticket.get('checkin', '09:00')}-"
+                f"{ticket['checkout']} (validada pela administração nos níveis)\n\n"
                 "N\u00edveis Visitor que ser\u00e3o associados:\n" + "\n".join(level_lines) +
                 "\n\nCatracas alcan\u00e7adas por esses n\u00edveis:\n" + "\n".join(door_lines) +
                 f"\n\nCredencial(is) a enviar: {credentials}. " +
