@@ -20,7 +20,8 @@ def test_day_pass_lengths():
     start = datetime(2026, 10, 24, 10, tzinfo=TZ)
     tickets = default_settings()["tickets"]
     assert [end_for_ticket(start, tickets[x]).day for x in ["1 dia", "2 dias", "3 dias"]] == [24, 25, 26]
-    assert end_for_ticket(start, tickets["1 dia"]).strftime("%H:%M:%S") == "23:59:59"
+    assert end_for_ticket(start, tickets["1 dia"]).strftime("%H:%M:%S") == "17:00:00"
+    assert tickets["3 dias"]["checkin"] == "09:00"
 
 
 def test_payload_visitor_group_photo_card_remark():
@@ -85,7 +86,7 @@ def test_settings_and_pending(tmp_path):
 
 
 def test_config_editing_and_uid_formats():
-    assert parse_ticket_lines("Especial;5;20:00")["Especial"]["days"] == 5
+    assert parse_ticket_lines("Especial;5;09:00;20:00")["Especial"]["days"] == 5
     assert parse_access_lines("Day use=CATRACAS SABIA,SAIDA ACQUAVALE")["Day use"] == ["CATRACAS SABIA", "SAIDA ACQUAVALE"]
     assert parse_access_lines("Day use=\nVisitors=ENTRADA ACQUAVALE")["Day use"] == []
     uid = bytes.fromhex("A1B2C3D4")
@@ -109,11 +110,13 @@ def test_migrate_legacy_all_levels_default_to_unassigned(tmp_path):
 
 
 def test_ticket_validation_and_duplicate_names():
-    assert parse_ticket_lines("Madrugada;1;02:30")["Madrugada"]["checkout"] == "02:30"
+    assert parse_ticket_lines("Especial;1;02:00;02:30")["Especial"]["checkin"] == "02:00"
     with pytest.raises(ValueError, match="duplicado"):
-        parse_ticket_lines("Dia;1;23:59\nDia;2;23:59")
+        parse_ticket_lines("Dia;1;09:00;17:00\nDia;2;09:00;17:00")
     with pytest.raises(ValueError, match="HH:MM"):
-        parse_ticket_lines("Invalido;1;25:00")
+        parse_ticket_lines("Invalido;1;09:00;25:00")
+    with pytest.raises(ValueError, match="anterior"):
+        parse_ticket_lines("Invalido;1;18:00;09:00")
 
 
 def test_visitor_expiry_must_be_future():
@@ -164,9 +167,9 @@ def test_checkout_rollover_month_and_year_and_payload_timezone():
     from core import parse_local
     from datetime import datetime
     cases = [
-        ("31/10/2099 20:45", "2 dias", "01/11/2099 23:59"),
-        ("31/12/2099 11:00", "3 dias", "02/01/2100 23:59"),
-        ("24/10/2099 20:45", "1 dia", "24/10/2099 23:59"),
+        ("31/10/2099 10:45", "2 dias", "01/11/2099 17:00"),
+        ("31/12/2099 11:00", "3 dias", "02/01/2100 17:00"),
+        ("24/10/2099 10:45", "1 dia", "24/10/2099 17:00"),
     ]
     for start_text, ticket_name, expected in cases:
         start = parse_local(start_text)
@@ -176,7 +179,7 @@ def test_checkout_rollover_month_and_year_and_payload_timezone():
         payload = registration_payload(visitor)
         sent_end = datetime.fromisoformat(payload["visitEndTime"])
         assert sent_end.astimezone(TZ).date() == end.date()
-        assert sent_end.hour == 23 and sent_end.minute == 59 and sent_end.second == 59
+        assert sent_end.hour == 17 and sent_end.minute == 0 and sent_end.second == 0
         assert payload["visitEndTime"].endswith("-03:00")
 
 
@@ -239,3 +242,56 @@ def test_window_geometry_respects_display_and_taskbar():
         assert height + y <= screen_height
         assert width < screen_width
         assert height < screen_height
+
+
+
+def test_ticket_daily_windows_start_end_and_migration(tmp_path):
+    from core import (normalize_ticket_start, validate_ticket_period,
+                      ticket_hours, parse_local)
+    from datetime import timedelta
+    ticket = parse_ticket_lines("3 dias;3;09:00;17:00")["3 dias"]
+    assert ticket_hours(ticket) == ("09:00", "17:00")
+    early = parse_local("01/11/2099 00:14")
+    first = normalize_ticket_start(early, ticket)
+    last = end_for_ticket(first, ticket)
+    assert first.strftime("%d/%m/%Y %H:%M") == "01/11/2099 09:00"
+    assert last.strftime("%d/%m/%Y %H:%M") == "03/11/2099 17:00"
+    validate_ticket_period(first, last, ticket)
+    with pytest.raises(ValueError, match="Entrada"):
+        validate_ticket_period(first.replace(hour=8), last, ticket)
+    with pytest.raises(ValueError, match="Saída"):
+        validate_ticket_period(first, last + timedelta(minutes=5), ticket)
+    next_opening = normalize_ticket_start(parse_local("01/11/2099 20:00"), ticket)
+    assert next_opening.strftime("%d/%m/%Y %H:%M") == "02/11/2099 09:00"
+    assert parse_ticket_lines("Antigo;2;23:59")["Antigo"] == {
+        "days": 2, "checkin": "09:00", "checkout": "23:59"
+    }
+    old = default_settings()
+    old["tickets"] = {"Antigo": {"days": 2, "checkout": "23:59"}}
+    save_settings(old, tmp_path)
+    assert load_settings(tmp_path)["tickets"]["Antigo"]["checkin"] == "09:00"
+    assert load_settings(tmp_path)["tickets"]["Antigo"]["checkout"] == "23:59"
+
+
+def test_daily_schedule_requires_explicit_admin_confirmation():
+    from core import parse_schedule_lines, require_confirmed_daily_schedule
+    ticket = parse_ticket_lines("3 dias;3;09:00;17:00")["3 dias"]
+    levels = ["ENTRADA ACQUAVALE", "CATRACAS SABIA"]
+    with pytest.raises(ValueError, match="NÃO confirmados"):
+        require_confirmed_daily_schedule(levels, ticket, {})
+    mapping = parse_schedule_lines(
+        "ENTRADA ACQUAVALE=09:00-17:00\nCATRACAS SABIA=09:00-17:00")
+    assert mapping == dict.fromkeys(levels, "09:00-17:00")
+    require_confirmed_daily_schedule(levels, ticket, mapping)
+    with pytest.raises(ValueError, match="NÃO confirmados"):
+        require_confirmed_daily_schedule(levels, ticket, {"ENTRADA ACQUAVALE": "08:00-22:00"})
+
+
+def test_face_preview_fills_frame_for_small_and_wide_images():
+    from core import face_cover_preview
+    for dimensions in [(25, 15), (640, 960), (2000, 200)]:
+        source = BytesIO()
+        Image.new("RGB", dimensions, (120, 80, 40)).save(source, format="JPEG")
+        shown = face_cover_preview(source.getvalue(), 148, 133)
+        assert shown.size == (148, 133)
+        assert shown.getpixel((0, 0)) == shown.getpixel((147, 132))
