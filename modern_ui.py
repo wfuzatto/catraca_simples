@@ -209,8 +209,9 @@ def _registration(app):
     photo_holder.pack_propagate(False)
     app.photo_widget = tk.Label(
         photo_holder, text="SEM FOTO", bg="#F7FAFE", fg=MUTED,
-        width=17, height=7, font=("Segoe UI", 10))
-    app.photo_widget.pack(expand=True, pady=5)
+        borderwidth=0, highlightthickness=0, font=("Segoe UI", 10))
+    # Preenchimento real do retângulo; PIL ImageOps.fit faz o crop proporcional.
+    app.photo_widget.place(relx=0, rely=0, relwidth=1, relheight=1)
     choices = ctk.CTkFrame(photo_inner, fg_color="transparent")
     choices.pack(side="left", fill="both", expand=True)
     _primary(choices, "Escolher foto facial", app.browse_photo, width=174).pack(
@@ -239,7 +240,7 @@ def _registration(app):
     _field(end_area, "Saída", app.end, required=True)
     app.ticket_cells = [ticket_area, start_area, end_area]
     app.start.trace_add("write", lambda *_: app.calculate())
-    _text(period, "Saída calculada pelo ingresso; você pode ajustar o horário.",
+    _text(period, "Horários diários do ingresso; bloqueios noturnos dependem da agenda dos níveis Visitor no HikCentral.",
           color=MUTED, size=11).pack(anchor="w", pady=(10, 0))
 
 
@@ -341,7 +342,7 @@ def _settings(app):
     app.editors_grid = editors
     ticket_edit = ctk.CTkFrame(editors, fg_color="transparent")
     ticket_edit.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-    _text(ticket_edit, "Ingressos · Nome;Dias;HH:MM", size=12, bold=True).pack(anchor="w", pady=(0, 6))
+    _text(ticket_edit, "Ingressos · Nome;Dias;Entrada;Saída", size=12, bold=True).pack(anchor="w", pady=(0, 6))
     app.tickets_text = tk.Text(
         ticket_edit, height=7, bg="#FAFCFF", fg=INK, insertbackground=INK,
         relief="flat", highlightthickness=1, highlightbackground="#D5DFEB",
@@ -358,6 +359,20 @@ def _settings(app):
     app.editor_cells = [ticket_edit, levels_edit]
     _text(catalog, "Use apenas os níveis Visitor autorizados no HikCentral. Grupos sem níveis ficam bloqueados.",
           size=11, color=MUTED).pack(anchor="w", pady=(8, 0))
+
+    _text(catalog, "Agendas diárias verificadas no HikCentral · Nível=09:00-17:00",
+          size=12, bold=True).pack(anchor="w", pady=(15, 6))
+    app.schedule_text = tk.Text(
+        catalog, height=5, bg="#FAFCFF", fg=INK, insertbackground=INK,
+        relief="flat", highlightthickness=1, highlightbackground="#D5DFEB",
+        font=("Consolas", 10), wrap="none", padx=11, pady=9)
+    app.schedule_text.pack(fill="x")
+    _text(
+        catalog,
+        "Antes de cadastrar, confirme no HikCentral que TODOS os níveis usados neste ingresso têm agenda semanal "
+        "e feriados iguais ao horário diário, aplicados e testados nas catracas. "
+        "A API de cadastro envia apenas a data inicial e a final.",
+        size=11, color="#A05A14").pack(anchor="w", pady=(8, 0))
 
 
 def build(app):
