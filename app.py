@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageTk
 
 from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
-                  initial_visitor_group, validate_visitor_group_selection,
+                  initial_visitor_group, validate_visitor_group_selection, validate_valid_times,
                   VISITOR_LEVEL_NAME, visitor_levels_for_group, verify_visitor_access_plan,
                   mark_appointment_inflight,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
@@ -208,6 +208,7 @@ class ValeApp(tk.Tk):
         self.s_key.set(self.key)
         self.s_secret.set(self.secret)
         self.s_cert_pin.set(s.get("cert_pin_sha256", ""))
+        self.s_valid_times.set(str(s.get("valid_times", 0)))
         # Não preencher o select com grupos presumidos ou valores antigos.
         self.s_preferred_group.set(PREFERRED_PENDING)
         self.preferred_box.configure(values=(), state="disabled")
@@ -267,6 +268,7 @@ class ValeApp(tk.Tk):
                 "preferred_group": preferred,
                 "card_format": self.s_format.get(),
                 "camera_index": int(self.s_camera.get()),
+                "valid_times": validate_valid_times(int(self.s_valid_times.get().strip())),
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
                 "group_access": parse_access_lines(self.access_text.get("1.0", tk.END)),
                 "schedule_windows": parse_schedule_lines(
@@ -650,7 +652,7 @@ class ValeApp(tk.Tk):
                 requested_levels, ticket, self.settings.get("schedule_windows", {}))
             obj = Visitor(self.first.get(), self.last.get(), group, self.photo_data,
                           self.card.get().strip(), start, end, self.reservation.get())
-            payload = registration_payload(obj)
+            payload = registration_payload(obj, self.settings.get("valid_times", 0))
             expect_face, expect_card = bool(obj.photo_jpeg), bool(obj.card_number.strip())
         except Exception as exc:
             messagebox.showerror("Dados", str(exc))
