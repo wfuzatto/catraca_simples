@@ -355,8 +355,8 @@ def _history(app):
     _text(heading, "Cadastros efetuados", size=19, bold=True).pack(side="left")
     _secondary(heading, "Atualizar lista", app.refresh_history, width=142).pack(side="right")
     _text(inner,
-          "Consulta central do HikCentral: visitantes de todas as recepções autorizadas. "
-          "Fotos disponíveis sob demanda. Edição remota exige validar acessos originais.",
+          "Cadastrado em = horário real disponível no histórico; Início válido = validade do ingresso. "
+          "Consulta central HikCentral e fotos sob demanda; edição remota exige validar acessos originais.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     today = datetime.now(TZ)
     app.history_start = tk.StringVar(value=(today-timedelta(days=30)).strftime("%d/%m/%Y"))
@@ -373,12 +373,13 @@ def _history(app):
     _secondary(filters, "Buscar", app.history_apply_filters, width=90).pack(side="left")
     table_area = ctk.CTkFrame(inner, fg_color="transparent")
     table_area.pack(fill="both", expand=True, padx=17)
-    fields = ("date", "name", "group", "level", "checkin", "delivery")
+    fields = ("registered", "date", "name", "group", "level", "checkin", "delivery")
     app.history_table = ttk.Treeview(table_area, columns=fields, show="headings", selectmode="browse")
     for key, label, width in (
-        ("date", "Entrada", 135), ("name", "Visitante", 180),
-        ("group", "Grupo", 125), ("level", "Nível", 145),
-        ("checkin", "Check-in", 120), ("delivery", "Catracas", 115)):
+        ("registered", "Cadastrado em", 135), ("date", "Início válido", 135),
+        ("name", "Visitante", 180), ("group", "Grupo", 125),
+        ("level", "Nível", 145), ("checkin", "Check-in", 120),
+        ("delivery", "Catracas", 115)):
         app.history_table.heading(key, text=label)
         app.history_table.column(key, width=width, minwidth=90)
     app.history_table.pack(side="left", fill="both", expand=True)
