@@ -237,6 +237,9 @@ class GuidedFaceCamera:
             return
         self.closed = True
         self.stop_event.set()
+        worker = getattr(self, "worker", None)
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=.25)  # camera released in worker finally
         if self.after_id is not None:
             try:
                 self.window.after_cancel(self.after_id)
