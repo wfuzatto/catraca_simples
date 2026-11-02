@@ -123,24 +123,24 @@ def test_preferred_group_select_only_after_api_and_manual_override(monkeypatch):
     root = app.ValeApp()
     try:
         root.update()
-        assert root.preferred_box.cget("state") == "disabled"
+        assert str(root.preferred_box.cget("state")) == "disabled"
         assert root.group.get() == ""
         assert not root.groups_box["values"]
         root._apply_live_groups(["Visitors", "Day use", "Hóspedes Serra", "Hóspedes Vale"])
-        assert root.preferred_box.cget("state") == "readonly"
+        assert str(root.preferred_box.cget("state")) == "readonly"
         assert "Visitors" not in root.preferred_box["values"]
         assert tuple(root.groups_box["values"]) == ("Day use", "Hóspedes Serra", "Hóspedes Vale")
         assert root.s_preferred_group.get() == "Hóspedes Vale"
         assert root.group.get() == "Hóspedes Vale"
         # Preferência salva impõe bloqueio visual e na próxima sincronização.
-        assert root.groups_box.cget("state") == "disabled"
+        assert str(root.groups_box.cget("state")) == "disabled"
         root.group.set("Hóspedes Serra")
         assert root._apply_live_groups(["Hóspedes Vale", "Day use", "Hóspedes Serra"])
         assert root.group.get() == "Hóspedes Vale"
         # Se o grupo deixar de existir, não substituir por outro acesso.
         assert root._apply_live_groups(["Visitors", "Day use"]) is False
         assert root.group.get() == ""
-        assert root.groups_box.cget("state") == "disabled"
+        assert str(root.groups_box.cget("state")) == "disabled"
         assert root.s_preferred_group.get() == "Hóspedes Vale"
     finally:
         root.destroy()
@@ -176,7 +176,7 @@ def test_preferred_group_change_saves_and_is_reselected(monkeypatch, tmp_path):
         root.group.set("Day use")
         root._apply_live_groups(["Hóspedes Serra", "Day use"])
         assert root.group.get() == "Hóspedes Serra"
-        assert root.groups_box.cget("state") == "disabled"
+        assert str(root.groups_box.cget("state")) == "disabled"
         assert saved_keys
     finally:
         root.destroy()
@@ -200,8 +200,8 @@ def test_modern_dashboard_keeps_all_original_actions_and_visible_settings_save(m
         assert root.delivery_button.winfo_manager() == "pack"
         assert root.connection_label_var.get() != "Conectado"
         assert root.first_entry.winfo_exists()
-        assert root.groups_box.cget("state") == "readonly"
-        assert root.preferred_box.cget("state") == "disabled"
+        assert str(root.groups_box.cget("state")) == "readonly"
+        assert str(root.preferred_box.cget("state")) == "disabled"
         assert root.schedule_text.winfo_exists()
         assert "1 dia;1;09:00;17:00" in root.tickets_text.get("1.0", "end")
         assert root.book.select() == str(root.registration_tab)
@@ -235,7 +235,7 @@ def test_only_combo_is_visible_and_group_is_free_without_preference(monkeypatch)
         assert not hasattr(root, "group_chips_frame")
         assert root._apply_live_groups(["Visitors", "Day use", "Hóspedes Vale"])
         assert root.group.get() == "Day use"
-        assert root.groups_box.cget("state") == "readonly"
+        assert str(root.groups_box.cget("state")) == "readonly"
         root.group.set("Hóspedes Vale")
         assert root.group.get() == "Hóspedes Vale"
         assert root._apply_live_groups(["Day use", "Hóspedes Vale"])
