@@ -376,3 +376,31 @@ def test_untrusted_error_messages_do_not_expose_credentials_or_card():
     assert secret not in msg
     assert "12345678" not in msg
     assert "500" in msg
+
+
+@pytest.mark.parametrize("valid_times", [0, 1, 5, 100])
+def test_valid_times_survives_both_visitor_appointment_and_checkin_payloads(valid_times):
+    """Mock only: never sends a real visitor to HikCentral."""
+    import json
+    from core import Visitor, parse_local, registration_payload
+    api, session = client([
+        {"code": "0", "data": {"appointRecordId": "appointment-1", "visitorId": "visitor-1"}},
+        {"code": "0", "data": {"recordId": "registration-1"}},
+    ])
+    info = registration_payload(Visitor(
+        "Visitante", "Teste", "Day use", b"", "123456",
+        parse_local("02/11/2026 09:00"), parse_local("02/11/2026 17:00")), valid_times)
+    levels = [{"id": "10", "name": "VISITANTE"}]
+    appointment, visitor = api.create_appointment(info, levels)
+    api.register_visitor(info, levels, appointment, visitor)
+    assert len(session.calls) == 2
+    assert session.calls[0][0].endswith("/artemis/api/visitor/v2/appointment")
+    assert session.calls[1][0].endswith("/artemis/api/visitor/v1/registerment")
+    for _, request in session.calls:
+        body = json.loads(request["data"])
+        sent = body["visitorInfoList"][0]["VisitorInfo"]
+        assert sent["accessInfo"]["qrCodeValidNum"] == valid_times
+        assert sent["accessInfo"]["electrostaticDetectionType"] == 0
+        assert sent["cards"][0]["cardNo"] == "123456"
+    assert json.loads(session.calls[0][1]["data"])["appointStartTime"] == "2026-11-02T09:00:00-03:00"
+    assert json.loads(session.calls[1][1]["data"])["visitEndTime"] == "2026-11-02T17:00:00-03:00"
