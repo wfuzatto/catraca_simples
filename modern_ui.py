@@ -128,47 +128,61 @@ def _tick_registration_spinner(app):
 
 
 def start_registration_loading(app):
-    """Show only after the operator confirms the Visitor registration."""
+    """Visible, independent progress window above the entire Tk/ttk notebook."""
     if getattr(app, "_registration_loading_active", False):
         return
-    if not hasattr(app, "registration_loading_overlay"):
-        overlay = ctk.CTkFrame(
-            app.registration_tab, width=375, height=148,
-            corner_radius=16, fg_color=WHITE,
+    if not hasattr(app, "registration_loading_overlay") or not app.registration_loading_overlay.winfo_exists():
+        # A widget placed inside the ttk.Notebook could be obscured by page
+        # content on Windows. An owned Toplevel paints above the main window.
+        overlay = ctk.CTkToplevel(app)
+        overlay.withdraw()
+        overlay.title("Cadastro em andamento")
+        overlay.resizable(False, False)
+        overlay.transient(app)
+        overlay.protocol("WM_DELETE_WINDOW", lambda: None)
+        overlay.configure(fg_color=WHITE)
+        frame = ctk.CTkFrame(
+            overlay, corner_radius=14, fg_color=WHITE,
             border_width=2, border_color="#C9D9F0")
-        overlay.pack_propagate(False)
-        row = ctk.CTkFrame(overlay, fg_color="transparent")
-        row.pack(fill="both", expand=True, padx=21, pady=26)
+        frame.pack(fill="both", expand=True, padx=1, pady=1)
+        row = ctk.CTkFrame(frame, fg_color="transparent")
+        row.pack(fill="both", expand=True, padx=20, pady=23)
         canvas = tk.Canvas(
-            row, width=44, height=44, bg=WHITE, highlightthickness=0,
-            borderwidth=0)
+            row, width=46, height=46, bg=WHITE, highlightthickness=0, borderwidth=0)
         canvas.pack(side="left", padx=(0, 16))
-        # Static backing circle and animated foreground arc.
-        canvas.create_oval(6, 6, 38, 38, outline="#E4ECF6", width=4)
+        canvas.create_oval(6, 6, 40, 40, outline="#E4ECF6", width=4)
         app.registration_spinner_arc = canvas.create_arc(
-            6, 6, 38, 38, start=0, extent=255,
+            6, 6, 40, 40, start=0, extent=250,
             outline=BLUE, width=4, style=tk.ARC)
         app.registration_spinner_canvas = canvas
         message = ctk.CTkFrame(row, fg_color="transparent")
         message.pack(side="left", fill="both", expand=True)
-        _text(message, "Cadastrando visitante...", size=15, bold=True).pack(
-            anchor="w", pady=(1, 4))
+        _text(message, "Cadastrando visitante...", size=16, bold=True).pack(
+            anchor="w", pady=(2, 5))
         _text(message, "Aguardando resposta do HikCentral.",
               size=12, color=MUTED).pack(anchor="w")
         app.registration_loading_overlay = overlay
+
+    overlay = app.registration_loading_overlay
     app._registration_loading_active = True
     app._registration_spinner_angle = 0
-    app.registration_loading_overlay.place(relx=0.5, rely=0.49, anchor="center")
-    app.registration_loading_overlay.lift()
+    app.update_idletasks()
+    width, height = 396, 134
+    x = app.winfo_rootx() + max(0, (app.winfo_width() - width) // 2)
+    y = app.winfo_rooty() + max(0, (app.winfo_height() - height) // 2)
+    overlay.geometry(f"{width}x{height}+{x}+{y}")
+    overlay.deiconify()
+    overlay.lift(app)
     app.register_button.configure(state="disabled")
     app.delivery_button.configure(state="disabled")
     app.nav_registration.configure(state="disabled")
     app.nav_settings.configure(state="disabled")
     _tick_registration_spinner(app)
+    overlay.update_idletasks()
 
 
 def stop_registration_loading(app):
-    """Always stop on success or failure before displaying a result dialog."""
+    """Close the loading window before reporting success or a HikCentral error."""
     app._registration_loading_active = False
     job = getattr(app, "_registration_spinner_job", None)
     app._registration_spinner_job = None
@@ -177,8 +191,9 @@ def stop_registration_loading(app):
             app.after_cancel(job)
         except tk.TclError:
             pass
-    if hasattr(app, "registration_loading_overlay"):
-        app.registration_loading_overlay.place_forget()
+    overlay = getattr(app, "registration_loading_overlay", None)
+    if overlay is not None and overlay.winfo_exists():
+        overlay.withdraw()
     for name in ("register_button", "delivery_button", "nav_registration", "nav_settings"):
         widget = getattr(app, name, None)
         if widget is not None and widget.winfo_exists():
