@@ -371,6 +371,7 @@ def _history(app):
     scroll.pack(side="right", fill="y")
     app.history_table.configure(yscrollcommand=scroll.set)
     app.history_table.bind("<<TreeviewSelect>>", app._history_selection)
+    app.history_table.bind("<Double-1>", app.view_history_selection)
     app.history_status = tk.StringVar(value="Selecione um cadastro para consultar.")
     _text(inner, "", size=12).pack(pady=2)
     ctk.CTkLabel(inner, textvariable=app.history_status, text_color=MUTED,
