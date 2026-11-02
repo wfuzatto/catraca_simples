@@ -167,7 +167,11 @@ class HikCentral:
         if session is None:
             self.session.trust_env = False
 
-    def post(self, path: str, payload: dict | None = None) -> dict:
+    def post(self, path: str, payload: dict | None = None, *,
+             allow_image_data: bool = False) -> dict:
+        # Modo data URI apenas para a foto de visitante.
+        if allow_image_data and path != "/artemis/api/visitor/v1/appointment/downloadpicture":
+            raise HikError("Modo imagem não autorizado para este endpoint.")
         body = json.dumps(payload or {}, ensure_ascii=False,
                           separators=(",", ":")).encode("utf-8")
         md5 = base64.b64encode(hashlib.md5(body).digest()).decode("ascii")
@@ -192,7 +196,10 @@ class HikCentral:
             except (ValueError, UnicodeDecodeError) as exc:
                 if status >= 400:
                     raise HikError(_http_failure(status, {}, path)) from exc
-                raise HikError("Resposta do serviço não é JSON válido da OpenAPI.") from exc
+                if allow_image_data and raw.startswith((b"data:image/jpeg;base64,", b"data:image/png;base64,")):
+                    result = {"data": raw.decode("ascii")}
+                else:
+                    raise HikError("Resposta do serviço não é JSON válido da OpenAPI.") from exc
         else:
             try:
                 response = self.session.post(self.url + path, data=body,
@@ -220,8 +227,15 @@ class HikCentral:
             except ValueError as exc:
                 if status >= 400:
                     raise HikError(_http_failure(status, {}, path)) from exc
-                raise HikError("A porta respondeu, mas não retornou JSON da OpenAPI. "
-                               "Confira host, porta e caminho do Gateway.") from exc
+                raw = response.content
+                if allow_image_data and raw.startswith((b"data:image/jpeg;base64,", b"data:image/png;base64,")):
+                    result = {"data": raw.decode("ascii")}
+                else:
+                    raise HikError("A porta respondeu, mas não retornou JSON da OpenAPI. "
+                                   "Confira host, porta e caminho do Gateway.") from exc
+        if allow_image_data and isinstance(result, str) and result.startswith(
+                ("data:image/jpeg;base64,", "data:image/png;base64,")):
+            result = {"data": result}
         if not isinstance(result, dict):
             raise HikError("Resposta OpenAPI inesperada (não é objeto JSON).")
         if status >= 400:
