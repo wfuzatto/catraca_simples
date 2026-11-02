@@ -1,0 +1,129 @@
+"""Editor de registros Visitor já existentes. Nunca cria pessoa/reserva."""
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from pathlib import Path
+from datetime import datetime
+import customtkinter as ctk
+from core import Visitor, TZ, parse_local, registration_payload, prepare_face_jpeg, load_pending, app_dir, _write_json_atomic, verify_visitor_access_plan
+from visitor_history import save_registration, set_history_status
+
+
+def open_visitor_editor(app, record):
+    if app.busy or load_pending():
+        messagebox.showwarning("Edição bloqueada", "Existe operação pendente.")
+        return
+    dialog = ctk.CTkToplevel(app)
+    dialog.title("Editar cadastro — " + record["visitor_id"])
+    dialog.geometry("580x640")
+    dialog.transient(app)
+    dialog.grab_set()
+    body = ctk.CTkScrollableFrame(dialog)
+    body.pack(fill="both", expand=True, padx=14, pady=12)
+    initial = {
+        "first": record.get("first", ""), "last": record.get("last", ""),
+        "reservation": record.get("reservation", ""),
+        "entry": datetime.fromisoformat(record["entry_at"]).astimezone(TZ).strftime("%d/%m/%Y %H:%M"),
+        "exit": datetime.fromisoformat(record["exit_at"]).astimezone(TZ).strftime("%d/%m/%Y %H:%M"),
+        "card": "",
+    }
+    fields = {}
+    for field, label in [("first", "Nome"), ("last", "Sobrenome"),
+                         ("reservation", "Reserva / apartamento"),
+                         ("entry", "Entrada (DD/MM/AAAA HH:MM)"),
+                         ("exit", "Saída (DD/MM/AAAA HH:MM)"),
+                         ("card", "Pulseira/NFC (informar novamente)")]:
+        ctk.CTkLabel(body, text=label, anchor="w").pack(fill="x", pady=(8, 2))
+        var = tk.StringVar(value=initial[field])
+        ctk.CTkEntry(body, textvariable=var).pack(fill="x")
+        fields[field] = var
+    ctk.CTkLabel(body,
+        text="Grupo: " + record.get("group", "") + " | Nível: " +
+             ", ".join(record.get("access_names", [])), wraplength=505).pack(pady=10)
+    ctk.CTkLabel(body,
+        text="A foto e a pulseira não são armazenadas no histórico. "
+             "Reinforme as credenciais usadas antes de editar. "
+             "O Visitor ID e os pontos autorizados serão preservados.",
+        wraplength=505, justify="left").pack(pady=8)
+    chosen_photo = {"bytes": b""}
+    status = tk.StringVar(value="Nenhuma foto nova selecionada")
+    def select_photo():
+        path = filedialog.askopenfilename(parent=dialog,
+            filetypes=[("Fotos", "*.jpg *.jpeg *.png *.bmp")])
+        if path:
+            try:
+                chosen_photo["bytes"] = prepare_face_jpeg(Path(path).read_bytes())
+                status.set("Foto selecionada")
+            except Exception as exc:
+                messagebox.showerror("Foto", str(exc), parent=dialog)
+    ctk.CTkButton(body, text="Selecionar foto", command=select_photo).pack(pady=5)
+    ctk.CTkLabel(body, textvariable=status).pack()
+    def submit():
+        if app.busy or load_pending():
+            messagebox.showwarning("Bloqueado", "Outra operação em andamento.", parent=dialog)
+            return
+        try:
+            if record.get("expect_face") and not chosen_photo["bytes"]:
+                raise ValueError("Selecione novamente a foto para preservar a credencial facial.")
+            if record.get("expect_card") and not fields["card"].get().strip():
+                raise ValueError("Informe a pulseira para preservar a credencial NFC.")
+            obj = Visitor(fields["first"].get(), fields["last"].get(),
+                record["group"], chosen_photo["bytes"], fields["card"].get().strip(),
+                parse_local(fields["entry"].get()), parse_local(fields["exit"].get()),
+                fields["reservation"].get())
+            payload = registration_payload(obj, app.settings.get("valid_times", 0))
+            if not record.get("registration_record_id"):
+                raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
+            if not messagebox.askyesno("Confirmar edição",
+                "Atualizar o Visitor ID original e reaplicar a credencial às mesmas catracas?",
+                parent=dialog):
+                return
+        except Exception as exc:
+            messagebox.showerror("Dados", str(exc), parent=dialog)
+            return
+        dialog.grab_release()
+        dialog.withdraw()
+        def work():
+            client = app.client()
+            old_id = client.find_existing_registration(
+                record["visitor_id"], record["entry_at"], record["exit_at"])
+            if not old_id:
+                raise ValueError("Check-in original não confirmado pela consulta.")
+            selected, doors = client.resolve_levels(record["access_names"])
+            verify_visitor_access_plan(selected, doors, record["access_names"])
+            if set(doors) != set(record["door_ids"]):
+                raise ValueError("Pontos alterados; edição bloqueada.")
+            journal = app_dir() / "visitor_edit_inflight.json"
+            if journal.exists():
+                raise ValueError("Existe edição anterior com resultado incerto.")
+            _write_json_atomic(journal, {"visitor_id": record["visitor_id"],
+                "record_id": old_id, "status": "update_inflight"})
+            # No retry if the remote update is accepted but its response is lost.
+            new_id = client.update_registered_visitor(
+                old_id, record["visitor_id"], payload, selected)
+            save_registration({**record, "first": obj.first_name, "last": obj.last_name,
+                "reservation": obj.reservation, "entry_at": payload["visitStartTime"],
+                "exit_at": payload["visitEndTime"], "registration_record_id": new_id,
+                "state": "reaplicação pendente", "checkin_state": "a confirmar"})
+            _write_json_atomic(journal, {"visitor_id": record["visitor_id"],
+                "record_id": new_id, "status": "update_acknowledged"})
+            client.apply(record["visitor_id"], doors)
+            report = client.delivery_report(record["visitor_id"], doors,
+                expect_face=bool(obj.photo_jpeg), expect_card=bool(obj.card_number))
+            set_history_status(record["visitor_id"], state=report["state"],
+                               checkin_state="a confirmar")
+            journal.unlink(missing_ok=True)
+            return report
+        def done(result, error):
+            app.refresh_history()
+            if error:
+                messagebox.showwarning("Edição não confirmada",
+                    str(error) + "\nConfira no HikCentral antes de repetir a edição.",
+                    parent=app)
+            else:
+                messagebox.showinfo("Atualização enviada",
+                    "Mesmo visitante atualizado. Entrega: " + result["state"] +
+                    ". Consulte o check-in para confirmação.", parent=app)
+        app.task(work, done)
+        dialog.destroy()
+    ctk.CTkButton(body, text="Salvar e reenviar ao HikCentral", command=submit).pack(pady=12)
+    ctk.CTkButton(body, text="Cancelar", command=dialog.destroy).pack(pady=6)
