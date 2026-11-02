@@ -6,6 +6,8 @@ registration, authorization, TLS, credential storage and recovery.
 from __future__ import annotations
 
 import tkinter as tk
+from datetime import datetime, timedelta
+from core import TZ
 from tkinter import ttk
 import customtkinter as ctk
 import responsive_ui
@@ -341,7 +343,7 @@ def _setting_field(parent, row, column, title, variable, *, secret=False):
 
 
 def _history(app):
-    """Local Visitor records, with read-only remote verification and safe resend."""
+    """Central check-ins from HikCentral, with explicit local offline fallback."""
     page = app.history_tab
     page.configure(style="Vale.Page.TFrame")
     background = ctk.CTkFrame(page, fg_color=BG, corner_radius=0)
@@ -353,9 +355,22 @@ def _history(app):
     _text(heading, "Cadastros efetuados", size=19, bold=True).pack(side="left")
     _secondary(heading, "Atualizar lista", app.refresh_history, width=142).pack(side="right")
     _text(inner,
-          "Histórico criptografado neste Windows. Consultar não cria visitante; "
-          "reenviar só reaplica a credencial ao mesmo Visitor ID.",
-          size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 10))
+          "Consulta central do HikCentral: visitantes de todas as recepções autorizadas. "
+          "Fotos disponíveis sob demanda. Edição remota exige validar acessos originais.",
+          size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
+    today = datetime.now(TZ)
+    app.history_start = tk.StringVar(value=(today-timedelta(days=30)).strftime("%d/%m/%Y"))
+    app.history_end = tk.StringVar(value=today.strftime("%d/%m/%Y"))
+    app.history_name = tk.StringVar()
+    filters = ctk.CTkFrame(inner, fg_color="transparent")
+    filters.pack(fill="x", padx=17, pady=(0, 8))
+    ctk.CTkLabel(filters, text="De", text_color=INK).pack(side="left", padx=(0, 4))
+    ctk.CTkEntry(filters, textvariable=app.history_start, width=100).pack(side="left", padx=(0, 8))
+    ctk.CTkLabel(filters, text="Até", text_color=INK).pack(side="left", padx=(0, 4))
+    ctk.CTkEntry(filters, textvariable=app.history_end, width=100).pack(side="left", padx=(0, 8))
+    ctk.CTkLabel(filters, text="Nome", text_color=INK).pack(side="left", padx=(0, 4))
+    ctk.CTkEntry(filters, textvariable=app.history_name, width=160).pack(side="left", padx=(0, 8))
+    _secondary(filters, "Buscar", app.history_apply_filters, width=90).pack(side="left")
     table_area = ctk.CTkFrame(inner, fg_color="transparent")
     table_area.pack(fill="both", expand=True, padx=17)
     fields = ("date", "name", "group", "level", "checkin", "delivery")
@@ -372,8 +387,17 @@ def _history(app):
     app.history_table.configure(yscrollcommand=scroll.set)
     app.history_table.bind("<<TreeviewSelect>>", app._history_selection)
     app.history_table.bind("<Double-1>", app.view_history_selection)
+    paging = ctk.CTkFrame(inner, fg_color="transparent")
+    paging.pack(fill="x", padx=18, pady=(5, 0))
+    app.history_previous_button = _secondary(
+        paging, "Anterior", lambda: app.history_change_page(-1), width=95)
+    app.history_previous_button.pack(side="left", padx=(0, 7))
+    app.history_next_button = _secondary(
+        paging, "Próxima", lambda: app.history_change_page(1), width=95)
+    app.history_next_button.pack(side="left", padx=(0, 8))
+    app.history_page_label = tk.StringVar(value="Página 1")
+    ctk.CTkLabel(paging, textvariable=app.history_page_label, text_color=MUTED).pack(side="left")
     app.history_status = tk.StringVar(value="Selecione um cadastro para consultar.")
-    _text(inner, "", size=12).pack(pady=2)
     ctk.CTkLabel(inner, textvariable=app.history_status, text_color=MUTED,
                  anchor="w", font=("Segoe UI", 12), wraplength=780).pack(
                      fill="x", padx=18, pady=(4, 10))
@@ -387,7 +411,10 @@ def _history(app):
     app.history_resend_button.pack(side="left", padx=(0, 9))
     app.history_details_button = _secondary(
         actions, "Ver dados / corrigir", app.view_history_selection, width=160)
-    app.history_details_button.pack(side="left")
+    app.history_details_button.pack(side="left", padx=(0, 9))
+    app.history_photo_button = _secondary(
+        actions, "Ver foto (HikCentral)", app.show_history_photo, width=160)
+    app.history_photo_button.pack(side="left")
 
 
 def _settings(app):
