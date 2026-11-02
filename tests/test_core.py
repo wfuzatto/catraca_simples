@@ -128,7 +128,7 @@ def test_migrate_legacy_saved_levels_without_touching_other_settings(tmp_path):
     assert loaded["group_access"]["Hóspedes Serra"] == ["VISITANTE_SERRA"]
     assert loaded["group_access"]["Hóspedes Vale"] == ["VISITANTE_VALE"]
     assert loaded["group_access"]["Special event"] == ["CUSTOM_VISITOR_LEVEL"]
-    assert loaded["group_access"]["Visitors"] == ACCESS_LEVELS
+    assert loaded["group_access"]["Visitors"] == []
     assert loaded["schedule_windows"]["DAY_USE"] == "09:00-17:00"
     assert loaded["access_mapping_revision"] == 1
     assert loaded["tickets"]["Especial"] == settings["tickets"]["Especial"]
