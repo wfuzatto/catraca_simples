@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.17` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.18` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -190,3 +190,14 @@ O aplicativo envia explicitamente `VISITANTE` em `accessInfo.accessLevelList` ta
 - Um resultado incerto da reserva deixa um checkpoint local e bloqueia repetição automática para evitar duplicidade. Não remova o arquivo pendente sem conferir o registro real.
 - O endereço/versão da API instalada e a persistência real de um visitante só poderão ser confirmados com consulta ao HikCentral do hotel; testes automatizados usam respostas simuladas. Não foi criado visitante novo durante esta correção.
 
+
+## Preview.18 — VALID TIMES configurável
+
+- Adicionado em **Configurações → Ponto de venda** o campo numérico **VALID TIMES**, com valor inicial **0**.
+- **0** é enviado como `visitorInfoList[0].VisitorInfo.accessInfo.qrCodeValidNum = 0` nas chamadas de reserva e check-in. Conforme a OpenAPI do HikCentral, 0 é o valor padrão, enquanto 1 a 100 configura um número máximo de utilizações de QR Code.
+- **1 a 100**: o valor informado é enviado ao HikCentral no mesmo campo, sem alterar a validade do ingresso nem a agenda do nível Visitor. Números negativos, não inteiros e acima de 100 são rejeitados.
+- Configuração persistente por usuário Windows em `settings.json` (chave `valid_times`). Instalações antigas migrarão para 0 sem modificar demais preferências ou os ingressos existentes.
+- A configuração só afeta **novos cadastros**; não edita automaticamente os visitantes já registrados no HikCentral.
+- **Limitação importante:** a documentação do parâmetro descreve limite de autenticações por **QR Code**. O efeito do valor 0 sobre **cartão NFC e reconhecimento facial** não está garantido apenas pelo payload. É necessário conferir um visitante cadastrado com o novo EXE e testar mais de uma passagem, além de examinar os registros de acesso, antes de homologar.
+- Testes unitários e mocks verificam configuração salva, limites válidos, payload de reserva e check-in com `qrCodeValidNum` igual ao escolhido. Não são criados visitantes reais nos testes.
+- Referência documental: **HikCentral Professional OpenAPI Developer Guide V3.0.1**, Appendix A.1.1 (`accessInfo.qrCodeValidNum`: 0 por padrão, 1–100 para limitar aberturas por QR).
