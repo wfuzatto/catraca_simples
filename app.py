@@ -13,6 +13,8 @@ from PIL import Image, ImageTk
 
 from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   initial_visitor_group, validate_visitor_group_selection,
+                  VISITOR_LEVEL_NAME, visitor_level_for_registration, verify_visitor_access_plan,
+                  mark_appointment_inflight,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   prepare_face_jpeg, face_cover_preview, normalize_ticket_start,
                   validate_ticket_period, require_confirmed_daily_schedule,
@@ -635,11 +637,10 @@ class ValeApp(tk.Tk):
             group = validate_visitor_group_selection(
                 self.group.get(), self.connected_groups,
                 self.settings.get("preferred_group", ""))
-            if group not in self.settings["group_access"]:
-                raise ValueError("Configure níveis de acesso para este grupo.")
-            requested_levels = self.settings["group_access"][group]
-            if not requested_levels:
-                raise ValueError("Este grupo ainda não tem níveis aprovados. Configure o mapeamento antes do cadastro.")
+            # Categorias Visitor permanecem selecionáveis, mas não definem permissões.
+            # A única autorização deste hotel é o nível Visitor VISITANTE (type=2).
+            requested_levels = visitor_level_for_registration(
+                group, self.connected_groups, self.settings.get("preferred_group", ""))
             ticket = self.settings["tickets"][self.ticket.get()]
             start = parse_local(self.start.get())
             end = parse_local(self.end.get())
@@ -657,7 +658,9 @@ class ValeApp(tk.Tk):
         self._recovery_attempts = 0
 
         def preflight():
-            return self.client().resolve_levels(requested_levels)
+            selected, door_ids = self.client().resolve_levels(requested_levels)
+            verify_visitor_access_plan(selected, door_ids)
+            return selected, door_ids
 
         def preflight_done(value, error):
             if error:
@@ -700,6 +703,9 @@ class ValeApp(tk.Tk):
 
             def work():
                 client = self.client()
+                # Falha fechada: se o POST for aceito mas a resposta se perder,
+                # a recepção terá de conciliar a reserva antes de reenviá-la.
+                mark_appointment_inflight()
                 appointment_id, visitor_id = client.create_appointment(payload, selected)
                 # Checkpoint immediately after the reservation to prevent duplicates.
                 access_ids = [level["id"] for level in selected]
@@ -833,6 +839,11 @@ class ValeApp(tk.Tk):
         data = load_pending()
         if not data or not self.verified:
             return
+        if data.get("stage") == "appointment_inflight":
+            self.status.set(
+                "Reserva com resultado incerto no HikCentral. Confira o histórico de reservas "
+                "antes de autorizar novo cadastro. Não reenviar automaticamente.")
+            return
         if self.busy:
             self.after(7000, self._auto_resume_pending)
             return
@@ -843,6 +854,14 @@ class ValeApp(tk.Tk):
         def work():
             client = self.client()
             pending = load_pending()
+            # Pendências antigas que referenciem níveis diferentes de VISITANTE
+            # nunca podem reaplicar permissões automaticamente.
+            selected, expected_doors = client.resolve_levels([VISITOR_LEVEL_NAME])
+            verify_visitor_access_plan(selected, expected_doors)
+            if (pending.get("access_ids") != [str(selected[0]["id"])]
+                    or set(pending.get("door_ids", [])) != set(expected_doors)):
+                return {"unresolved": "Pendência com nível/pontos diferentes de VISITANTE. "
+                                      "Revisão manual necessária; nenhum acesso foi alterado."}
             if not pending.get("registered", False):
                 entry_at, exit_at = pending.get("entry_at"), pending.get("exit_at")
                 if not entry_at or not exit_at:
