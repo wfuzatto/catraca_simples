@@ -15,8 +15,20 @@ TZ = ZoneInfo("America/Sao_Paulo")
 APP_VERSION = "1.0.0-preview.18"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
-VISITOR_LEVEL_NAME = "VISITANTE"
-EXPECTED_VISITOR_POINTS = 10
+# Configuração final dos níveis Visitor informada e autorizada pelo hotel.
+# NÃO incluir níveis All-Day/funcionários, mesmo que apareçam na UI Access Control.
+VALE_VISITOR_LEVELS = {
+    "Day use": "DAY_USE",
+    "Hóspedes Serra": "VISITANTE_SERRA",
+    "Hóspedes Vale": "VISITANTE_VALE",
+}
+VALE_VISITOR_POINT_COUNTS = {
+    "DAY_USE": 8,
+    "VISITANTE_SERRA": 8,
+    "VISITANTE_VALE": 3,
+}
+VALE_VISITOR_SCHEDULE = "09:00-17:00"
+VALE_MAPPING_REVISION = 1
 
 DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkin": "09:00", "checkout": "17:00"},
                    "2 dias": {"days": 2, "checkin": "09:00", "checkout": "17:00"},
@@ -36,9 +48,16 @@ def default_settings() -> dict:
         "preferred_group": "",  # Sugestão local, nunca substitui consulta da OpenAPI.
         "valid_times": 0,  # 0 = sem limite de autenticações via qrCodeValidNum; 1..100 = limite.
         "tickets": json.loads(json.dumps(DEFAULT_TICKETS)),
-        "schedule_windows": {},  # Admin must confirm HikCentral level schedules, no guesses.
-        # A recepção must assign only levels approved for each group.
-        "group_access": {group: [] for group in GROUPS},
+        # Agenda ACQUAVALE confirmada pelo hotel para estes três níveis.
+        # O app nunca altera o template efetivo no HikCentral.
+        "schedule_windows": {
+            level: VALE_VISITOR_SCHEDULE for level in VALE_VISITOR_LEVELS.values()
+        },
+        "group_access": {
+            group: [VALE_VISITOR_LEVELS[group]] if group in VALE_VISITOR_LEVELS else []
+            for group in GROUPS
+        },
+        "access_mapping_revision": VALE_MAPPING_REVISION,
         "card_format": "DECIMAL_LITTLE", "camera_index": 0
     }
 
@@ -97,12 +116,12 @@ def verify_visitor_access_plan(
         raise ValueError("Nível Visitor/IDs dos pontos de acesso inválidos.")
     if not doors or any(not str(door).strip() for door in doors) or len(set(doors)) != len(doors):
         raise ValueError("O nível Visitor não possui uma lista válida de pontos de acesso.")
-    # Other levels can have different numbers of points. The user's currently
-    # approved VISITANTE level is known to have 10; never generalize that count.
-    if name.casefold() == VISITOR_LEVEL_NAME.casefold() and len(doors) != EXPECTED_VISITOR_POINTS:
+    # Confirma os pontos reais retornados pela consulta type=2. Nenhum novo ponto é criado.
+    expected = VALE_VISITOR_POINT_COUNTS.get(name)
+    if expected is not None and len(doors) != expected:
         raise ValueError(
-            f"O nível VISITANTE retornou {len(doors)} pontos, mas foram confirmados "
-            f"{EXPECTED_VISITOR_POINTS}. Nenhum cadastro foi enviado."
+            f"O nível Visitor {name} retornou {len(doors)} pontos, mas a configuração "
+            f"aprovada prevê {expected}. Cadastro bloqueado; confira o HikCentral."
         )
 
 
@@ -134,14 +153,32 @@ def load_settings(base: Path | None = None) -> dict:
                 raise ValueError("Ingresso salvo inválido.")
             ticket.setdefault("checkin", "09:00")
         saved_access = conf.get("group_access")
-        if (isinstance(saved_access, dict)
-                and set(saved_access) == set(GROUPS)
-                and all(isinstance(saved_access[group], list)
+        if not isinstance(saved_access, dict):
+            saved_access = {}
+        # Migração única das configurações locais anteriores à organização final:
+        # Day use / Serra / Vale recebem seus níveis Visitor type=2 aprovados.
+        # Outros grupos não recebem permissões automaticamente.
+        if int(saved.get("access_mapping_revision", 0)) < VALE_MAPPING_REVISION:
+            updated = dict(saved_access)
+            legacy_all = (
+                set(saved_access) == set(GROUPS)
+                and all(isinstance(saved_access.get(group), list)
                         and set(saved_access[group]) == set(ACCESS_LEVELS)
-                        for group in GROUPS)):
-            # Older builds granted every configured level to every group by default.
-            # Require the operator to choose the approved mapping before new writes.
-            conf["group_access"] = {group: [] for group in GROUPS}
+                        for group in GROUPS)
+            )
+            if legacy_all:
+                updated = {group: [] for group in GROUPS}
+            for group, level in VALE_VISITOR_LEVELS.items():
+                updated[group] = [level]
+            conf["group_access"] = updated
+            schedule = conf.get("schedule_windows")
+            schedule = dict(schedule) if isinstance(schedule, dict) else {}
+            for level in VALE_VISITOR_LEVELS.values():
+                schedule.setdefault(level, VALE_VISITOR_SCHEDULE)
+            conf["schedule_windows"] = schedule
+            conf["access_mapping_revision"] = VALE_MAPPING_REVISION
+        # Arquivos atualizados podem ser personalizados livremente sem
+        # remapeamento automático em reinicializações futuras.
     return conf
 
 
