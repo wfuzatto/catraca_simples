@@ -8,6 +8,40 @@ from core import Visitor, TZ, parse_local, registration_payload, prepare_face_jp
 from visitor_history import save_registration, set_history_status
 
 
+
+def open_editor_camera(dialog, settings, on_accept):
+    """Abre a mesma webcam guiada do cadastro, mas direciona a foto ao editor.
+
+    O grab modal do editor é transferido para a câmera e restaurado ao fechar.
+    Não altera app.photo_data nem envia imagem ao HikCentral nesta etapa.
+    """
+    from face_capture_ui import GuidedFaceCamera
+
+    camera = None
+    dialog.grab_release()
+    try:
+        camera = GuidedFaceCamera(
+            dialog, settings.get("camera_index", 0), on_accept, settings)
+
+        def restore_editor(event):
+            if event.widget is camera.window and dialog.winfo_exists():
+                dialog.grab_set()
+                dialog.lift()
+                dialog.focus_force()
+
+        camera.window.bind("<Destroy>", restore_editor, add="+")
+        camera.window.wait_visibility()
+        camera.window.grab_set()
+        camera.window.focus_force()
+        return camera
+    except Exception:
+        if camera is not None and not camera.closed:
+            camera.close()
+        if dialog.winfo_exists():
+            dialog.grab_set()
+        raise
+
+
 def open_visitor_editor(app, record):
     if app.busy or load_pending():
         messagebox.showwarning("Edição bloqueada", "Existe operação pendente.")
@@ -55,7 +89,24 @@ def open_visitor_editor(app, record):
                 status.set("Foto selecionada")
             except Exception as exc:
                 messagebox.showerror("Foto", str(exc), parent=dialog)
-    ctk.CTkButton(body, text="Selecionar foto", command=select_photo).pack(pady=5)
+    def use_camera_photo(stream):
+        # Somente a foto deste registro editado; não modifica o novo cadastro.
+        chosen_photo["bytes"] = prepare_face_jpeg(stream.read())
+        status.set("Foto capturada pela câmera")
+        return True
+
+    def capture_photo():
+        try:
+            open_editor_camera(dialog, app.settings, use_camera_photo)
+        except Exception as exc:
+            messagebox.showerror("Webcam", str(exc), parent=dialog)
+
+    photo_buttons = ctk.CTkFrame(body, fg_color="transparent")
+    photo_buttons.pack(pady=5)
+    ctk.CTkButton(photo_buttons, text="Selecionar foto",
+                  command=select_photo).pack(side="left", padx=5)
+    ctk.CTkButton(photo_buttons, text="Abrir câmera",
+                  command=capture_photo).pack(side="left", padx=5)
     ctk.CTkLabel(body, textvariable=status).pack()
     def submit():
         if app.busy or load_pending():
