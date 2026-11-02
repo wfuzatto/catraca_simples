@@ -467,9 +467,12 @@ def _http_failure(status: int, result: dict, path: str, code: str = "") -> str:
         return f"Endpoint Artemis inexistente (HTTP 404): {path}. Confira versão e módulo habilitado."
     if status == 401:
         return "Autenticação OpenAPI recusada (HTTP 401). Confira assinatura HMAC, horário do servidor e AppKey/AppSecret."
-    if message:
-        return f"HikCentral rejeitou a operação ({code or status}): {message[:300]}"
-    return f"HikCentral HTTP {status} para {path}. Confira endpoint, autenticação e permissão OpenAPI."
+    # Nunca retransmitir msg livre do servidor: pode conter nomes, cartão,
+    # face, credenciais ou trechos do payload em erros de validação.
+    safe_code = code if re.fullmatch(r"[A-Za-z0-9_-]{1,24}", code) else "não informado"
+    return (f"HikCentral recusou a operação (HTTP {status}; código {safe_code}; "
+            f"endpoint {path}). Consulte os registros protegidos do HikCentral "
+            "para detalhes, sem copiar informações pessoais.")
 
 
 def parse_delivery_details(data: dict, door_ids: list[str], *,
