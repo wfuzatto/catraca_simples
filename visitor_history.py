@@ -51,7 +51,7 @@ def save_registration(record, base=None):
     allowed = ("visitor_id", "appointment_id", "registration_record_id",
                "first", "last", "group", "reservation",
                "door_ids", "access_names", "entry_at", "exit_at",
-               "expect_face", "expect_card", "state", "checkin_state")
+               "registered_at", "expect_face", "expect_card", "state", "checkin_state")
     clean = {key: record[key] for key in allowed if key in record}
     clean["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     records = _read(base)
