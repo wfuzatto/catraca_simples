@@ -13,7 +13,7 @@ from PIL import Image, ImageTk
 
 from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   initial_visitor_group, validate_visitor_group_selection,
-                  VISITOR_LEVEL_NAME, visitor_level_for_registration, verify_visitor_access_plan,
+                  VISITOR_LEVEL_NAME, visitor_levels_for_group, verify_visitor_access_plan,
                   mark_appointment_inflight,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   prepare_face_jpeg, face_cover_preview, normalize_ticket_start,
@@ -637,10 +637,11 @@ class ValeApp(tk.Tk):
             group = validate_visitor_group_selection(
                 self.group.get(), self.connected_groups,
                 self.settings.get("preferred_group", ""))
-            # Categorias Visitor permanecem selecionáveis, mas não definem permissões.
-            # A única autorização deste hotel é o nível Visitor VISITANTE (type=2).
-            requested_levels = visitor_level_for_registration(
-                group, self.connected_groups, self.settings.get("preferred_group", ""))
+            # O grupo define um único nível Visitor autorizado nas Configurações.
+            # A API valida que o nível pertence a type=2, nunca a funcionários.
+            requested_levels = visitor_levels_for_group(
+                group, self.connected_groups, self.settings["group_access"],
+                self.settings.get("preferred_group", ""))
             ticket = self.settings["tickets"][self.ticket.get()]
             start = parse_local(self.start.get())
             end = parse_local(self.end.get())
@@ -659,7 +660,7 @@ class ValeApp(tk.Tk):
 
         def preflight():
             selected, door_ids = self.client().resolve_levels(requested_levels)
-            verify_visitor_access_plan(selected, door_ids)
+            verify_visitor_access_plan(selected, door_ids, requested_levels)
             return selected, door_ids
 
         def preflight_done(value, error):
@@ -713,7 +714,8 @@ class ValeApp(tk.Tk):
                              door_ids=door_ids, registered=False,
                              expect_face=expect_face, expect_card=expect_card,
                              entry_at=payload["visitStartTime"],
-                             exit_at=payload["visitEndTime"])
+                             exit_at=payload["visitEndTime"],
+                             access_names=[level["name"] for level in selected])
                 registration_record_id = client.register_visitor(payload, selected,
                                                                   appointment_id, visitor_id)
                 mark_registered(registration_record_id)
@@ -854,13 +856,16 @@ class ValeApp(tk.Tk):
         def work():
             client = self.client()
             pending = load_pending()
-            # Pendências antigas que referenciem níveis diferentes de VISITANTE
-            # nunca podem reaplicar permissões automaticamente.
-            selected, expected_doors = client.resolve_levels([VISITOR_LEVEL_NAME])
-            verify_visitor_access_plan(selected, expected_doors)
-            if (pending.get("access_ids") != [str(selected[0]["id"])]
+            # Nunca recuperar pendência desconhecida com permissões presumidas.
+            approved_names = pending.get("access_names")
+            if not isinstance(approved_names, list) or len(approved_names) != 1:
+                return {"unresolved": "Pendência antiga sem vínculo de acesso comprovado. "
+                                      "Verifique manualmente o HikCentral; nada foi reaplicado."}
+            selected, expected_doors = client.resolve_levels(approved_names)
+            verify_visitor_access_plan(selected, expected_doors, approved_names)
+            if (pending.get("access_ids") != [str(level["id"]) for level in selected]
                     or set(pending.get("door_ids", [])) != set(expected_doors)):
-                return {"unresolved": "Pendência com nível/pontos diferentes de VISITANTE. "
+                return {"unresolved": "Pendência com nível/pontos diferentes do registro original. "
                                       "Revisão manual necessária; nenhum acesso foi alterado."}
             if not pending.get("registered", False):
                 entry_at, exit_at = pending.get("entry_at"), pending.get("exit_at")
