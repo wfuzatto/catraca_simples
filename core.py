@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import re
+import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
@@ -192,9 +193,22 @@ def save_settings(settings: dict, base: Path | None = None) -> None:
     dest = base or app_dir()
     dest.mkdir(parents=True, exist_ok=True)
     safe = {k: settings[k] for k in default_settings() if k in settings}
+    original = dest / "settings.json"
+    backup = dest / "settings.backup-pre-visitor-levels.json"
+    # Preserve a recoverable copy of the old local group mappings on first save.
+    if original.is_file() and not backup.exists():
+        try:
+            old_settings = json.loads(original.read_text(encoding="utf-8"))
+            if isinstance(old_settings, dict) and int(
+                old_settings.get("access_mapping_revision", 0)
+            ) < VALE_MAPPING_REVISION:
+                shutil.copy2(original, backup)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            # Malformed legacy config must not be erased by automatic migration.
+            raise ValueError("Configuração anterior inválida; backup manual necessário.")
     temp = dest / "settings.tmp"
     temp.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp, dest / "settings.json")
+    os.replace(temp, original)
 
 
 def save_api_keys(app_key: str, app_secret: str, base: Path | None = None) -> None:
