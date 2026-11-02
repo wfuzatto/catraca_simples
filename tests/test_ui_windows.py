@@ -269,3 +269,33 @@ def test_responsive_ui_compact_screen_and_settings_footer(monkeypatch):
         assert root.save_button.winfo_rooty() + root.save_button.winfo_height() <= root.winfo_rooty() + root.winfo_height()
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Validação de layout requer Windows e Tk")
+def test_valid_times_setting_is_visible_saved_and_reopened_without_live_api(monkeypatch, tmp_path):
+    import app
+    from core import default_settings, save_settings, load_settings
+    save_settings(default_settings(), tmp_path)
+    monkeypatch.setattr(app, "load_settings", lambda: load_settings(tmp_path))
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("test-key", "test-secret"))
+    monkeypatch.setattr(app, "save_api_keys", lambda key, secret: None)
+    monkeypatch.setattr(app, "save_settings", lambda conf: save_settings(conf, tmp_path))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    root = app.ValeApp()
+    try:
+        root.update()
+        assert root.s_valid_times.get() == "0"
+        assert root.s_valid_times._name
+        root.s_valid_times.set("7")
+        assert root.save_config(silent=True)
+        assert load_settings(tmp_path)["valid_times"] == 7
+        root.s_valid_times.set("101")
+        assert not root.save_config(silent=True)
+        assert load_settings(tmp_path)["valid_times"] == 7
+        root.s_valid_times.set("0")
+        assert root.save_config(silent=True)
+        assert load_settings(tmp_path)["valid_times"] == 0
+        root._fill_settings()
+        assert root.s_valid_times.get() == "0"
+    finally:
+        root.destroy()
