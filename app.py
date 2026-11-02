@@ -980,8 +980,19 @@ def readonly_api_check(report_path: Path) -> int:
         groups = client.visitor_groups()
         if not groups or not levels:
             raise RuntimeError("OpenAPI não retornou grupos e níveis Visitor.")
-        selected, doors = client.resolve_levels([VISITOR_LEVEL_NAME])
-        verify_visitor_access_plan(selected, doors)
+        mapped_groups = {}
+        for group in selectable_visitor_groups(groups):
+            requested = settings.get("group_access", {}).get(group, [])
+            if not isinstance(requested, list) or len(requested) != 1:
+                mapped_groups[group] = {"mapping_valid": False}
+                continue
+            selected, doors = client.resolve_levels(requested)
+            verify_visitor_access_plan(selected, doors, requested)
+            mapped_groups[group] = {
+                "mapping_valid": True,
+                "level_name": selected[0]["name"],
+                "point_count": len(doors),
+            }
         runtime_ok = opencv_imported and pcsc_library_imported
         report = {
             "ok": runtime_ok,
@@ -990,10 +1001,9 @@ def readonly_api_check(report_path: Path) -> int:
             "certificate_pin_configured": bool(settings.get("cert_pin_sha256")),
             "visitor_group_count": len(groups),
             "visitor_level_count": len(levels),
-            "required_visitor_level": VISITOR_LEVEL_NAME,
-            "required_visitor_level_type": 2,
-            "required_visitor_level_found": True,
-            "required_visitor_point_count": len(doors),
+            "visitor_level_type": 2,
+            "configured_group_mappings": mapped_groups,
+            "mapped_group_count": sum(1 for m in mapped_groups.values() if m["mapping_valid"]),
             "effective_schedule_readback": "not_verified_by_this_API_check",
             "default_level_flag_readback": "not_verified_by_this_API_check",
             "openhikcentral_writes_performed": False,
