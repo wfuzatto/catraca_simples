@@ -194,5 +194,6 @@ def test_retake_resets_camera_gate_without_saving_photo():
     camera.manual=Dummy()
     camera.accept_button=Dummy()
     camera.retake_button=Dummy()
+    camera.status_banner=Dummy()
     camera.retake()
     assert camera.captured is None and not camera.gate.completed
