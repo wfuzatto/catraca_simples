@@ -302,3 +302,106 @@ def test_valid_times_setting_is_visible_saved_and_reopened_without_live_api(monk
         assert root.s_valid_times.get() == "0"
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Spinner precisa do Tk no Windows")
+@pytest.mark.parametrize("fails", [False, True])
+def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monkeypatch, fails):
+    import app
+    import threading
+    import time
+    from core import default_settings
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    root = app.ValeApp()
+    release = threading.Event()
+    outcomes = []
+    try:
+        root.update_idletasks()
+        # Opening the registration screen must not display a loading spinner.
+        assert not getattr(root, "_registration_loading_active", False)
+
+        def work():
+            if not release.wait(timeout=3):
+                raise RuntimeError("Teste sem liberação")
+            if fails:
+                raise RuntimeError("Falha simulada do HikCentral")
+            return {"registered": True}
+
+        def finish(result, error):
+            outcomes.append((result, error))
+
+        root.task(work, finish, registration_loading=True)
+        root.update_idletasks()
+        assert root.busy
+        assert root._registration_loading_active
+        assert root.registration_loading_overlay.winfo_manager() == "place"
+        assert root.register_button.cget("state") == "disabled"
+        assert root.delivery_button.cget("state") == "disabled"
+        assert root.nav_registration.cget("state") == "disabled"
+        assert root.nav_settings.cget("state") == "disabled"
+        initial_angle = root._registration_spinner_angle
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and root._registration_spinner_angle == initial_angle:
+            root.update()
+            time.sleep(0.01)
+        assert root._registration_spinner_angle != initial_angle
+
+        release.set()
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline and not outcomes:
+            root.update()
+            time.sleep(0.01)
+        assert len(outcomes) == 1
+        result, error = outcomes[0]
+        if fails:
+            assert result is None
+            assert isinstance(error, RuntimeError)
+        else:
+            assert result == {"registered": True}
+            assert error is None
+        assert not root.busy
+        assert not root._registration_loading_active
+        assert root.registration_loading_overlay.winfo_manager() == ""
+        assert root._registration_spinner_job is None
+        assert root.register_button.cget("state") == "normal"
+        assert root.delivery_button.cget("state") == "normal"
+        assert root.nav_registration.cget("state") == "normal"
+        assert root.nav_settings.cget("state") == "normal"
+    finally:
+        release.set()
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Tk exige Windows")
+def test_preflight_task_has_no_registration_spinner(monkeypatch):
+    import app
+    import threading
+    import time
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    root = app.ValeApp()
+    release = threading.Event()
+    done = []
+    try:
+        def work():
+            release.wait(timeout=3)
+            return ("Visitor type=2", [])
+        root.task(work, lambda value, error: done.append((value, error)))
+        root.update_idletasks()
+        assert root.busy
+        assert not getattr(root, "_registration_loading_active", False)
+        assert not hasattr(root, "registration_loading_overlay")
+        release.set()
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline and not done:
+            root.update()
+            time.sleep(0.01)
+        assert len(done) == 1
+    finally:
+        release.set()
+        root.destroy()
