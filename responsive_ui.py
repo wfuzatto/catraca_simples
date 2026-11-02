@@ -39,14 +39,14 @@ def apply(app, width: int) -> None:
 
     if narrow:
         app.sidebar.configure(width=165)
-        for btn in (app.nav_registration, app.nav_settings):
+        for btn in (app.nav_registration, app.nav_history, app.nav_settings):
             btn.configure(width=132)
             btn.pack_configure(padx=6)
         app.connection_header.pack_forget()
         app.header_subtitle.pack_forget()
     else:
         app.sidebar.configure(width=220)
-        for btn in (app.nav_registration, app.nav_settings):
+        for btn in (app.nav_registration, app.nav_history, app.nav_settings):
             btn.configure(width=182)
             btn.pack_configure(padx=13)
         if not app.connection_header.winfo_manager():
