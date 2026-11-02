@@ -315,6 +315,7 @@ class ValeApp(tk.Tk):
             messagebox.showwarning("Em andamento", "Operação anterior em andamento.")
             return
         self.busy = True
+        loading_started_at = time.monotonic() if registration_loading else 0.0
         if registration_loading:
             self.status.set("Cadastrando visitante no HikCentral, aguarde...")
             modern_ui.start_registration_loading(self)
@@ -325,8 +326,17 @@ class ValeApp(tk.Tk):
                 value, error = work(), None
             except Exception as exc:
                 value, error = None, exc
+            # Tk UI work remains on the main thread.
             self.after(0, lambda: done(value, error))
         def done(value, error):
+            # Keep the progress window visible even for a very fast API response.
+            if registration_loading:
+                elapsed_ms = int((time.monotonic() - loading_started_at) * 1000)
+                if elapsed_ms < 700:
+                    self.after(700 - elapsed_ms, lambda: finish_task(value, error))
+                    return
+            finish_task(value, error)
+        def finish_task(value, error):
             self.busy = False
             if registration_loading:
                 modern_ui.stop_registration_loading(self)
