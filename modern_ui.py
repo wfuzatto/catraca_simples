@@ -350,20 +350,20 @@ def _settings(app):
     app.tickets_text.pack(fill="both", expand=True)
     levels_edit = ctk.CTkFrame(editors, fg_color="transparent")
     levels_edit.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-    _text(levels_edit, "Nível Visitor obrigatório", size=12, bold=True).pack(
+    _text(levels_edit, "Níveis de acesso por grupo Visitor", size=12, bold=True).pack(
         anchor="w", pady=(0, 6))
-    _text(levels_edit, "VISITANTE", size=18, color=BLUE, bold=True).pack(
-        anchor="w", pady=(3, 8))
-    _text(levels_edit,
-          "Nível type=2 · 10 pontos de acesso · Agenda ACQUAVALE 09:00–17:00. "
-          "Os grupos são categorias; não concedem níveis All-Day dos funcionários.",
-          size=12, color=MUTED).pack(anchor="w")
-    # Widget de compatibilidade para preservar configurações existentes no disco,
-    # mas NÃO permitir que mapeamentos legados concedam acessos.
-    app.access_text = tk.Text(levels_edit, height=1)
+    app.access_text = tk.Text(
+        levels_edit, height=7, bg="#FAFCFF", fg=INK, insertbackground=INK,
+        relief="flat", highlightthickness=1, highlightbackground="#D5DFEB",
+        font=("Consolas", 10), wrap="none", padx=11, pady=9)
+    app.access_text.pack(fill="both", expand=True)
     app.editor_cells = [ticket_edit, levels_edit]
-    _text(catalog, "Somente VISITANTE será enviado. Mapeamentos antigos por grupo são preservados, mas ignorados.",
-          size=11, color=MUTED).pack(anchor="w", pady=(8, 0))
+    _text(
+        catalog,
+        "Formato: Grupo Visitor=Nível. Ex.: Hóspedes Vale=VISITANTE. "
+        "Cada grupo deve ter exatamente um nível retornado pela OpenAPI Visitor (type=2). "
+        "Não vincule níveis All-Day de funcionários.",
+        size=11, color=MUTED).pack(anchor="w", pady=(8, 0))
 
     _text(catalog, "Agendas diárias verificadas no HikCentral · Nível=09:00-17:00",
           size=12, bold=True).pack(anchor="w", pady=(15, 6))
@@ -374,8 +374,9 @@ def _settings(app):
     app.schedule_text.pack(fill="x")
     _text(
         catalog,
-        "Confirme que o nível VISITANTE mantém os 10 pontos autorizados e a agenda ACQUAVALE "
-        "diária 09:00–17:00. O aplicativo não modifica níveis, agendas ou pontos no servidor.",
+        "Confirme os horários e pontos de cada nível configurado antes de vinculá-lo ao grupo. "
+        "VISITANTE atualmente usa ACQUAVALE 09:00–17:00 e 10 pontos. "
+        "O aplicativo não altera a configuração do HikCentral.",
         size=11, color="#A05A14").pack(anchor="w", pady=(8, 0))
 
 
