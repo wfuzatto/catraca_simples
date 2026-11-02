@@ -85,7 +85,7 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
     response = client.post(CHECKINS_PATH, payload)
     data = response.get("data") or {}
     if not isinstance(data, dict) or "totalNum" not in data:
-        raise HikError("HikCentral não retornou resultado paginado de check-ins.")
+        raise HikError("HikCentral não retornou lista paginada de check-ins.")
     try:
         total = int(data["totalNum"])
     except (TypeError, ValueError) as exc:
