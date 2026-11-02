@@ -57,6 +57,10 @@ def save_registration(record, base=None):
     records = _read(base)
     for i, old in enumerate(records):
         if old["visitor_id"] == clean["visitor_id"]:
+            # Never overwrite a confirmed server check-in with an older
+            # snapshot from the initial registration attempt.
+            if old.get("checkin_state") == "confirmado" and clean.get("checkin_state") != "confirmado":
+                clean.pop("checkin_state", None)
             records[i].update(clean)
             break
     else:
