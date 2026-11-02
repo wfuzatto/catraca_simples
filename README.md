@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.27` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.28` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -290,4 +290,15 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - A câmera respeita o índice e as preferências existentes, sem alterar as configurações, o NFC, datas, níveis de acesso, Visitor ID, endpoints ou fluxo de novos cadastros. A foto não é persistida no histórico.
 - A janela de captura assume temporariamente o foco modal e devolve o controle à edição quando é fechada.
 - A validação automatizada não substitui teste com a câmera física da estação.
+
+
+## Preview.28 — Cadastros compartilhados entre recepções
+
+- **Cadastros efetuados** agora consulta o HikCentral via `POST /artemis/api/visitor/v1/register/getVistorRegisterRecord` na rede interna. Qualquer estação com acesso OpenAPI autorizado pode pesquisar registros feitos em outros computadores.
+- Filtros por nome e período (até 32 dias por consulta), navegação paginada, status de check-in e atualização manual; não cria registros.
+- **Ver foto (HikCentral)** usa `POST /artemis/api/visitor/v1/appointment/downloadpicture`, com referência da foto fornecida pelo servidor. A imagem é carregada somente quando solicitada e nunca é gravada no histórico local.
+- **Ver dados / corrigir** abre apenas detalhes de leitura quando o registro veio de outra estação. As ações de edição e reenvio ficam bloqueadas sem prova de IDs, pontos e níveis originais; não são inferidos a partir das configurações atuais. Registros do próprio computador preservam suas funções anteriores quando os IDs e o período conferem.
+- Quando o HikCentral falhar, o aplicativo informa claramente que exibe **somente dados locais**, sem apresentá-los como consulta central.
+- Continua usando a OpenAPI existente e validação TLS. Não altera NFC, regras de grupo, agendas, validade, payload de cadastro, leitor, captura facial nem criação de visitantes.
+- A pesquisa central e o retorno de fotos dependem dos endpoints e permissões efetivamente disponíveis no HikCentral instalado. Testes automatizados são simulados e não comprovam que o servidor ou catracas do hotel respondem aos novos endpoints.
 
