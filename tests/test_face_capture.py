@@ -134,3 +134,60 @@ def test_no_photo_is_automatically_sent_to_hikcentral():
     code=inspect.getsource(face_capture_ui.GuidedFaceCamera.accept)
     assert "on_accept" in code
     assert "HikCentral" not in code
+
+
+def test_use_this_photo_calls_original_photo_flow_only_after_confirmation():
+    import face_capture_ui
+    window=object.__new__(face_capture_ui.GuidedFaceCamera)
+    window.captured=np.full((120,100,3),125,dtype=np.uint8)
+    calls=[]
+    window.on_accept=lambda stream: calls.append(stream.read()) or True
+    window.close=lambda: calls.append("closed")
+    window.accept()
+    assert len(calls)==2 and calls[0][:2]==b"\xff\xd8"
+    assert calls[1]=="closed"
+
+
+def test_cancel_does_not_replace_photo_and_stops_capture():
+    import face_capture_ui,threading
+    instance=object.__new__(face_capture_ui.GuidedFaceCamera)
+    instance.closed=False
+    instance.stop_event=threading.Event()
+    instance.after_id=None
+    instance.lock=threading.Lock()
+    instance.latest=(np.zeros((20,20,3),dtype=np.uint8),None,0.0)
+    instance.captured=np.zeros((20,20,3),dtype=np.uint8)
+    calls=[]
+    instance.on_accept=lambda stream: calls.append(stream)
+    class DummyWindow:
+        def winfo_exists(self): return True
+        def destroy(self): calls.append("destroy")
+    class DummyParent:
+        pass
+    instance.window=DummyWindow()
+    instance.parent=DummyParent()
+    instance.parent._active_face_window=instance
+    instance.close()
+    assert instance.closed and instance.stop_event.is_set()
+    assert instance.latest is None and instance.captured is None
+    assert instance.parent._active_face_window is None
+    assert calls==["destroy"]
+
+
+def test_retake_resets_camera_gate_without_saving_photo():
+    import face_capture_ui,threading
+    class Dummy:
+        def configure(self,**kwargs): pass
+    class Value:
+        def set(self,val): pass
+    camera=object.__new__(face_capture_ui.GuidedFaceCamera)
+    camera.captured=np.zeros((10,10,3),dtype=np.uint8)
+    camera.gate=CaptureGate()
+    camera.gate.completed=True
+    camera.prompt=Value()
+    camera.quality=Value()
+    camera.manual=Dummy()
+    camera.accept_button=Dummy()
+    camera.retake_button=Dummy()
+    camera.retake()
+    assert camera.captured is None and not camera.gate.completed
