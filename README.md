@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.22` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.23` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -242,3 +242,13 @@ Atualização a partir da configuração de Access Control exibida pelo hotel em
 ## Preview.22 — Loading visível durante o cadastro
 
 O indicador giratório passou a ser exibido em uma janela de progresso própria, vinculada à janela principal e posicionada ao centro, por cima do formulário. Isso evita que o ttk.Notebook oculte o indicador. O loading fica visível por pelo menos 700 ms, inclusive em respostas rápidas, continua ativo durante as chamadas reais ao HikCentral e desaparece antes da mensagem de sucesso ou erro. Botões de cadastro e navegação permanecem desabilitados enquanto a solicitação estiver em andamento. Foram incluídos testes Windows que confirmam a visibilidade da janela e seu encerramento ao terminar a operação. Não houve mudanças em cadastro Visitor, níveis ou NFC.
+
+## Preview.23 — Cadastros efetuados
+
+- Terceira aba no menu lateral: **Cadastros efetuados**, com lista de cadastros realizados **por este computador e usuário Windows**. Instalações anteriores não armazenavam histórico acumulado; cadastros antigos só poderão ser consultados pelos registros do próprio HikCentral.
+- Armazena metadados do visitante (nome, grupo, reserva, Visitor ID, níveis, IDs das catracas, validade, resultado de check-in e estado da entrega), criptografados localmente por **Windows DPAPI** em `%LOCALAPPDATA%\\ValeCatracaSimples\\visitor_history.dpapi`. O arquivo exige o mesmo perfil Windows. **Não armazena foto facial, número do cartão ou AppSecret**.
+- **Consultar catracas:** realiza apenas `getVistorRegisterRecord` (conciliação de check-in) e `elementDownloadDetail` (detalhamento da entrega), sem criar registros ou alterar dispositivos.
+- **Reenviar credencial:** exige confirmação do operador, ausência de operação pendente, check-in localizado e níveis/pontos idênticos aos do cadastro original; usa apenas o endpoint existente de `auth/reapplication` com o **mesmo Visitor ID**, sem criar reserva, pessoa, novo cartão ou substituir níveis. Resultado de entrega é reconsultado.
+- **Ver dados / corrigir:** mostra os dados originais salvos. A edição remota de nome, foto, NFC, validade e outros campos **não foi implementada** porque a OpenAPI de alteração de visitantes existente no servidor ainda não foi validada; o operador deve corrigir no HikCentral e então usar o reenvio no aplicativo. Isto evita cadastrar a pessoa novamente por engano.
+- O histórico é atualizado por ID, nunca cria duplicatas do mesmo registro local. Não é compartilhado entre computadores. A aplicação antiga continua funcionando, incluindo cadastro Visitor, câmera/NFC, ingressos, grupos, spinner e configurações.
+- Antes de distribuir em produção, verifique na rede local o retorno de cada catraca com um cadastro previamente autorizado; não foram criados visitantes reais durante os testes.
