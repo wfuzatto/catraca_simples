@@ -423,6 +423,11 @@ def _settings(app):
     app.s_format, app.s_camera = tk.StringVar(), tk.StringVar()
     app.s_preferred_group = tk.StringVar()
     app.s_valid_times = tk.StringVar(value="0")
+    app.s_face_enabled = tk.BooleanVar(value=True)
+    app.s_face_stable = tk.StringVar(value="900")
+    app.s_face_sensitivity = tk.StringVar(value="Normal")
+    app.s_face_quality = tk.BooleanVar(value=True)
+    app.s_face_timeout = tk.StringVar(value="35")
 
     # Gateway.
     gateway = _card(scroller)
@@ -480,6 +485,37 @@ def _settings(app):
           "0 = sem limite de utilizações; 1 a 100 = máximo de utilizações. "
           "Válido para novos visitantes. A data e a agenda do nível continuam obrigatórias.",
           size=11, color=MUTED).pack(anchor="w", pady=(7, 0))
+
+    # Isolated offline face capture preferences; original Visitor and NFC settings unchanged.
+    face_settings = _card(scroller)
+    _section(face_settings, "✦", "Captura facial inteligente",
+             "Enquadramento automático na webcam — processamento local", "◉")
+    ctk.CTkCheckBox(face_settings, text="Fotografar automaticamente quando o rosto estiver adequado",
+                    variable=app.s_face_enabled, text_color=INK).pack(anchor="w", pady=(1, 10))
+    face_row = ctk.CTkFrame(face_settings, fg_color="transparent")
+    face_row.pack(fill="x")
+    left = ctk.CTkFrame(face_row, fg_color="transparent")
+    left.pack(side="left", fill="x", expand=True, padx=(0, 12))
+    _text(left, "Tempo de estabilidade (ms)", size=12, bold=True).pack(anchor="w")
+    ttk.Spinbox(left, from_=400, to=3000, increment=100, textvariable=app.s_face_stable,
+                width=10, font=("Segoe UI", 12)).pack(anchor="w", ipady=6, pady=(5, 8))
+    middle = ctk.CTkFrame(face_row, fg_color="transparent")
+    middle.pack(side="left", fill="x", expand=True, padx=10)
+    _text(middle, "Sensibilidade do enquadramento", size=12, bold=True).pack(anchor="w")
+    ctk.CTkOptionMenu(middle, variable=app.s_face_sensitivity,
+                      values=["Suave", "Normal", "Rigorosa"],
+                      width=145).pack(anchor="w", pady=(5, 8))
+    right = ctk.CTkFrame(face_row, fg_color="transparent")
+    right.pack(side="left", fill="x", expand=True, padx=(10, 0))
+    _text(right, "Ajuda manual após (s)", size=12, bold=True).pack(anchor="w")
+    ttk.Spinbox(right, from_=10, to=120, increment=5, textvariable=app.s_face_timeout,
+                width=9, font=("Segoe UI", 12)).pack(anchor="w", ipady=6, pady=(5, 8))
+    ctk.CTkCheckBox(face_settings, text="Exigir luz e nitidez adequadas",
+                    variable=app.s_face_quality, text_color=INK).pack(anchor="w", pady=(1, 8))
+    _text(face_settings,
+          "A webcam existente continua selecionada acima. O botão Capturar manualmente "
+          "fica disponível mesmo sem detector ou se a foto não passar na análise.",
+          size=11, color=MUTED).pack(anchor="w", pady=(3, 0))
 
     # Ticket catalog and access levels. Editable text preserves all original semantics.
     catalog = _card(scroller)
