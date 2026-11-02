@@ -310,12 +310,16 @@ class ValeApp(tk.Tk):
         return HikCentral(s["host"], s["port"], self.key, self.secret, s["ca_file"],
                           pinned_sha256=s.get("cert_pin_sha256", ""))
 
-    def task(self, work, finish):
+    def task(self, work, finish, *, registration_loading=False):
         if self.busy:
             messagebox.showwarning("Em andamento", "Operação anterior em andamento.")
             return
         self.busy = True
-        self.status.set("Consultando HikCentral...")
+        if registration_loading:
+            self.status.set("Cadastrando visitante no HikCentral, aguarde...")
+            modern_ui.start_registration_loading(self)
+        else:
+            self.status.set("Consultando HikCentral...")
         def run():
             try:
                 value, error = work(), None
@@ -324,6 +328,8 @@ class ValeApp(tk.Tk):
             self.after(0, lambda: done(value, error))
         def done(value, error):
             self.busy = False
+            if registration_loading:
+                modern_ui.stop_registration_loading(self)
             finish(value, error)
         threading.Thread(target=run, daemon=True).start()
 
@@ -802,7 +808,8 @@ class ValeApp(tk.Tk):
                 self.photo_data, self.preview = b"", None
                 self.photo_widget.configure(image="", text="SEM FOTO")
 
-            self.task(work, finish)
+            # Spinner visible only after the operator answered SIM to the preview.
+            self.task(work, finish, registration_loading=True)
 
         self.status.set("Consultando níveis e catracas para prévia; nenhum cadastro será enviado ainda.")
         self.task(preflight, preflight_done)
