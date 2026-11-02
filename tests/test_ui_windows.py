@@ -422,3 +422,31 @@ def test_preflight_task_has_no_registration_spinner(monkeypatch):
     finally:
         release.set()
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Verificação da aba exige Windows Tk")
+def test_new_history_tab_keeps_registration_and_settings_intact(monkeypatch):
+    import app
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(app, "list_history", lambda: [])
+    root = app.ValeApp()
+    try:
+        root.update_idletasks()
+        assert root.history_tab.winfo_exists()
+        assert root.nav_history.winfo_exists()
+        assert root.register_button.winfo_exists()
+        assert root.save_button.winfo_exists()
+        assert root.book.select() == str(root.registration_tab)
+        root.book.select(root.history_tab)
+        root.update()
+        assert root.history_table.winfo_exists()
+        assert "0 cadastros" in root.history_status.get()
+        assert root.register_button.winfo_manager() == ""
+        root.book.select(root.registration_tab)
+        root.update()
+        assert root.register_button.winfo_manager() == "pack"
+    finally:
+        root.destroy()
