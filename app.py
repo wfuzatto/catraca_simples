@@ -1041,7 +1041,37 @@ def readonly_api_check(report_path: Path) -> int:
     return result
 
 
+def offline_startup_smoke_check(report_path: Path) -> int:
+    """Startup test of real import graph, without HikCentral or any user data.
+
+    Intended to run on the actual frozen Windows EXE before publishing it.
+    """
+    from core import (default_settings, VALE_VISITOR_LEVELS,
+                      VALE_VISITOR_POINT_COUNTS, VALE_VISITOR_SCHEDULE)
+    report = {"kind": "offline_startup_smoke", "version": APP_VERSION,
+              "network_used": False, "visitor_created": False, "ok": False}
+    try:
+        conf = default_settings()
+        for group, level in VALE_VISITOR_LEVELS.items():
+            if conf["group_access"].get(group) != [level]:
+                raise ValueError("Configuração padrão de grupo inválida.")
+            if conf["schedule_windows"].get(level) != VALE_VISITOR_SCHEDULE:
+                raise ValueError("Agenda diária padrão inválida.")
+            # Fake identifiers only; no query or operation against HikCentral.
+            points = [f"offline-{index}" for index in range(VALE_VISITOR_POINT_COUNTS[level])]
+            verify_visitor_access_plan(
+                [{"id": "offline-test", "name": level}], points, [level])
+        report["ok"] = True
+    except Exception as exc:
+        report["error_type"] = type(exc).__name__
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    return 0 if report["ok"] else 1
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test":
+        raise SystemExit(offline_startup_smoke_check(Path(sys.argv[2])))
     if len(sys.argv) == 3 and sys.argv[1] == "--check-openapi":
         raise SystemExit(readonly_api_check(Path(sys.argv[2])))
     ValeApp().mainloop()
