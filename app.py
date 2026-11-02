@@ -911,6 +911,14 @@ class ValeApp(tk.Tk):
         if load_pending():
             messagebox.showwarning("Reenvio bloqueado", "Existe operação pendente. Concilie primeiro.")
             return
+        try:
+            start = datetime.fromisoformat(record["entry_at"])
+            end = datetime.fromisoformat(record["exit_at"])
+            if start.tzinfo is None or end.tzinfo is None or not start <= datetime.now(TZ) < end:
+                raise ValueError("Visita fora do período autorizado; reenvio bloqueado.")
+        except (KeyError, ValueError) as exc:
+            messagebox.showwarning("Reenvio bloqueado", str(exc))
+            return
         if not messagebox.askyesno(
             "Confirmar reenvio",
             "Reaplicar ao Visitor ID existente, SEM criar nova reserva ou visitante?"):
@@ -936,8 +944,11 @@ class ValeApp(tk.Tk):
                 self.history_status.set("Reenvio não confirmado: " + str(error))
                 messagebox.showwarning("Reenvio", str(error))
                 return
-            set_history_status(record["visitor_id"], state=result["state"], checkin_state="confirmado")
-            self.refresh_history()
+            try:
+                set_history_status(record["visitor_id"], state=result["state"], checkin_state="confirmado")
+                self.refresh_history()
+            except Exception:
+                self.history_status.set("Reenvio enviado, mas o histórico local não foi atualizado.")
             messagebox.showinfo("Reenvio", "Solicitação enviada ao visitante existente. Entrega: " + result["state"])
         self.task(work, finish)
 
