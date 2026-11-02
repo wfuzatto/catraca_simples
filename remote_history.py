@@ -84,10 +84,14 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
         payload["visitorName"] = name
     response = client.post(CHECKINS_PATH, payload)
     data = response.get("data") or {}
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or "totalNum" not in data:
         raise HikError("HikCentral não retornou resultado paginado de check-ins.")
-    total = int(data.get("totalNum") or 0)
-    # Algumas versões omitem list quando a pesquisa não encontra resultados.
+    try:
+        total = int(data["totalNum"])
+    except (TypeError, ValueError) as exc:
+        raise HikError("Total inválido no resultado do HikCentral.") from exc
+    # Apenas uma resposta explicitamente vazia pode omitir o campo list.
+    # Não mascarar falhas/alterações da OpenAPI como "0 visitantes".
     items = data.get("list")
     if items is None and total == 0:
         items = []
