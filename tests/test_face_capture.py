@@ -105,9 +105,14 @@ def test_options_default_and_bounds():
             FaceGuideConfig(**{key:value})
 
 
-def test_detector_loads_offline_haar_xml_from_opencv_installation():
+def test_detector_uses_exact_offline_yunet_model_as_face_scanner():
     detector=LocalFaceDetector()
-    assert not detector.face.empty()
+    assert detector.engine == "yunet"
+    import cv2
+    blank=np.zeros((320,320,3),dtype=np.uint8)
+    response=detector.analyze(blank,FaceGuideConfig())
+    assert response.message=="Posicione o rosto na câmera"
+    assert not response.ready
 
 
 def test_capture_is_valid_jpeg_without_server_or_disk():
