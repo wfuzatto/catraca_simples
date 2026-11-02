@@ -81,8 +81,11 @@ def test_settings_and_pending(tmp_path):
     assert load_pending(tmp_path) is None
     save_last_delivery("v001", ["door-1", "door-2", "door-1"], tmp_path,
                        expect_face=True, expect_card=False)
-    assert load_last_delivery(tmp_path) == {"visitor_id": "v001", "door_ids": ["door-1", "door-2"],
-                                           "expect_face": True, "expect_card": False}
+    last = load_last_delivery(tmp_path)
+    assert last["visitor_id"] == "v001"
+    assert last["door_ids"] == ["door-1", "door-2"]
+    assert last["expect_face"] is True and last["expect_card"] is False
+    assert last["entry_at"] == "" and last["registration_record_id"] == ""
 
 
 def test_config_editing_and_uid_formats():
@@ -297,22 +300,37 @@ def test_face_preview_fills_frame_for_small_and_wide_images():
         assert shown.getpixel((0, 0)) == shown.getpixel((147, 132))
 
 
-def test_visitor_policy_never_assigns_employee_or_legacy_levels():
-    from core import visitor_level_for_registration, verify_visitor_access_plan
-    live_groups = ["Day use", "Hóspedes Vale", "Hóspedes Serra"]
-    for group in live_groups:
-        assert visitor_level_for_registration(group, live_groups) == ["VISITANTE"]
-    doors = [f"door-{i}" for i in range(10)]
-    verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}], doors)
-    with pytest.raises(ValueError, match="somente"):
-        verify_visitor_access_plan([{"id": "L2", "name": "All-Day"}], doors)
-    with pytest.raises(ValueError, match="somente"):
-        verify_visitor_access_plan(
-            [{"id": "LV001", "name": "VISITANTE"}, {"id": "L2", "name": "All-Day"}], doors)
-    with pytest.raises(ValueError, match="esperados 10"):
-        verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}], doors[:9])
-    with pytest.raises(ValueError, match="esperados 10"):
-        verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}], doors + ["door-10"])
+def test_group_specific_visitor_access_mapping_cannot_use_unapproved_levels():
+    from core import visitor_levels_for_group, verify_visitor_access_plan
+    groups = ["Day use", "Hóspedes Vale", "Hóspedes Serra"]
+    mapping = {
+        "Day use": ["VISITANTE"],
+        "Hóspedes Vale": ["NIVEL HOSPEDES"],
+        "Hóspedes Serra": [],
+    }
+    assert visitor_levels_for_group("Day use", groups, mapping) == ["VISITANTE"]
+    assert visitor_levels_for_group("Hóspedes Vale", groups, mapping) == ["NIVEL HOSPEDES"]
+    with pytest.raises(ValueError, match="exatamente um"):
+        visitor_levels_for_group("Hóspedes Serra", groups, mapping)
+    with pytest.raises(ValueError, match="exatamente um"):
+        visitor_levels_for_group("Hóspedes Vale", groups, {"Hóspedes Vale": ["VISITANTE", "All-Day"]})
+    with pytest.raises(ValueError, match="confirmado"):
+        visitor_levels_for_group("Visitors", groups, mapping)
+
+    ten_doors = [f"door-{i}" for i in range(10)]
+    verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}], ten_doors, ["VISITANTE"])
+    verify_visitor_access_plan([{"id": "LV002", "name": "NIVEL HOSPEDES"}],
+                               ten_doors[:3], ["NIVEL HOSPEDES"])
+    with pytest.raises(ValueError, match="dez|10"):
+        verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}],
+                                   ten_doors[:9], ["VISITANTE"])
+    with pytest.raises(ValueError, match="exatamente um"):
+        verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"},
+                                    {"id": "LV002", "name": "NIVEL HOSPEDES"}],
+                                   ten_doors, ["VISITANTE", "NIVEL HOSPEDES"])
+    with pytest.raises(ValueError, match="pontos"):
+        verify_visitor_access_plan([{"id": "LV002", "name": "NIVEL HOSPEDES"}],
+                                   ["door1", "door1"], ["NIVEL HOSPEDES"])
 
 
 def test_appointment_inflight_marker_blocks_retries_and_upgrades(tmp_path):
