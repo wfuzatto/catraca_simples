@@ -20,6 +20,11 @@ def test_readonly_exe_check_writes_only_sanitized_summary(tmp_path, monkeypatch)
         def visitor_groups(self):
             return ["Day use"]
 
+        def resolve_levels(self, requested):
+            assert requested == ["VISITANTE"]
+            return ([{"id": "VISITOR-01", "name": "VISITANTE"}],
+                    [f"access-{i}" for i in range(10)])
+
     monkeypatch.setattr(app, "HikCentral", FakeClient)
     report_path = tmp_path / "check.json"
     assert app.readonly_api_check(report_path) == 0
@@ -27,6 +32,11 @@ def test_readonly_exe_check_writes_only_sanitized_summary(tmp_path, monkeypatch)
     assert result["ok"] is True
     assert result["visitor_group_count"] == 1
     assert result["visitor_level_count"] == 1
+    assert result["required_visitor_level"] == "VISITANTE"
+    assert result["required_visitor_level_type"] == 2
+    assert result["required_visitor_point_count"] == 10
+    assert result["openhikcentral_writes_performed"] is False
+    assert result["effective_schedule_readback"] == "not_verified_by_this_API_check"
     assert result["opencv_imported"] is True
     assert result["pcsc_library_imported"] is True
     assert "private-key" not in report_path.read_text(encoding="utf-8")
