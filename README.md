@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.28` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.29` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -301,4 +301,14 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Quando o HikCentral falhar, o aplicativo informa claramente que exibe **somente dados locais**, sem apresentá-los como consulta central.
 - Continua usando a OpenAPI existente e validação TLS. Não altera NFC, regras de grupo, agendas, validade, payload de cadastro, leitor, captura facial nem criação de visitantes.
 - A pesquisa central e o retorno de fotos dependem dos endpoints e permissões efetivamente disponíveis no HikCentral instalado. Testes automatizados são simulados e não comprovam que o servidor ou catracas do hotel respondem aos novos endpoints.
+
+
+## Preview.29 — Horário atualizado a cada novo cadastro
+
+- Corrigido o congelamento da hora de Entrada entre atendimentos: depois de concluir um cadastro, o programa atualiza a hora de início usando o relógio local e recalcula a saída conforme o tipo de ingresso e sua janela autorizada.
+- Se o formulário permanecer aberto, antes de iniciar outro cadastro o horário é atualizado somente quando o operador **não alterou manualmente** a entrada ou saída. Datas ajustadas pelo atendente são preservadas.
+- O histórico passa a registrar `registered_at` (instante real do sucesso do cadastro, com fuso horário) separadamente de `entry_at` (início da validade do ingresso), preservando o instante do primeiro registro nas atualizações posteriores.
+- Em **Cadastros efetuados**, os campos **Cadastrado em** e **Início válido** ficam em colunas distintas. Registros antigos sem `registered_at` exibem “—” em vez de um horário estimado.
+- Sem alterações nos grupos, níveis, emissão NFC, câmeras, biometria, cálculo dos dias ou endereços do HikCentral.
+- Regressões automatizadas para cadastros sucessivos, renovação de período e respeito a datas ajustadas manualmente.
 
