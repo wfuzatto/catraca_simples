@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.21` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.22` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -238,3 +238,7 @@ Atualização a partir da configuração de Access Control exibida pelo hotel em
 - Quando a API concluir, **com sucesso ou erro**, o indicador para, o cartão desaparece, os botões voltam a ficar disponíveis e a mensagem normal de resultado é mostrada. As proteções existentes de operação pendente e duplicidade continuam em vigor.
 - Não há alteração de payloads, níveis, pontos de acesso, configuração de ingressos, fotos, NFC, nem horários do HikCentral.
 - Testes automatizados no Windows simulam espera, animação e finalização nos caminhos de sucesso e falha e verificam que a prévia de níveis não exibe spinner.
+
+## Preview.22 — Loading visível durante o cadastro
+
+O indicador giratório passou a ser exibido em uma janela de progresso própria, vinculada à janela principal e posicionada ao centro, por cima do formulário. Isso evita que o ttk.Notebook oculte o indicador. O loading fica visível por pelo menos 700 ms, inclusive em respostas rápidas, continua ativo durante as chamadas reais ao HikCentral e desaparece antes da mensagem de sucesso ou erro. Botões de cadastro e navegação permanecem desabilitados enquanto a solicitação estiver em andamento. Foram incluídos testes Windows que confirmam a visibilidade da janela e seu encerramento ao terminar a operação. Não houve mudanças em cadastro Visitor, níveis ou NFC.
