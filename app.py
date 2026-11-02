@@ -724,7 +724,11 @@ class ValeApp(tk.Tk):
                     mark_assigned(level_id)
                 client.apply(visitor_id, door_ids)
                 save_last_delivery(visitor_id, door_ids,
-                                   expect_face=expect_face, expect_card=expect_card)
+                                   expect_face=expect_face, expect_card=expect_card,
+                                   entry_at=payload["visitStartTime"],
+                                   exit_at=payload["visitEndTime"],
+                                   appointment_id=appointment_id,
+                                   registration_record_id=registration_record_id)
                 clear_pending()
                 try:
                     report = self._poll_delivery(client, visitor_id, door_ids,
@@ -803,24 +807,48 @@ class ValeApp(tk.Tk):
             return
 
         def work():
-            return self.client().delivery_report(
+            client = self.client()
+            report = client.delivery_report(
                 data["visitor_id"], data["door_ids"],
                 expect_face=data.get("expect_face", True),
                 expect_card=data.get("expect_card", True))
+            registration_state = "não verificado (cadastro anterior sem datas)"
+            registration_error = ""
+            if data.get("entry_at") and data.get("exit_at"):
+                try:
+                    record = client.find_existing_registration(
+                        data["visitor_id"], data["entry_at"], data["exit_at"])
+                    if record:
+                        registration_state = "confirmado pela consulta de check-in"
+                    else:
+                        registration_state = "não localizado na consulta de check-in"
+                except Exception:
+                    registration_state = "consulta indisponível"
+                    registration_error = "Verifique o módulo Visitor no HikCentral."
+            return report, registration_state, registration_error
 
-        def finish(report, error):
+        def finish(result, error):
             if error:
                 self.status.set("Não foi possível consultar a entrega.")
                 messagebox.showerror("Entrega", str(error))
                 return
-            lines = [report["message"]]
+            report, registration_state, registration_error = result
+            lines = [
+                f"Visitor ID: {data['visitor_id']}",
+                f"Check-in: {registration_state}",
+                report["message"]
+            ]
+            if registration_error:
+                lines.append(registration_error)
             lines.extend(f"• {door['name']} (ID {door['id']}): face {door['faceState']}; "
                          f"pulseira {door['credentialState']}" for door in report["doors"])
-            self.status.set(f"Última entrega: {report['state']}.")
-            if report["state"] == "confirmed":
-                messagebox.showinfo("Última entrega", "\n".join(lines))
+            self.status.set(f"Última entrega: {report['state']}; check-in: {registration_state}.")
+            if report["state"] == "confirmed" and registration_state.startswith("confirmado"):
+                messagebox.showinfo("Cadastro e entrega consultados", "\n".join(lines))
             else:
-                messagebox.showwarning("Última entrega", "\n".join(lines))
+                lines.append("A entrega da credencial não comprova sozinha o registro Visitor. "
+                             "Confira Visitor > Check-In/Out ou Visitor Information.")
+                messagebox.showwarning("Verificação incompleta", "\n".join(lines))
 
         self.task(work, finish)
 
@@ -885,7 +913,11 @@ class ValeApp(tk.Tk):
             client.apply(pending["visitor_id"], pending["door_ids"])
             expect_face, expect_card = pending.get("expect_face", True), pending.get("expect_card", True)
             save_last_delivery(pending["visitor_id"], pending["door_ids"],
-                               expect_face=expect_face, expect_card=expect_card)
+                               expect_face=expect_face, expect_card=expect_card,
+                               entry_at=pending.get("entry_at", ""),
+                               exit_at=pending.get("exit_at", ""),
+                               appointment_id=pending.get("appointment_id", ""),
+                               registration_record_id=pending.get("registration_record_id", ""))
             clear_pending()
             try:
                 report = self._poll_delivery(client, pending["visitor_id"], pending["door_ids"],
