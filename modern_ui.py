@@ -114,6 +114,77 @@ def _summary_line(parent, label, variable, *, fg=MUTED):
     ctk.CTkFrame(parent, height=1, fg_color="#EDF1F6").pack(fill="x")
 
 
+
+def _tick_registration_spinner(app):
+    """Animate on the Tk main thread; never block HikCentral worker requests."""
+    if not getattr(app, "_registration_loading_active", False):
+        return
+    canvas = app.registration_spinner_canvas
+    # An open arc rotates smoothly to indicate unknown completion time.
+    angle = (getattr(app, "_registration_spinner_angle", 0) + 24) % 360
+    app._registration_spinner_angle = angle
+    canvas.itemconfigure(app.registration_spinner_arc, start=angle)
+    app._registration_spinner_job = app.after(65, lambda: _tick_registration_spinner(app))
+
+
+def start_registration_loading(app):
+    """Show only after the operator confirms the Visitor registration."""
+    if getattr(app, "_registration_loading_active", False):
+        return
+    if not hasattr(app, "registration_loading_overlay"):
+        overlay = ctk.CTkFrame(
+            app.registration_tab, width=375, height=148,
+            corner_radius=16, fg_color=WHITE,
+            border_width=2, border_color="#C9D9F0")
+        overlay.pack_propagate(False)
+        row = ctk.CTkFrame(overlay, fg_color="transparent")
+        row.pack(fill="both", expand=True, padx=21, pady=26)
+        canvas = tk.Canvas(
+            row, width=44, height=44, bg=WHITE, highlightthickness=0,
+            borderwidth=0)
+        canvas.pack(side="left", padx=(0, 16))
+        # Static backing circle and animated foreground arc.
+        canvas.create_oval(6, 6, 38, 38, outline="#E4ECF6", width=4)
+        app.registration_spinner_arc = canvas.create_arc(
+            6, 6, 38, 38, start=0, extent=255,
+            outline=BLUE, width=4, style=tk.ARC)
+        app.registration_spinner_canvas = canvas
+        message = ctk.CTkFrame(row, fg_color="transparent")
+        message.pack(side="left", fill="both", expand=True)
+        _text(message, "Cadastrando visitante...", size=15, bold=True).pack(
+            anchor="w", pady=(1, 4))
+        _text(message, "Aguardando resposta do HikCentral.",
+              size=12, color=MUTED).pack(anchor="w")
+        app.registration_loading_overlay = overlay
+    app._registration_loading_active = True
+    app._registration_spinner_angle = 0
+    app.registration_loading_overlay.place(relx=0.5, rely=0.49, anchor="center")
+    app.registration_loading_overlay.lift()
+    app.register_button.configure(state="disabled")
+    app.delivery_button.configure(state="disabled")
+    app.nav_registration.configure(state="disabled")
+    app.nav_settings.configure(state="disabled")
+    _tick_registration_spinner(app)
+
+
+def stop_registration_loading(app):
+    """Always stop on success or failure before displaying a result dialog."""
+    app._registration_loading_active = False
+    job = getattr(app, "_registration_spinner_job", None)
+    app._registration_spinner_job = None
+    if job is not None:
+        try:
+            app.after_cancel(job)
+        except tk.TclError:
+            pass
+    if hasattr(app, "registration_loading_overlay"):
+        app.registration_loading_overlay.place_forget()
+    for name in ("register_button", "delivery_button", "nav_registration", "nav_settings"):
+        widget = getattr(app, name, None)
+        if widget is not None and widget.winfo_exists():
+            widget.configure(state="normal")
+
+
 def _registration(app):
     page = app.registration_tab
     page.configure(style="Vale.Page.TFrame")
