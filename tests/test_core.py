@@ -138,6 +138,13 @@ def test_migrate_legacy_saved_levels_without_touching_other_settings(tmp_path):
     loaded["group_access"]["Day use"] = ["NOVO_VISITOR"]
     save_settings(loaded, tmp_path)
     assert load_settings(tmp_path)["group_access"]["Day use"] == ["NOVO_VISITOR"]
+    # Uma cópia legada fica disponível para reversão da mudança de mapeamento.
+    backup = tmp_path / "settings.backup-pre-visitor-levels.json"
+    assert backup.is_file()
+    assert "Hóspedes Serra" in backup.read_text(encoding="utf-8")
+    import json
+    legacy_data = json.loads(backup.read_text(encoding="utf-8"))
+    assert legacy_data["group_access"]["Day use"] == ACCESS_LEVELS
 
 
 def test_ticket_validation_and_duplicate_names():
