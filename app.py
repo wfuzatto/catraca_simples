@@ -298,7 +298,9 @@ class ValeApp(tk.Tk):
                 self.after(100, lambda: self.connect(silent=True))
             return True
         except Exception as exc:
-            messagebox.showerror("Configuração", str(exc))
+            self.status.set("Configurações não salvas: " + str(exc))
+            if not silent:
+                messagebox.showerror("Configuração", str(exc))
             return False
 
     def client(self):
