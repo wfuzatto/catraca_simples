@@ -25,6 +25,7 @@ from devices import list_readers, read_uid, to_card_number
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
 from settings_auth import verify_settings_password
 import modern_ui
+from visitor_history import list_history, save_registration, set_history_status, get_history
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -405,6 +406,9 @@ class ValeApp(tk.Tk):
                 self._settings_auth_prompt_queued = True
                 self.after_idle(self._request_settings_password)
             return
+        if current == str(self.history_tab):
+            self._settings_unlocked = False
+            self.refresh_history()
         if current == str(self.registration_tab):
             self._settings_unlocked = False
             if not self.register_button.winfo_manager():
@@ -753,6 +757,19 @@ class ValeApp(tk.Tk):
                                    registration_record_id=registration_record_id)
                 clear_pending()
                 try:
+                    save_registration({
+                        "visitor_id": visitor_id, "appointment_id": appointment_id,
+                        "registration_record_id": registration_record_id,
+                        "first": obj.first, "last": obj.last,
+                        "group": group, "reservation": obj.remark,
+                        "door_ids": door_ids, "access_names": [level["name"] for level in selected],
+                        "entry_at": payload["visitStartTime"], "exit_at": payload["visitEndTime"],
+                        "expect_face": expect_face, "expect_card": expect_card,
+                        "state": "em consulta", "checkin_state": "não verificado"
+                    })
+                except Exception:
+                    pass  # remote registration was already completed; do not retry creation
+                try:
                     report = self._poll_delivery(client, visitor_id, door_ids,
                                                  expect_face=expect_face, expect_card=expect_card)
                     report_error = ""
@@ -823,6 +840,117 @@ class ValeApp(tk.Tk):
 
         self.status.set("Consultando níveis e catracas para prévia; nenhum cadastro será enviado ainda.")
         self.task(preflight, preflight_done)
+
+
+    def refresh_history(self):
+        try:
+            rows = list_history()
+            self.history_table.delete(*self.history_table.get_children())
+            for record in rows:
+                vid = record["visitor_id"]
+                self.history_table.insert("", "end", iid=vid, values=(
+                    record.get("entry_at", "")[:16].replace("T", " "),
+                    " ".join(filter(None, (record.get("first"), record.get("last")))),
+                    record.get("group", ""),
+                    ", ".join(record.get("access_names", [])),
+                    record.get("checkin_state", "não verificado"),
+                    record.get("state", "não verificada")))
+            self.history_status.set(f"{len(rows)} cadastros armazenados neste computador.")
+        except Exception as exc:
+            self.history_status.set("Não foi possível abrir histórico: " + str(exc))
+
+    def _history_selection(self, _event=None):
+        chosen = self.history_table.selection()
+        if chosen:
+            record = get_history(chosen[0])
+            if record:
+                self.history_status.set(
+                    f"Visitor ID: {record['visitor_id']} | Check-in: {record.get('checkin_state', 'não verificado')} | "
+                    f"Catracas: {record.get('state', 'não verificada')}")
+
+    def _selected_history(self):
+        chosen = self.history_table.selection()
+        if not chosen:
+            messagebox.showinfo("Histórico", "Selecione um cadastro primeiro.")
+            return None
+        return get_history(chosen[0])
+
+    def verify_history_selection(self):
+        record = self._selected_history()
+        if not record:
+            return
+        def work():
+            client = self.client()
+            checkin = client.find_existing_registration(
+                record["visitor_id"], record["entry_at"], record["exit_at"])
+            report = client.delivery_report(
+                record["visitor_id"], record["door_ids"],
+                expect_face=record.get("expect_face", True),
+                expect_card=record.get("expect_card", True))
+            return checkin, report
+        def finish(value, error):
+            if error:
+                self.history_status.set("Consulta não concluída: " + str(error))
+                return
+            checkin, report = value
+            checkin_state = "confirmado" if checkin else "não localizado"
+            set_history_status(record["visitor_id"], state=report["state"],
+                               checkin_state=checkin_state)
+            self.refresh_history()
+            self.history_status.set(f"Check-in: {checkin_state}. Entrega: {report['state']}. {report['message']}")
+        self.task(work, finish)
+
+    def resend_history_selection(self):
+        record = self._selected_history()
+        if not record:
+            return
+        if load_pending():
+            messagebox.showwarning("Reenvio bloqueado", "Existe operação pendente. Concilie primeiro.")
+            return
+        if not messagebox.askyesno(
+            "Confirmar reenvio",
+            "Reaplicar ao Visitor ID existente, SEM criar nova reserva ou visitante?"):
+            return
+        def work():
+            client = self.client()
+            checkin = client.find_existing_registration(
+                record["visitor_id"], record["entry_at"], record["exit_at"])
+            if not checkin:
+                raise ValueError("Check-in não confirmado; nenhum reenvio realizado.")
+            names = record["access_names"]
+            selected, doors = client.resolve_levels(names)
+            verify_visitor_access_plan(selected, doors, names)
+            if set(doors) != set(record["door_ids"]):
+                raise ValueError("Pontos do nível alterados; reenvio bloqueado.")
+            client.apply(record["visitor_id"], doors)
+            return client.delivery_report(
+                record["visitor_id"], doors,
+                expect_face=record.get("expect_face", True),
+                expect_card=record.get("expect_card", True))
+        def finish(result, error):
+            if error:
+                self.history_status.set("Reenvio não confirmado: " + str(error))
+                messagebox.showwarning("Reenvio", str(error))
+                return
+            set_history_status(record["visitor_id"], state=result["state"], checkin_state="confirmado")
+            self.refresh_history()
+            messagebox.showinfo("Reenvio", "Solicitação enviada ao visitante existente. Entrega: " + result["state"])
+        self.task(work, finish)
+
+    def view_history_selection(self):
+        record = self._selected_history()
+        if not record:
+            return
+        messagebox.showinfo(
+            "Dados do cadastro / Correções",
+            f"Visitante: {record.get('first','')} {record.get('last','')}\n"
+            f"Grupo: {record.get('group','')}\n"
+            f"Reserva/apartamento: {record.get('reservation','')}\n"
+            f"Níveis: {', '.join(record.get('access_names', []))}\n"
+            f"Validade: {record.get('entry_at','')} até {record.get('exit_at','')}\n"
+            f"Visitor ID: {record['visitor_id']}\n\n"
+            "Alterações de nome, validade, cartão e foto devem ser feitas no HikCentral. "
+            "Não criaremos nova reserva para corrigir dados existentes. Depois use Reenviar credencial.")
 
     def verify_last_delivery(self):
         try:
