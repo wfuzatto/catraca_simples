@@ -404,3 +404,35 @@ def test_valid_times_survives_both_visitor_appointment_and_checkin_payloads(vali
         assert sent["cards"][0]["cardNo"] == "123456"
     assert json.loads(session.calls[0][1]["data"])["appointStartTime"] == "2026-11-02T09:00:00-03:00"
     assert json.loads(session.calls[1][1]["data"])["visitEndTime"] == "2026-11-02T17:00:00-03:00"
+
+
+def test_edit_existing_visitor_uses_update_endpoint_and_original_id():
+    import json
+    api, session = client({"code": "0", "data": {"appointRecordId": "updated-record"}})
+    info = {
+        "visitStartTime": "2026-11-02T09:00:00-03:00",
+        "visitEndTime": "2026-11-02T17:00:00-03:00",
+        "visitorInfoList": [{"VisitorInfo": {
+            "visitorGivenName": "Ana", "visitorFamilyName": "Teste",
+            "cards": [{"cardNo": "123456"}]
+        }}],
+    }
+    result = api.update_registered_visitor("original-record", "existing-visitor", info, [{"id":"g1","name":"DAY_USE"}])
+    assert result == "updated-record"
+    assert len(session.calls) == 1
+    path, request = session.calls[0]
+    assert path.endswith("/artemis/api/visitor/v1/registerment/update")
+    body = json.loads(request["data"])
+    assert body["appointRecordId"] == "original-record"
+    assert body["visitorInfoList"][0]["VisitorInfo"]["visitorId"] == "existing-visitor"
+
+
+def test_edit_visitor_rejects_missing_credential_before_network():
+    import pytest
+    api, session = client([])
+    info = {"visitStartTime":"2026-11-02T09:00:00-03:00",
+            "visitEndTime":"2026-11-02T17:00:00-03:00",
+            "visitorInfoList":[{"VisitorInfo":{"visitorGivenName":"Ana"}}]}
+    with pytest.raises(Exception, match="credencial"):
+        api.update_registered_visitor("record", "visitor", info, [{"id":"1","name":"DAY_USE"}])
+    assert not session.calls
