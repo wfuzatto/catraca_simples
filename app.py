@@ -13,7 +13,7 @@ from PIL import Image, ImageTk
 
 from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   initial_visitor_group, validate_visitor_group_selection, validate_valid_times,
-                  VISITOR_LEVEL_NAME, visitor_levels_for_group, verify_visitor_access_plan,
+                  visitor_levels_for_group, verify_visitor_access_plan,
                   mark_appointment_inflight,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   prepare_face_jpeg, face_cover_preview, normalize_ticket_start,
