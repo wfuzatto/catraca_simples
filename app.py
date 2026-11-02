@@ -1178,8 +1178,14 @@ def offline_startup_smoke_check(report_path: Path) -> int:
         if not FaceGuideConfig().enabled or GuidedFaceCamera is None:
             raise RuntimeError("Módulo facial inteligente indisponível.")
         face_detector = LocalFaceDetector()
-        if face_detector.face.empty():
-            raise RuntimeError("Modelo Haar não empacotado no executável.")
+        if face_detector.engine != "yunet":
+            raise RuntimeError("O detector YuNet não está disponível no EXE.")
+        import numpy as np
+        # Inference in the frozen EXE confirms both ONNX bundling and CPU DNN.
+        blank = np.zeros((320, 320, 3), dtype=np.uint8)
+        detection = face_detector.analyze(blank, FaceGuideConfig())
+        if detection.ready or detection.bbox is not None:
+            raise RuntimeError("Detecção YuNet inválida no frame vazio.")
         report["face_detector_ready"] = True
         report["ok"] = True
     except Exception as exc:
