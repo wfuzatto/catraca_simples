@@ -295,3 +295,59 @@ def test_face_preview_fills_frame_for_small_and_wide_images():
         shown = face_cover_preview(source.getvalue(), 148, 133)
         assert shown.size == (148, 133)
         assert shown.getpixel((0, 0)) == shown.getpixel((147, 132))
+
+
+def test_visitor_policy_never_assigns_employee_or_legacy_levels():
+    from core import visitor_level_for_registration, verify_visitor_access_plan
+    live_groups = ["Day use", "Hóspedes Vale", "Hóspedes Serra"]
+    for group in live_groups:
+        assert visitor_level_for_registration(group, live_groups) == ["VISITANTE"]
+    doors = [f"door-{i}" for i in range(10)]
+    verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}], doors)
+    with pytest.raises(ValueError, match="somente"):
+        verify_visitor_access_plan([{"id": "L2", "name": "All-Day"}], doors)
+    with pytest.raises(ValueError, match="somente"):
+        verify_visitor_access_plan(
+            [{"id": "LV001", "name": "VISITANTE"}, {"id": "L2", "name": "All-Day"}], doors)
+    with pytest.raises(ValueError, match="esperados 10"):
+        verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}], doors[:9])
+    with pytest.raises(ValueError, match="esperados 10"):
+        verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}], doors + ["door-10"])
+
+
+def test_appointment_inflight_marker_blocks_retries_and_upgrades(tmp_path):
+    from core import mark_appointment_inflight, load_pending
+    mark_appointment_inflight(tmp_path)
+    marker = load_pending(tmp_path)
+    assert marker["stage"] == "appointment_inflight"
+    assert not marker["visitor_id"]
+    assert not marker["appointment_id"]
+    content = (tmp_path / "pending.json").read_text(encoding="utf-8")
+    assert "faceData" not in content
+    assert "cardNo" not in content
+    with pytest.raises(RuntimeError, match="pendente"):
+        mark_appointment_inflight(tmp_path)
+    save_pending("VISITOR-1", ["VISITOR-LEVEL-ID"], tmp_path,
+                 appointment_id="APPOINTMENT-1",
+                 door_ids=[f"door-{i}" for i in range(10)],
+                 registered=False, expect_face=False, expect_card=True,
+                 entry_at="2026-11-02T09:00:00-03:00",
+                 exit_at="2026-11-04T17:00:00-03:00")
+    assert load_pending(tmp_path)["stage"] == "appointment_confirmed"
+    with pytest.raises(RuntimeError, match="pendente"):
+        save_pending("VISITOR-2", ["VISITOR-LEVEL-ID"], tmp_path)
+
+
+def test_visitor_timezone_and_daily_window():
+    from core import parse_local, registration_payload, validate_ticket_period
+    start = parse_local("02/11/2026 09:00")
+    end = parse_local("04/11/2026 17:00")
+    ticket = {"days": 3, "checkin": "09:00", "checkout": "17:00"}
+    validate_ticket_period(start, end, ticket)
+    payload = registration_payload(
+        Visitor("Teste", "Local", "Hóspedes Serra", b"", "123456789", start, end, "123"))
+    assert payload["visitStartTime"] == "2026-11-02T09:00:00-03:00"
+    assert payload["visitEndTime"] == "2026-11-04T17:00:00-03:00"
+    info = payload["visitorInfoList"][0]["VisitorInfo"]
+    assert info["remark"] == "123"
+    assert info["cards"][0]["cardNo"] == "123456789"
