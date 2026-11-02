@@ -81,10 +81,20 @@ jobs:
           if (!$match) { throw "APP_VERSION nao encontrada" }
           $version = $match.Matches[0].Groups[1].Value
           $tag = "v$version"
+          $asset = "ValeCadastroFacialNFC.exe"
+          if (!(Test-Path "dist/$asset")) { throw "Executavel nao foi criado" }
           gh release view $tag --repo $env:GH_REPO *> $null
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Release existente preservada: $tag"
+            # Uma release antiga pode existir sem o EXE, ou com um EXE desatualizado.
+            # Substituir o asset após todos os testes e smoke test do Windows.
+            gh release upload $tag "dist/$asset" --clobber --repo $env:GH_REPO
+            if ($LASTEXITCODE -ne 0) { throw "Falha ao atualizar o EXE na release existente" }
           } else {
-            gh release create $tag dist/ValeCadastroFacialNFC.exe --repo $env:GH_REPO --target $env:GITHUB_SHA --title "Vale Cadastro Facial e NFC $tag" --notes "Executavel Windows autocontido. Versao tecnica de testes, ainda nao homologada nas catracas do hotel." --prerelease
+            gh release create $tag "dist/$asset" --repo $env:GH_REPO --target $env:GITHUB_SHA --title "Vale Cadastro Facial e NFC $tag" --notes "Executavel Windows autocontido. Versao tecnica de testes, ainda nao homologada nas catracas do hotel." --prerelease
             if ($LASTEXITCODE -ne 0) { throw "Falha ao publicar GitHub Release" }
           }
+          $assets = @(gh release view $tag --repo $env:GH_REPO --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0 -or $asset -notin $assets) {
+            throw "Release publicada sem o EXE esperado: $tag/$asset"
+          }
+          Write-Host "EXE presente na release: https://github.com/$env:GH_REPO/releases/download/$tag/$asset"
