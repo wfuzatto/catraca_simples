@@ -168,6 +168,12 @@ def load_settings(base: Path | None = None) -> dict:
             )
             if legacy_all:
                 updated = {group: [] for group in GROUPS}
+            else:
+                # Remover concessões antigas idênticas ao conjunto All-Day,
+                # sem alterar níveis customizados de outros grupos.
+                for group, levels in list(updated.items()):
+                    if isinstance(levels, list) and set(levels) == set(ACCESS_LEVELS):
+                        updated[group] = []
             for group, level in VALE_VISITOR_LEVELS.items():
                 updated[group] = [level]
             conf["group_access"] = updated
