@@ -327,7 +327,7 @@ def test_real_visitor_api_paths_include_only_visitor_level_and_local_validity():
     selected = [{"id": "17", "name": "VISITANTE",
                  "elements": [{"Element": {"ID": f"point-{n}"}} for n in range(10)]}]
     doors = [f"point-{n}" for n in range(10)]
-    verify_visitor_access_plan(selected, doors)
+    verify_visitor_access_plan(selected, doors, ["VISITANTE"])
     start = parse_local("02/11/2026 09:00")
     end = parse_local("04/11/2026 17:00")
     info = registration_payload(
