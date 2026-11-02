@@ -177,6 +177,7 @@ def start_registration_loading(app):
     app.delivery_button.configure(state="disabled")
     app.nav_registration.configure(state="disabled")
     app.nav_settings.configure(state="disabled")
+    app.nav_history.configure(state="disabled")
     _tick_registration_spinner(app)
     overlay.update_idletasks()
 
@@ -194,7 +195,7 @@ def stop_registration_loading(app):
     overlay = getattr(app, "registration_loading_overlay", None)
     if overlay is not None and overlay.winfo_exists():
         overlay.withdraw()
-    for name in ("register_button", "delivery_button", "nav_registration", "nav_settings"):
+    for name in ("register_button", "delivery_button", "nav_registration", "nav_history", "nav_settings"):
         widget = getattr(app, name, None)
         if widget is not None and widget.winfo_exists():
             widget.configure(state="normal")
@@ -336,6 +337,56 @@ def _setting_field(parent, row, column, title, variable, *, secret=False):
                                                          12 if column == 0 else 0), pady=8)
     _field(cell, title, variable, show="*" if secret else None)
     return cell
+
+
+
+def _history(app):
+    """Local Visitor records, with read-only remote verification and safe resend."""
+    page = app.history_tab
+    page.configure(style="Vale.Page.TFrame")
+    background = ctk.CTkFrame(page, fg_color=BG, corner_radius=0)
+    background.pack(fill="both", expand=True)
+    inner = ctk.CTkFrame(background, fg_color=WHITE, corner_radius=14)
+    inner.pack(fill="both", expand=True, padx=18, pady=18)
+    heading = ctk.CTkFrame(inner, fg_color="transparent")
+    heading.pack(fill="x", padx=17, pady=(18, 10))
+    _text(heading, "Cadastros efetuados", size=19, bold=True).pack(side="left")
+    _secondary(heading, "Atualizar lista", app.refresh_history, width=142).pack(side="right")
+    _text(inner,
+          "Histórico criptografado neste Windows. Consultar não cria visitante; "
+          "reenviar só reaplica a credencial ao mesmo Visitor ID.",
+          size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 10))
+    table_area = ctk.CTkFrame(inner, fg_color="transparent")
+    table_area.pack(fill="both", expand=True, padx=17)
+    fields = ("date", "name", "group", "level", "checkin", "delivery")
+    app.history_table = ttk.Treeview(table_area, columns=fields, show="headings", selectmode="browse")
+    for key, label, width in (
+        ("date", "Entrada", 135), ("name", "Visitante", 180),
+        ("group", "Grupo", 125), ("level", "Nível", 145),
+        ("checkin", "Check-in", 120), ("delivery", "Catracas", 115)):
+        app.history_table.heading(key, text=label)
+        app.history_table.column(key, width=width, minwidth=90)
+    app.history_table.pack(side="left", fill="both", expand=True)
+    scroll = ttk.Scrollbar(table_area, orient="vertical", command=app.history_table.yview)
+    scroll.pack(side="right", fill="y")
+    app.history_table.configure(yscrollcommand=scroll.set)
+    app.history_table.bind("<<TreeviewSelect>>", app._history_selection)
+    app.history_status = tk.StringVar(value="Selecione um cadastro para consultar.")
+    _text(inner, "", size=12).pack(pady=2)
+    ctk.CTkLabel(inner, textvariable=app.history_status, text_color=MUTED,
+                 anchor="w", font=("Segoe UI", 12), wraplength=780).pack(
+                     fill="x", padx=18, pady=(4, 10))
+    actions = ctk.CTkFrame(inner, fg_color="transparent")
+    actions.pack(fill="x", padx=18, pady=(0, 18))
+    app.history_verify_button = _secondary(
+        actions, "Consultar catracas", app.verify_history_selection, width=170)
+    app.history_verify_button.pack(side="left", padx=(0, 9))
+    app.history_resend_button = _primary(
+        actions, "Reenviar credencial", app.resend_history_selection, width=182)
+    app.history_resend_button.pack(side="left", padx=(0, 9))
+    app.history_details_button = _secondary(
+        actions, "Ver dados / corrigir", app.view_history_selection, width=160)
+    app.history_details_button.pack(side="left")
 
 
 def _settings(app):
@@ -538,9 +589,12 @@ def build(app):
     app.book.pack(fill="both", expand=True)
     app.registration_tab = ttk.Frame(app.book, style="Vale.Page.TFrame")
     app.settings_tab = ttk.Frame(app.book, style="Vale.Page.TFrame")
+    app.history_tab = ttk.Frame(app.book, style="Vale.Page.TFrame")
     app.book.add(app.registration_tab, text="Cadastro")
     app.book.add(app.settings_tab, text="Configurações")
+    app.book.add(app.history_tab, text="Cadastros efetuados")
     app.nav_registration = _nav_button(app, sidebar, "Cadastro", "◉", app.registration_tab)
+    app.nav_history = _nav_button(app, sidebar, "Cadastros efetuados", "▤", app.history_tab)
     app.nav_settings = _nav_button(app, sidebar, "Configurações", "⚙", app.settings_tab)
     ctk.CTkFrame(sidebar, fg_color="transparent").pack(fill="both", expand=True)
     status_box = ctk.CTkFrame(
@@ -556,6 +610,7 @@ def build(app):
 
     _registration(app)
     _settings(app)
+    _history(app)
     responsive_ui.apply(app, width)
     app.bind("<Configure>", lambda event: responsive_ui.on_resize(app, event), add="+")
     app.book.bind("<<NotebookTabChanged>>", app._tab_changed)
@@ -570,6 +625,7 @@ def update_navigation(app):
     selected = app.book.select()
     for button, active in (
         (app.nav_registration, selected == str(app.registration_tab)),
+        (app.nav_history, selected == str(app.history_tab)),
         (app.nav_settings, selected == str(app.settings_tab)),
     ):
         button.configure(
