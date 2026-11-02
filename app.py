@@ -760,8 +760,8 @@ class ValeApp(tk.Tk):
                     save_registration({
                         "visitor_id": visitor_id, "appointment_id": appointment_id,
                         "registration_record_id": registration_record_id,
-                        "first": obj.first, "last": obj.last,
-                        "group": group, "reservation": obj.remark,
+                        "first": obj.first_name, "last": obj.last_name,
+                        "group": group, "reservation": obj.reservation,
                         "door_ids": door_ids, "access_names": [level["name"] for level in selected],
                         "entry_at": payload["visitStartTime"], "exit_at": payload["visitEndTime"],
                         "expect_face": expect_face, "expect_card": expect_card,
