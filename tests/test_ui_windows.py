@@ -304,12 +304,12 @@ def test_valid_times_setting_is_visible_saved_and_reopened_without_live_api(monk
         root.destroy()
 
 
+
 @pytest.mark.skipif(os.name != "nt", reason="Spinner precisa do Tk no Windows")
 @pytest.mark.parametrize("fails", [False, True])
 def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monkeypatch, fails):
     import app
     import threading
-    import time
     from core import default_settings
 
     monkeypatch.setattr(app, "load_settings", default_settings)
@@ -318,13 +318,14 @@ def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monk
     root = app.ValeApp()
     release = threading.Event()
     outcomes = []
+    observed = []
+    timed_out = []
     try:
         root.update_idletasks()
-        # Opening the registration screen must not display a loading spinner.
         assert not getattr(root, "_registration_loading_active", False)
 
         def work():
-            if not release.wait(timeout=3):
+            if not release.wait(timeout=4):
                 raise RuntimeError("Teste sem liberação")
             if fails:
                 raise RuntimeError("Falha simulada do HikCentral")
@@ -332,44 +333,51 @@ def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monk
 
         def finish(result, error):
             outcomes.append((result, error))
+            root.quit()
+
+        def inspect_while_working():
+            # This callback runs on Tk's active main loop, just like production.
+            observed.append({
+                "busy": root.busy,
+                "visible": root.registration_loading_overlay.winfo_manager() == "place",
+                "spinning": root._registration_spinner_angle > 0,
+                "register_disabled": root.register_button.cget("state") == "disabled",
+                "delivery_disabled": root.delivery_button.cget("state") == "disabled",
+                "nav_disabled": root.nav_settings.cget("state") == "disabled",
+            })
+
+        def timeout():
+            timed_out.append(True)
+            release.set()
+            root.quit()
 
         root.task(work, finish, registration_loading=True)
-        root.update_idletasks()
         assert root.busy
         assert root._registration_loading_active
-        assert root.registration_loading_overlay.winfo_manager() == "place"
-        assert root.register_button.cget("state") == "disabled"
-        assert root.delivery_button.cget("state") == "disabled"
-        assert root.nav_registration.cget("state") == "disabled"
-        assert root.nav_settings.cget("state") == "disabled"
-        initial_angle = root._registration_spinner_angle
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline and root._registration_spinner_angle == initial_angle:
-            root.update()
-            time.sleep(0.01)
-        assert root._registration_spinner_angle != initial_angle
-
-        release.set()
-        deadline = time.monotonic() + 4.0
-        while time.monotonic() < deadline and not outcomes:
-            root.update()
-            time.sleep(0.01)
+        root.after(220, inspect_while_working)
+        root.after(280, release.set)
+        watchdog = root.after(3500, timeout)
+        root.mainloop()  # Required for Tkinter's cross-thread after() dispatch.
+        root.after_cancel(watchdog)
+        assert not timed_out
+        assert observed == [{
+            "busy": True, "visible": True, "spinning": True,
+            "register_disabled": True, "delivery_disabled": True,
+            "nav_disabled": True,
+        }]
         assert len(outcomes) == 1
         result, error = outcomes[0]
         if fails:
-            assert result is None
-            assert isinstance(error, RuntimeError)
+            assert result is None and isinstance(error, RuntimeError)
         else:
-            assert result == {"registered": True}
-            assert error is None
+            assert result == {"registered": True} and error is None
         assert not root.busy
         assert not root._registration_loading_active
         assert root.registration_loading_overlay.winfo_manager() == ""
         assert root._registration_spinner_job is None
-        assert root.register_button.cget("state") == "normal"
-        assert root.delivery_button.cget("state") == "normal"
-        assert root.nav_registration.cget("state") == "normal"
-        assert root.nav_settings.cget("state") == "normal"
+        for widget in (root.register_button, root.delivery_button,
+                       root.nav_registration, root.nav_settings):
+            assert widget.cget("state") == "normal"
     finally:
         release.set()
         root.destroy()
@@ -379,7 +387,6 @@ def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monk
 def test_preflight_task_has_no_registration_spinner(monkeypatch):
     import app
     import threading
-    import time
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
@@ -387,21 +394,31 @@ def test_preflight_task_has_no_registration_spinner(monkeypatch):
     root = app.ValeApp()
     release = threading.Event()
     done = []
+    timed_out = []
     try:
         def work():
             release.wait(timeout=3)
             return ("Visitor type=2", [])
-        root.task(work, lambda value, error: done.append((value, error)))
-        root.update_idletasks()
+
+        def finish(value, error):
+            done.append((value, error))
+            root.quit()
+
+        def timeout():
+            timed_out.append(True)
+            release.set()
+            root.quit()
+
+        root.task(work, finish)
         assert root.busy
         assert not getattr(root, "_registration_loading_active", False)
         assert not hasattr(root, "registration_loading_overlay")
-        release.set()
-        deadline = time.monotonic() + 4.0
-        while time.monotonic() < deadline and not done:
-            root.update()
-            time.sleep(0.01)
-        assert len(done) == 1
+        root.after(100, release.set)
+        watchdog = root.after(3000, timeout)
+        root.mainloop()
+        root.after_cancel(watchdog)
+        assert not timed_out
+        assert done == [(("Visitor type=2", []), None)]
     finally:
         release.set()
         root.destroy()
