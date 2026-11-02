@@ -210,6 +210,11 @@ class ValeApp(tk.Tk):
         self.s_secret.set(self.secret)
         self.s_cert_pin.set(s.get("cert_pin_sha256", ""))
         self.s_valid_times.set(str(s.get("valid_times", 0)))
+        self.s_face_enabled.set(bool(s.get("face_auto_capture", True)))
+        self.s_face_stable.set(str(s.get("face_stability_ms", 900)))
+        self.s_face_sensitivity.set(s.get("face_sensitivity", "Normal"))
+        self.s_face_quality.set(bool(s.get("face_require_quality", True)))
+        self.s_face_timeout.set(str(s.get("face_timeout_s", 35)))
         # Não preencher o select com grupos presumidos ou valores antigos.
         self.s_preferred_group.set(PREFERRED_PENDING)
         self.preferred_box.configure(values=(), state="disabled")
@@ -270,6 +275,11 @@ class ValeApp(tk.Tk):
                 "preferred_group": preferred,
                 "card_format": self.s_format.get(),
                 "camera_index": int(self.s_camera.get()),
+                "face_auto_capture": bool(self.s_face_enabled.get()),
+                "face_stability_ms": int(self.s_face_stable.get()),
+                "face_sensitivity": self.s_face_sensitivity.get(),
+                "face_require_quality": bool(self.s_face_quality.get()),
+                "face_timeout_s": int(self.s_face_timeout.get()),
                 "valid_times": validate_valid_times(int(self.s_valid_times.get().strip())),
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
                 "group_access": parse_access_lines(self.access_text.get("1.0", tk.END)),
@@ -277,6 +287,8 @@ class ValeApp(tk.Tk):
                 "schedule_windows": parse_schedule_lines(
                     self.schedule_text.get("1.0", tk.END))
             }
+            from face_capture_logic import FaceGuideConfig
+            FaceGuideConfig.from_settings(conf)
             if not conf["host"] or not 1 <= conf["port"] <= 65535:
                 raise ValueError("Host/porta inválidos.")
             if conf["ca_file"] and not Path(conf["ca_file"]).is_file():
@@ -539,8 +551,10 @@ class ValeApp(tk.Tk):
             self.preview = ImageTk.PhotoImage(image)
             self.photo_widget.configure(image=self.preview, text="")
             self.status.set("Foto selecionada; não armazenada permanentemente.")
+            return True
         except Exception as exc:
             messagebox.showerror("Imagem", str(exc))
+            return False
 
     def browse_photo(self):
         file = filedialog.askopenfilename(filetypes=[("Fotos", "*.jpg *.jpeg *.png *.bmp")])
@@ -548,87 +562,12 @@ class ValeApp(tk.Tk):
             self.use_photo(file)
 
     def camera(self):
+        """Reutiliza a captura facial guiada sem alterar cadastro/NFC/HikCentral."""
         try:
-            import cv2
-            cam = cv2.VideoCapture(int(self.settings["camera_index"]), cv2.CAP_DSHOW)
-            if not cam.isOpened():
-                raise RuntimeError("Webcam indisponível.")
-            window = tk.Toplevel(self)
-            window.title("Captura da foto facial")
-            window.transient(self)
-            window.resizable(False, False)
-            video = tk.Label(window, text="Abrindo câmera…", width=72, height=28, bg="#17212b", fg="white")
-            video.pack(padx=12, pady=12)
-            controls = ttk.Frame(window)
-            controls.pack(fill="x", padx=12, pady=(0, 12))
-            state = {"frame": None, "captured": None, "image": None, "closed": False}
-
-            def close():
-                if state["closed"]:
-                    return
-                state["closed"] = True
-                cam.release()
-                if window.winfo_exists():
-                    window.destroy()
-
-            def show_frame(frame):
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                preview = Image.fromarray(rgb)
-                preview.thumbnail((720, 480))
-                state["image"] = ImageTk.PhotoImage(preview)
-                video.configure(image=state["image"], text="", width=720, height=480)
-
-            def update_preview():
-                if state["closed"] or not window.winfo_exists() or state["captured"] is not None:
-                    return
-                ok, frame = cam.read()
-                if ok:
-                    state["frame"] = frame.copy()
-                    show_frame(frame)
-                else:
-                    video.configure(text="Câmera conectada, mas sem imagem.", image="")
-                window.after(35, update_preview)
-
-            def capture():
-                if state["frame"] is None:
-                    messagebox.showwarning("Webcam", "A câmera ainda não forneceu uma imagem.", parent=window)
-                    return
-                state["captured"] = state["frame"].copy()
-                show_frame(state["captured"])
-                capture_button.configure(state="disabled")
-                retake_button.configure(state="normal")
-                use_button.configure(state="normal")
-
-            def retake():
-                state["captured"] = None
-                capture_button.configure(state="normal")
-                retake_button.configure(state="disabled")
-                use_button.configure(state="disabled")
-                update_preview()
-
-            def use_capture():
-                if state["captured"] is None:
-                    return
-                ok, jpg = cv2.imencode(".jpg", state["captured"], [cv2.IMWRITE_JPEG_QUALITY, 94])
-                if not ok:
-                    messagebox.showerror("Webcam", "Não foi possível preparar a foto.", parent=window)
-                    return
-                try:
-                    self.use_photo(io.BytesIO(jpg.tobytes()))
-                finally:
-                    close()
-
-            capture_button = ttk.Button(controls, text="Capturar", command=capture)
-            capture_button.pack(side="left")
-            retake_button = ttk.Button(controls, text="Refazer", command=retake, state="disabled")
-            retake_button.pack(side="left", padx=8)
-            use_button = ttk.Button(controls, text="Usar foto", command=use_capture, state="disabled")
-            use_button.pack(side="left")
-            ttk.Button(controls, text="Cancelar", command=close).pack(side="right")
-            window.protocol("WM_DELETE_WINDOW", close)
-            update_preview()
+            from face_capture_ui import open_face_capture
+            open_face_capture(self)
         except Exception as exc:
-            messagebox.showerror("Webcam", str(exc))
+            messagebox.showerror("Webcam", str(exc), parent=self)
 
     def scan(self):
         def work():
