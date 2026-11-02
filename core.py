@@ -61,30 +61,47 @@ def validate_visitor_group_selection(
     return selected
 
 
-def visitor_level_for_registration(group: str, groups: list[str], preferred: str = "") -> list[str]:
-    """Política deste hotel: grupo Visitor é uma categoria, não uma autorização.
+def visitor_levels_for_group(
+    group: str, available_groups: list[str], mapping: dict[str, list[str]],
+    preferred: str = ""
+) -> list[str]:
+    """Each Visitor group has one explicitly approved Visitor access level.
 
-    Nunca usar group_access legado nem níveis de funcionários All-Day.
+    A Visitor group is not an employee department. Only levels returned by the
+    OpenAPI with type=2 may be resolved and granted.
     """
-    validate_visitor_group_selection(group, groups, preferred)
-    return [VISITOR_LEVEL_NAME]
+    validate_visitor_group_selection(group, available_groups, preferred)
+    assigned = mapping.get(group)
+    if not isinstance(assigned, list) or len(assigned) != 1:
+        raise ValueError(
+            f"Configure exatamente um nível Visitor para o grupo '{group}' "
+            "em Configurações > Níveis de acesso por grupo. "
+            "Nenhum cadastro foi enviado."
+        )
+    name = assigned[0]
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Nível Visitor configurado é inválido.")
+    return [name.strip()]
 
 
 def verify_visitor_access_plan(
-    selected: list[dict], doors: list[str],
-    *, expected_points: int = EXPECTED_VISITOR_POINTS
+    selected: list[dict], doors: list[str], requested: list[str]
 ) -> None:
-    """Validate ONLY the confirmed Visitor-level before any write operation."""
-    if len(selected) != 1 or str(selected[0].get("name", "")).strip().casefold() != VISITOR_LEVEL_NAME.casefold():
-        raise ValueError("Cadastro bloqueado: somente o nível Visitor VISITANTE é permitido.")
-    level_id = str(selected[0].get("id", "")).strip()
-    if not level_id or not doors or len(doors) != len(set(doors)):
-        raise ValueError("Cadastro bloqueado: IDs do nível/pontos de acesso inválidos.")
-    if len(doors) != expected_points:
+    """Check a single type=2 level and the remote doors; never invent grants."""
+    if len(requested) != 1 or len(selected) != 1:
+        raise ValueError("Cada grupo deve ter exatamente um nível Visitor.")
+    level = selected[0]
+    name, level_id = str(level.get("name", "")).strip(), str(level.get("id", "")).strip()
+    if not level_id or not name or not isinstance(doors, list):
+        raise ValueError("Nível Visitor/IDs dos pontos de acesso inválidos.")
+    if not doors or any(not str(door).strip() for door in doors) or len(set(doors)) != len(doors):
+        raise ValueError("O nível Visitor não possui uma lista válida de pontos de acesso.")
+    # Other levels can have different numbers of points. The user's currently
+    # approved VISITANTE level is known to have 10; never generalize that count.
+    if name.casefold() == VISITOR_LEVEL_NAME.casefold() and len(doors) != EXPECTED_VISITOR_POINTS:
         raise ValueError(
-            f"VISITANTE possui {len(doors)} pontos retornados pela API; "
-            f"eram esperados {expected_points}. Revise a configuração no HikCentral. "
-            "Nenhum cadastro foi enviado."
+            f"O nível VISITANTE retornou {len(doors)} pontos, mas foram confirmados "
+            f"{EXPECTED_VISITOR_POINTS}. Nenhum cadastro foi enviado."
         )
 
 
@@ -431,7 +448,8 @@ def mark_appointment_inflight(base: Path | None = None) -> None:
 def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = None,
                  *, appointment_id: str = "", door_ids: list[str] | None = None,
                  registered: bool = True, expect_face: bool = True,
-                 expect_card: bool = True, entry_at: str = "", exit_at: str = "") -> None:
+                 expect_card: bool = True, entry_at: str = "", exit_at: str = "",
+                 access_names: list[str] | None = None) -> None:
     """Checkpoint mínimo após reserva; nunca armazena foto, cartão, segredo ou nome."""
     path = (base or app_dir()) / "pending.json"
     if not expect_face and not expect_card:
@@ -444,6 +462,7 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
         "stage": "appointment_confirmed",
         "visitor_id": visitor_id, "appointment_id": appointment_id,
         "access_ids": access_ids, "door_ids": door_ids or [],
+        "access_names": access_names or [],
         "expect_face": bool(expect_face), "expect_card": bool(expect_card),
         "registration_record_id": "", "registered": registered, "assigned": [],
         "entry_at": entry_at, "exit_at": exit_at
