@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.23` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.24` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -252,3 +252,11 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - **Ver dados / corrigir:** mostra os dados originais salvos. A edição remota de nome, foto, NFC, validade e outros campos **não foi implementada** porque a OpenAPI de alteração de visitantes existente no servidor ainda não foi validada; o operador deve corrigir no HikCentral e então usar o reenvio no aplicativo. Isto evita cadastrar a pessoa novamente por engano.
 - O histórico é atualizado por ID, nunca cria duplicatas do mesmo registro local. Não é compartilhado entre computadores. A aplicação antiga continua funcionando, incluindo cadastro Visitor, câmera/NFC, ingressos, grupos, spinner e configurações.
 - Antes de distribuir em produção, verifique na rede local o retorno de cada catraca com um cadastro previamente autorizado; não foram criados visitantes reais durante os testes.
+
+## Preview.24 — Edição de cadastros existentes
+
+- Duplo clique numa linha de **Cadastros efetuados**, ou o botão **Ver dados / corrigir**, abre janela editável com nome, sobrenome, reserva, datas e opção de fornecer novamente foto e pulseira.
+- O histórico local DPAPI não conserva foto nem NFC. Credenciais em uso devem ser fornecidas de novo para impedir apagamento silencioso durante atualização.
+- A atualização usa `POST /artemis/api/visitor/v1/registerment/update` com o ID de check-in existente verificado pela leitura e níveis Visitor originais. **Não chama o endpoint de criar reserva ou de cadastrar novo visitante**.
+- Valida igualdade dos pontos originais antes de editar. Depois usa o endpoint existente de reaplicação e consulta entrega nas catracas.
+- Persiste `visitor_edit_inflight.json` antes da escrita remota para bloquear uma segunda tentativa em caso de falha incerta; operação incerta exige conciliação manual antes de nova tentativa. **A API do HikCentral e a interpretação do ID devolvido precisam ser homologadas em campo.**
