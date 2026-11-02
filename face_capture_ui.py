@@ -40,7 +40,7 @@ class GuidedFaceCamera:
 
         self.window = ctk.CTkToplevel(parent)
         self.window.title("Captura facial inteligente — Vale")
-        self.window.geometry("790x660")
+        self.window.geometry("790x700")
         self.window.resizable(False, False)
         self.window.transient(parent)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
@@ -66,11 +66,22 @@ class GuidedFaceCamera:
                                 font=("Segoe UI", 15))
         self.preview.pack(padx=8, pady=8)
         self.prompt = tk.StringVar(value="Aguardando imagem da câmera...")
-        self.quality = tk.StringVar(value="Avaliando enquadramento e iluminação")
-        ctk.CTkLabel(self.window, textvariable=self.prompt,
-                     font=("Segoe UI", 19, "bold"), text_color="#1763D5").pack(pady=(0, 2))
-        ctk.CTkLabel(self.window, textvariable=self.quality,
-                     font=("Segoe UI", 11), text_color="#687A95").pack(pady=(0, 10))
+        self.quality = tk.StringVar(value="Detectando o rosto com YuNet...")
+        # High-contrast instructions must be legible at the front desk, even
+        # when the operator is not immediately beside the monitor.
+        self.status_banner = ctk.CTkFrame(
+            self.window, fg_color="#14263B", corner_radius=12, height=84)
+        self.status_banner.pack(fill="x", padx=20, pady=(0, 12))
+        self.status_banner.pack_propagate(False)
+        self.prompt_label = ctk.CTkLabel(
+            self.status_banner, textvariable=self.prompt,
+            font=("Segoe UI", 25, "bold"), text_color="#FFFFFF",
+            wraplength=740, height=43)
+        self.prompt_label.pack(padx=12, pady=(5, 0))
+        self.quality_label = ctk.CTkLabel(
+            self.status_banner, textvariable=self.quality,
+            font=("Segoe UI", 13, "bold"), text_color="#D5E9FF")
+        self.quality_label.pack(pady=(0, 5))
         actions = ctk.CTkFrame(self.window, fg_color="transparent")
         actions.pack(fill="x", padx=22, pady=(0, 15))
         self.manual = ctk.CTkButton(actions, text="Capturar manualmente",
@@ -100,7 +111,8 @@ class GuidedFaceCamera:
                 detector = LocalFaceDetector() if self.config.enabled else None
             except Exception as exc:
                 detector = None
-                self.detector_error = "Detector facial indisponível. Use Capturar manualmente."
+                self.detector_error = ("Detecção YuNet indisponível. "
+                                       "Use Capturar manualmente ou Escolher foto.")
             last_checked = 0.0
             result = FaceAssessment("Posicione o rosto na câmera", "aguardando", False)
             fails = 0
@@ -148,7 +160,10 @@ class GuidedFaceCamera:
                 self.prompt.set("Aguardando imagem da câmera...")
             elif self.config.enabled and not self.detector_error:
                 message, countdown, do_capture = self.gate.step(assessed, now)
-                self.prompt.set(str(countdown) if countdown else message)
+                self.prompt.set(("Foto em " + str(countdown) + "…") if countdown else message)
+                self.status_banner.configure(
+                    fg_color="#116946" if do_capture or countdown or assessed.ready
+                    else "#9B5523" if assessed.state == "enquadrando" else "#14263B")
                 self.quality.set(
                     f"Nitidez {assessed.blur:.0f}  •  Luz {assessed.brightness:.0f}  "
                     f"•  Rosto {assessed.ratio * 100:.1f}%")
@@ -191,7 +206,8 @@ class GuidedFaceCamera:
             return
         self.captured = frame.copy()
         self.prompt.set("Foto capturada com sucesso!")
-        self.quality.set("Confira a imagem ou tire novamente.")
+        self.status_banner.configure(fg_color="#116946")
+        self.quality.set("Confira a imagem antes de usar esta foto.")
         self.manual.configure(state="disabled")
         self.retake_button.configure(state="normal")
         self.accept_button.configure(state="normal")
@@ -212,6 +228,7 @@ class GuidedFaceCamera:
         self.retake_button.configure(state="disabled")
         self.accept_button.configure(state="disabled")
         self.prompt.set("Posicione o rosto na câmera")
+        self.status_banner.configure(fg_color="#14263B")
         self.quality.set("Nova captura iniciada")
         self.manual.configure(state="normal")
 
