@@ -790,11 +790,13 @@ class ValeApp(tk.Tk):
 
 
     def _show_history_rows(self, rows, label):
-        self._history_records = {r["visitor_id"]: r for r in rows}
+        # O mesmo Visitor ID pode ter registros de check-in diferentes.
+        self._history_records = {}
         self.history_table.delete(*self.history_table.get_children())
-        for record in rows:
-            vid = record["visitor_id"]
-            self.history_table.insert("", "end", iid=vid, values=(
+        for index, record in enumerate(rows):
+            key = str(index)
+            self._history_records[key] = record
+            self.history_table.insert("", "end", iid=key, values=(
                 record.get("entry_at", "")[:16].replace("T", " "),
                 " ".join(filter(None, (record.get("first"), record.get("last")))),
                 record.get("group", ""),
