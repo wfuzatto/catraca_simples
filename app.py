@@ -236,8 +236,21 @@ class ValeApp(tk.Tk):
             f"{name}={','.join(levels)}" for name, levels in s["group_access"].items()))
         self.ticket_box["values"] = list(s["tickets"])
         self.ticket.set(next(iter(s["tickets"])))
-        self.start.set(datetime.now(TZ).strftime("%d/%m/%Y %H:%M"))
+        self._set_current_ticket_period()
+
+    def _set_current_ticket_period(self, now=None):
+        """Atualiza a validade padrão do PRÓXIMO cadastro, sem editar visitantes."""
+        self.start.set((now or datetime.now(TZ)).strftime("%d/%m/%Y %H:%M"))
         self.calculate()
+        # A referência permite detectar se o operador alterou datas manualmente.
+        self._auto_ticket_start = self.start.get()
+        self._auto_ticket_end = self.end.get()
+
+    def _refresh_ticket_period_if_automatic(self):
+        """Evita horário velho se o formulário ficar aberto sem atendimento."""
+        if (self.start.get() == getattr(self, "_auto_ticket_start", None)
+                and self.end.get() == getattr(self, "_auto_ticket_end", None)):
+            self._set_current_ticket_period()
 
     def calculate(self):
         """Respeita início/fim do expediente do ingresso e calcula último dia."""
@@ -592,6 +605,9 @@ class ValeApp(tk.Tk):
         self.task(work, finish)
 
     def register(self):
+        # Renovar o relógio SOMENTE quando as datas ainda são as automáticas.
+        # Datas editadas manualmente pelo atendente permanecem intactas.
+        self._refresh_ticket_period_if_automatic()
         if load_pending():
             messagebox.showwarning("Cadastro em recuperação",
                                    "O cadastro anterior ainda não foi concluído ou conciliado. "
@@ -707,6 +723,7 @@ class ValeApp(tk.Tk):
                         "group": group, "reservation": obj.reservation,
                         "door_ids": door_ids, "access_names": [level["name"] for level in selected],
                         "entry_at": payload["visitStartTime"], "exit_at": payload["visitEndTime"],
+                        "registered_at": datetime.now(TZ).isoformat(timespec="seconds"),
                         "expect_face": expect_face, "expect_card": expect_card,
                         "state": "em consulta", "checkin_state": "não verificado"
                     })
@@ -781,6 +798,9 @@ class ValeApp(tk.Tk):
                     else (self.connected_groups[0] if not preferred and self.connected_groups else ""))
                 self.photo_data, self.preview = b"", None
                 self.photo_widget.configure(image="", text="SEM FOTO")
+                # Antes se mantinha a hora da primeira pessoa para todos os demais.
+                # Após sucesso, preparar nova janela a partir do relógio atual.
+                self._set_current_ticket_period()
 
             # Spinner visible only after the operator answered SIM to the preview.
             self.task(work, finish, registration_loading=True)
@@ -797,6 +817,7 @@ class ValeApp(tk.Tk):
             key = str(index)
             self._history_records[key] = record
             self.history_table.insert("", "end", iid=key, values=(
+                record.get("registered_at", "")[:16].replace("T", " ") or "—",
                 record.get("entry_at", "")[:16].replace("T", " "),
                 " ".join(filter(None, (record.get("first"), record.get("last")))),
                 record.get("group", ""),
@@ -858,7 +879,7 @@ class ValeApp(tk.Tk):
                         matched = False
                 row = dict(remote)
                 if matched:
-                    for key in ("access_names", "door_ids", "expect_face", "expect_card"):
+                    for key in ("access_names", "door_ids", "expect_face", "expect_card", "registered_at"):
                         row[key] = local.get(key)
                     row["_local_verified"] = True
                     row["state"] = local.get("state", "não verificada")
