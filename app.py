@@ -26,6 +26,8 @@ from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normal
 from settings_auth import verify_settings_password
 import modern_ui
 from visitor_history import list_history, save_registration, set_history_status, get_history
+from remote_history import (search_window, fetch_checkins, visitor_details,
+                            fetch_visitor_photo)
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -71,6 +73,8 @@ class ValeApp(tk.Tk):
         self._recovery_attempts = 0
         self._settings_unlocked = False
         self._settings_auth_prompt_queued = False
+        self._history_records = {}
+        self._history_page = 1
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(".", font=("Segoe UI", 10))
@@ -785,42 +789,188 @@ class ValeApp(tk.Tk):
         self.task(preflight, preflight_done)
 
 
+    def _show_history_rows(self, rows, label):
+        self._history_records = {r["visitor_id"]: r for r in rows}
+        self.history_table.delete(*self.history_table.get_children())
+        for record in rows:
+            vid = record["visitor_id"]
+            self.history_table.insert("", "end", iid=vid, values=(
+                record.get("entry_at", "")[:16].replace("T", " "),
+                " ".join(filter(None, (record.get("first"), record.get("last")))),
+                record.get("group", ""),
+                ", ".join(record.get("access_names", [])) or "—",
+                record.get("checkin_state", "não verificado"),
+                record.get("state", "não verificada")))
+        self.history_status.set(label)
+
     def refresh_history(self):
+        # Por padrão sempre consulta o HikCentral. Histórico DPAPI é somente
+        # uma contingência identificada quando o servidor está indisponível.
         try:
-            rows = list_history()
-            self.history_table.delete(*self.history_table.get_children())
-            for record in rows:
-                vid = record["visitor_id"]
-                self.history_table.insert("", "end", iid=vid, values=(
-                    record.get("entry_at", "")[:16].replace("T", " "),
-                    " ".join(filter(None, (record.get("first"), record.get("last")))),
-                    record.get("group", ""),
-                    ", ".join(record.get("access_names", [])),
-                    record.get("checkin_state", "não verificado"),
-                    record.get("state", "não verificada")))
-            self.history_status.set(f"{len(rows)} cadastros armazenados neste computador.")
+            local_rows = list_history()
+        except Exception:
+            local_rows = []
+        if not self.key or not self.secret:
+            self._show_history_rows(local_rows, "Somente dados LOCAIS: configure a conexão HikCentral.")
+            return
+        if self.busy:
+            self.history_status.set("Operação em andamento; atualize a lista ao terminar.")
+            return
+        try:
+            start_iso, end_iso = search_window(
+                self.history_start.get(), self.history_end.get())
+            page = self._history_page
+            name = self.history_name.get()
         except Exception as exc:
-            self.history_status.set("Não foi possível abrir histórico: " + str(exc))
+            self.history_status.set("Filtro inválido: " + str(exc))
+            return
+
+        self.history_status.set("Consultando registros compartilhados do HikCentral...")
+        def work():
+            return fetch_checkins(self.client(), start_iso, end_iso, page, name)
+
+        def finish(result, error):
+            if error:
+                self._show_history_rows(
+                    local_rows, "HikCentral indisponível: exibindo SOMENTE histórico LOCAL. " +
+                    str(error))
+                self.history_page_label.set("Consulta central indisponível")
+                return
+            local_index = {r["visitor_id"]: r for r in local_rows}
+            rows = []
+            for remote in result["rows"]:
+                local = local_index.get(remote["visitor_id"])
+                # Os privilégios locais só podem ser usados se o mesmo registro
+                # e período continuarem confirmados remotamente.
+                matched = False
+                if local:
+                    try:
+                        matched = (
+                            datetime.fromisoformat(local["entry_at"]) ==
+                            datetime.fromisoformat(remote["entry_at"]) and
+                            datetime.fromisoformat(local["exit_at"]) ==
+                            datetime.fromisoformat(remote["exit_at"]) and
+                            (not local.get("registration_record_id") or
+                             local["registration_record_id"] == remote["registration_record_id"]))
+                    except (KeyError, ValueError, TypeError):
+                        matched = False
+                row = dict(remote)
+                if matched:
+                    for key in ("access_names", "door_ids", "expect_face", "expect_card"):
+                        row[key] = local.get(key)
+                    row["_local_verified"] = True
+                    row["state"] = local.get("state", "não verificada")
+                rows.append(row)
+            self._show_history_rows(
+                rows, f"HikCentral: {len(rows)} nesta página; {result['total']} registros encontrados. "
+                      "Qualquer estação autorizada pode consultar.")
+            self.history_page_label.set(f"Página {page} • {result['total']} registros")
+            self.history_next_button.configure(
+                state="normal" if result["has_next"] else "disabled")
+            self.history_previous_button.configure(
+                state="normal" if page > 1 else "disabled")
+        self.task(work, finish)
+
+    def history_change_page(self, delta):
+        next_page = self._history_page + delta
+        if not 1 <= next_page <= 100 or self.busy:
+            return
+        self._history_page = next_page
+        self.refresh_history()
+
+    def history_apply_filters(self):
+        self._history_page = 1
+        self.refresh_history()
 
     def _history_selection(self, _event=None):
         chosen = self.history_table.selection()
         if chosen:
-            record = get_history(chosen[0])
+            record = self._history_records.get(chosen[0])
             if record:
                 self.history_status.set(
-                    f"Visitor ID: {record['visitor_id']} | Check-in: {record.get('checkin_state', 'não verificado')} | "
+                    f"Visitor ID: {record['visitor_id']} | "
+                    f"Fonte: {record.get('origin', 'histórico local')} | "
+                    f"Check-in: {record.get('checkin_state', 'não verificado')} | "
                     f"Catracas: {record.get('state', 'não verificada')}")
 
     def _selected_history(self):
         chosen = self.history_table.selection()
         if not chosen:
-            messagebox.showinfo("Histórico", "Selecione um cadastro primeiro.")
+            messagebox.showinfo("Cadastros", "Selecione um cadastro primeiro.")
             return None
-        return get_history(chosen[0])
+        record = self._history_records.get(chosen[0])
+        if record is None:
+            messagebox.showwarning("Cadastros", "Atualize a lista e selecione novamente.")
+        return record
+
+    def show_history_photo(self):
+        record = self._selected_history()
+        if not record:
+            return
+        if not self.key or not self.secret:
+            messagebox.showwarning("Foto", "Conecte o HikCentral para buscar a foto.")
+            return
+        self.history_status.set("Solicitando foto do HikCentral...")
+        def work():
+            return fetch_visitor_photo(
+                self.client(), record["visitor_id"], record.get("photo_url", ""))
+        def finish(image_bytes, error):
+            if error:
+                messagebox.showwarning("Foto do HikCentral",
+                    "A foto não pôde ser recuperada pela OpenAPI: " + str(error), parent=self)
+                return
+            try:
+                from io import BytesIO
+                image = Image.open(BytesIO(image_bytes))
+                image.thumbnail((520, 490), Image.Resampling.LANCZOS)
+                popup = tk.Toplevel(self)
+                popup.title("Foto do visitante • HikCentral")
+                popup.transient(self)
+                preview = ImageTk.PhotoImage(image)
+                label = ttk.Label(popup, image=preview)
+                label.image = preview
+                label.pack(padx=15, pady=15)
+                ttk.Button(popup, text="Fechar", command=popup.destroy).pack(pady=(0, 12))
+            except Exception as exc:
+                messagebox.showerror("Foto", str(exc), parent=self)
+        self.task(work, finish)
+
+    def view_remote_history(self, record):
+        self.history_status.set("Consultando dados do visitante no HikCentral...")
+        def work():
+            return visitor_details(self.client(), record["visitor_id"])
+        def finish(data, error):
+            if error:
+                messagebox.showwarning("HikCentral", str(error), parent=self)
+                return
+            # Não mostrar campos de cartão ou conteúdo biométrico na janela.
+            visitor = data.get("VisitorInfo") or data.get("visitorInfo") or data
+            if not isinstance(visitor, dict):
+                visitor = {}
+            lines = [
+                "Visitor ID: " + record["visitor_id"],
+                "Nome: " + (record.get("full_name") or "não informado"),
+                "Grupo: " + record.get("group", "não informado"),
+                "Reserva/apartamento: " + record.get("reservation", ""),
+                "Entrada: " + record.get("entry_at", ""),
+                "Saída: " + record.get("exit_at", ""),
+                "Status: " + record.get("checkin_state", ""),
+                "Consulta de detalhes: " + ("confirmada" if visitor else "sem campos adicionais"),
+                "",
+                "Edição e reenvio de registros de outras estações ficam bloqueados",
+                "até a validação dos níveis/pontos de acesso originais."
+            ]
+            messagebox.showinfo("Visitante no HikCentral", "\n".join(lines), parent=self)
+        self.task(work, finish)
 
     def verify_history_selection(self):
         record = self._selected_history()
         if not record:
+            return
+        if not record.get("_local_verified") and record.get("origin") == "HikCentral":
+            self.history_status.set(
+                "Check-in consultado no HikCentral; catracas não verificadas "
+                "(IDs e níveis originais não disponíveis nesta estação).")
             return
         def work():
             client = self.client()
@@ -846,6 +996,11 @@ class ValeApp(tk.Tk):
     def resend_history_selection(self):
         record = self._selected_history()
         if not record:
+            return
+        if record.get("origin") == "HikCentral" and not record.get("_local_verified"):
+            messagebox.showwarning("Reenvio bloqueado",
+                "Cadastro de outra estação: faltam IDs e níveis originais verificados. "
+                "Consulte no HikCentral; nenhum reenvio foi feito.", parent=self)
             return
         if load_pending():
             messagebox.showwarning("Reenvio bloqueado", "Existe operação pendente. Concilie primeiro.")
@@ -894,6 +1049,9 @@ class ValeApp(tk.Tk):
     def view_history_selection(self, _event=None):
         record = self._selected_history()
         if record:
+            if record.get("origin") == "HikCentral" and not record.get("_local_verified"):
+                self.view_remote_history(record)
+                return
             from visitor_editor import open_visitor_editor
             open_visitor_editor(self, record)
 
