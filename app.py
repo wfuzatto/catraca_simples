@@ -744,14 +744,18 @@ class ValeApp(tk.Tk):
                 if error:
                     pending = load_pending()
                     if pending:
-                        if not pending.get("registered", True):
-                            advice = ("A reserva foi criada, mas o check-in não está confirmado. "
-                                      "Confira o estado no HikCentral antes de retomar ou repetir. "
-                                      "Não faça uma segunda reserva.")
+                        if pending.get("stage") == "appointment_inflight":
+                            advice = ("O envio da reserva pode ter sido aceito, mas a resposta é incerta. "
+                                      "Antes de repetir, consulte Visitor > Visitor Reservation no HikCentral. "
+                                      "Nenhuma nova reserva será criada automaticamente.")
+                        elif not pending.get("registered", True):
+                            advice = ("Existe uma reserva, mas o check-in não está confirmado. "
+                                      "Confira o estado no HikCentral antes de retomar ou repetir.")
                         else:
-                            advice = "A recuperação automática tentará reaplicar os acessos, sem criar outro visitante."
+                            advice = "A recuperação automática verificará os acessos já autorizados."
+                        known_id = pending.get("visitor_id") or "não recebido"
                         messagebox.showwarning("Cadastro parcial",
-                            f"Visitante ID {pending['visitor_id']}.\n{error}\n\n{advice}")
+                            f"Visitor ID: {known_id}.\n{error}\n\n{advice}")
                     else:
                         messagebox.showerror("Resultado incerto",
                             f"{error}\nConfira no HikCentral antes de tentar novamente.")
@@ -764,7 +768,8 @@ class ValeApp(tk.Tk):
                     detail = "\n".join(f"• {d['name']}: face {d['faceState']}; pulseira {d['credentialState']}"
                                         for d in report["doors"])
                     text = (f"Visitor ID: {result['visitor_id']}\nReserva: {result['appointment_id']}\n"
-                            f"Registro de check-in: {result['registration_record_id']}\n\n"
+                            f"Registro de check-in (ID devolvido pela API): {result['registration_record_id']}\n"
+                            "Para comprovar o registro na base Visitor, use Verificar última entrega.\n\n"
                             f"{report['message']}\n{detail}")
                     if report["state"] == "confirmed":
                         messagebox.showinfo("Entrega confirmada", text)
@@ -993,9 +998,14 @@ def readonly_api_check(report_path: Path) -> int:
                 "level_name": selected[0]["name"],
                 "point_count": len(doors),
             }
+        preferred = settings.get("preferred_group", "")
+        mapping_ready = (
+            bool(mapped_groups.get(preferred, {}).get("mapping_valid"))
+            if preferred else any(x["mapping_valid"] for x in mapped_groups.values())
+        )
         runtime_ok = opencv_imported and pcsc_library_imported
         report = {
-            "ok": runtime_ok,
+            "ok": runtime_ok and mapping_ready,
             "version": APP_VERSION,
             "endpoint": f"{settings['host']}:{settings['port']}",
             "certificate_pin_configured": bool(settings.get("cert_pin_sha256")),
@@ -1004,6 +1014,9 @@ def readonly_api_check(report_path: Path) -> int:
             "visitor_level_type": 2,
             "configured_group_mappings": mapped_groups,
             "mapped_group_count": sum(1 for m in mapped_groups.values() if m["mapping_valid"]),
+            "configured_preferred_group_ready": mapping_ready,
+            "read_only": True,
+            "check_in_real_record_verified": False,
             "effective_schedule_readback": "not_verified_by_this_API_check",
             "default_level_flag_readback": "not_verified_by_this_API_check",
             "openhikcentral_writes_performed": False,
@@ -1014,7 +1027,7 @@ def readonly_api_check(report_path: Path) -> int:
             "pcsc_reader_count": reader_count,
             "checked_at": datetime.now(TZ).isoformat(timespec="seconds"),
         }
-        result = 0 if runtime_ok else 1
+        result = 0 if runtime_ok and mapping_ready else 1
     except Exception as exc:
         report = {"ok": False, "version": APP_VERSION, "error": str(exc)}
         result = 1
