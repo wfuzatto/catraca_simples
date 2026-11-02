@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.25` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.26` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -273,3 +273,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Se o detector Haar não carregar ou não houver qualidade suficiente, a captura manual e a opção de selecionar um arquivo permanecem disponíveis. A webcam precisa estar acessível para obter frames.
 - Pipeline Windows valida importação, detector XML offline incluído no PyInstaller, testes de avaliação e máquina de estados, e abertura do EXE sem rede; **não é homologação com webcam real da recepção**.
 - Não modifica NFC, Visitor, agendas ACQUAVALE, níveis, histórico, reenvio, edição, VALID TIMES nem integração HikCentral.
+
+## Preview.26 — Detector alinhado ao Face Scanner e orientações legíveis
+
+- Corrigido o problema de detecção da Preview 25: ela usava **Haar**, ao passo que `wfuzatto/face_scanner` usa **OpenCV YuNet**. Agora ambos usam o mesmo detector YuNet 2023mar, `FaceDetectorYN`, threshold de detecção 0,85 e landmarks dos olhos para avaliar inclinação. Continua sem identificação biométrica e sem serviço externo no hotel.
+- O modelo é obtido **somente durante o build** a partir do OpenCV Zoo, fixado no commit `47534e27c9851bb1128ccc0102f1145e27f23f98`, validado por tamanho 232589 bytes e SHA-256 `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`; o ONNX e sua licença MIT ficam embutidos no EXE. **Não há download na recepção**.
+- Orientações de captura ficam em faixa de alto contraste, texto branco em fonte de 25px, mensagem maior e fundo que muda de cor quando o rosto está posicionado ou durante a contagem.
+- Critérios de proporção, nitidez, luz, centralização e estabilidade mantidos e ajustáveis nas Configurações. Em falha de detector, uma mensagem explícita orienta a usar **Capturar manualmente**; não há fallback silencioso ao Haar antigo.
+- Testes de regressão, critérios faciais, importação Windows e inferência de YuNet no EXE compilado. **Não equivale a homologação da webcam física da recepção**; conferir com a webcam e iluminação do local.
+- Sem alterações no envio de cadastro, NFC, Visitor, edição, grupos, acessos ou integrações HikCentral.
