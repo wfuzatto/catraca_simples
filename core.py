@@ -499,7 +499,9 @@ def clear_pending(base: Path | None = None) -> None:
 
 
 def save_last_delivery(visitor_id: str, door_ids: list[str], base: Path | None = None,
-                       *, expect_face: bool = True, expect_card: bool = True) -> None:
+                       *, expect_face: bool = True, expect_card: bool = True,
+                       entry_at: str = "", exit_at: str = "",
+                       appointment_id: str = "", registration_record_id: str = "") -> None:
     """Store only IDs and requested credential types for rechecking delivery."""
     if not visitor_id or not door_ids:
         raise ValueError("Visitante e catracas s\u00e3o obrigat\u00f3rios para consultar a entrega.")
@@ -510,7 +512,10 @@ def save_last_delivery(visitor_id: str, door_ids: list[str], base: Path | None =
     _write_json_atomic(dest / "last_delivery.json", {
         "visitor_id": str(visitor_id),
         "door_ids": list(dict.fromkeys(str(x) for x in door_ids)),
-        "expect_face": bool(expect_face), "expect_card": bool(expect_card)
+        "expect_face": bool(expect_face), "expect_card": bool(expect_card),
+        "entry_at": entry_at, "exit_at": exit_at,
+        "appointment_id": str(appointment_id),
+        "registration_record_id": str(registration_record_id)
     })
 
 
