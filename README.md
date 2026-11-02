@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.26` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.27` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -282,3 +282,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Critérios de proporção, nitidez, luz, centralização e estabilidade mantidos e ajustáveis nas Configurações. Em falha de detector, uma mensagem explícita orienta a usar **Capturar manualmente**; não há fallback silencioso ao Haar antigo.
 - Testes de regressão, critérios faciais, importação Windows e inferência de YuNet no EXE compilado. **Não equivale a homologação da webcam física da recepção**; conferir com a webcam e iluminação do local.
 - Sem alterações no envio de cadastro, NFC, Visitor, edição, grupos, acessos ou integrações HikCentral.
+
+## Preview.27 — Câmera na edição de foto de visitante
+
+- Na janela **Editar cadastro**, o botão **Abrir câmera** fica ao lado de **Selecionar foto**, usando a mesma captura facial inteligente offline já existente no cadastro.
+- **Usar esta foto** preenche apenas a nova foto do registro em edição. **Cancelar** mantém o estado anterior; a foto só é enviada quando o operador clicar em **Salvar e reenviar ao HikCentral**.
+- A câmera respeita o índice e as preferências existentes, sem alterar as configurações, o NFC, datas, níveis de acesso, Visitor ID, endpoints ou fluxo de novos cadastros. A foto não é persistida no histórico.
+- A janela de captura assume temporariamente o foco modal e devolve o controle à edição quando é fechada.
+- A validação automatizada não substitui teste com a câmera física da estação.
+
