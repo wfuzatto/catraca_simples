@@ -1061,6 +1061,26 @@ def offline_startup_smoke_check(report_path: Path) -> int:
             points = [f"offline-{index}" for index in range(VALE_VISITOR_POINT_COUNTS[level])]
             verify_visitor_access_plan(
                 [{"id": "offline-test", "name": level}], points, [level])
+        # Open and close actual Tk desktop interface with isolated defaults.
+        # No local credentials, network, or persisted files are accessed here.
+        from core import default_settings as _defaults
+        original_settings, original_keys = globals()["load_settings"], globals()["load_api_keys"]
+        root = None
+        try:
+            globals()["load_settings"] = lambda: _defaults()
+            globals()["load_api_keys"] = lambda: ("", "")
+            root = ValeApp()
+            root.withdraw()
+            root.update_idletasks()  # no timer callbacks / OpenAPI sync
+            if not (root.register_button.winfo_exists()
+                    and root.save_button.winfo_exists()
+                    and root.groups_box.winfo_exists()):
+                raise RuntimeError("Os componentes principais não foram inicializados.")
+            report["gui_created"] = True
+        finally:
+            if root is not None:
+                root.destroy()
+            globals()["load_settings"], globals()["load_api_keys"] = original_settings, original_keys
         report["ok"] = True
     except Exception as exc:
         report["error_type"] = type(exc).__name__
