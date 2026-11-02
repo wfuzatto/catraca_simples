@@ -1172,6 +1172,15 @@ def offline_startup_smoke_check(report_path: Path) -> int:
             if root is not None:
                 root.destroy()
             globals()["load_settings"], globals()["load_api_keys"] = original_settings, original_keys
+        # Confirm detector data was bundled into this actual frozen EXE.
+        from face_capture_logic import FaceGuideConfig, LocalFaceDetector
+        from face_capture_ui import GuidedFaceCamera
+        if not FaceGuideConfig().enabled or GuidedFaceCamera is None:
+            raise RuntimeError("Módulo facial inteligente indisponível.")
+        face_detector = LocalFaceDetector()
+        if face_detector.face.empty():
+            raise RuntimeError("Modelo Haar não empacotado no executável.")
+        report["face_detector_ready"] = True
         report["ok"] = True
     except Exception as exc:
         report["error_type"] = type(exc).__name__
