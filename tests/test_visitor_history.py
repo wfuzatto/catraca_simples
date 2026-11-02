@@ -8,7 +8,7 @@ from visitor_history import save_registration, get_history, list_history, set_hi
 
 def test_history_is_encrypted_deduplicated_and_does_not_persist_credentials(tmp_path, monkeypatch):
     import visitor_history
-    monkeypatch.setattr(visitor_history.os, "name", "nt", raising=False)
+    monkeypatch.setattr(visitor_history, "os", types.SimpleNamespace(name="nt", replace=os.replace))
     # Deterministic stub stands in for Windows DPAPI in isolated unit tests.
     def protect(data, *args): return b"FAKE_ENCRYPTED:" + data[::-1]
     def unprotect(data, *args): return (None, data.split(b":", 1)[1][::-1])
