@@ -98,18 +98,46 @@ def test_config_editing_and_uid_formats():
     assert to_card_number(uid, "DECIMAL_LITTLE") == str(0xD4C3B2A1)
 
 
-def test_defaults_do_not_grant_every_access_level():
+def test_current_visitor_defaults_are_scoped_to_real_approved_levels():
     settings = default_settings()
     assert (settings["host"], settings["port"]) == ("127.0.0.1", 443)
-    assert all(not levels for levels in settings["group_access"].values())
+    assert settings["group_access"] == {
+        "Day use": ["DAY_USE"],
+        "Hóspedes Serra": ["VISITANTE_SERRA"],
+        "Hóspedes Vale": ["VISITANTE_VALE"],
+        "Visitors": [],
+    }
+    assert settings["schedule_windows"] == {
+        "DAY_USE": "09:00-17:00",
+        "VISITANTE_SERRA": "09:00-17:00",
+        "VISITANTE_VALE": "09:00-17:00",
+    }
 
 
-def test_migrate_legacy_all_levels_default_to_unassigned(tmp_path):
+def test_migrate_legacy_saved_levels_without_touching_other_settings(tmp_path):
     settings = default_settings()
+    settings["access_mapping_revision"] = 0
     settings["group_access"] = {group: ACCESS_LEVELS.copy() for group in GROUPS}
+    settings["group_access"]["Special event"] = ["CUSTOM_VISITOR_LEVEL"]
+    settings["tickets"]["Especial"] = {"days": 1, "checkin": "10:00", "checkout": "16:00"}
+    settings["valid_times"] = 7
+    settings["preferred_group"] = "Hóspedes Vale"
     save_settings(settings, tmp_path)
     loaded = load_settings(tmp_path)
-    assert loaded["group_access"] == {group: [] for group in GROUPS}
+    assert loaded["group_access"]["Day use"] == ["DAY_USE"]
+    assert loaded["group_access"]["Hóspedes Serra"] == ["VISITANTE_SERRA"]
+    assert loaded["group_access"]["Hóspedes Vale"] == ["VISITANTE_VALE"]
+    assert loaded["group_access"]["Special event"] == ["CUSTOM_VISITOR_LEVEL"]
+    assert loaded["group_access"]["Visitors"] == ACCESS_LEVELS
+    assert loaded["schedule_windows"]["DAY_USE"] == "09:00-17:00"
+    assert loaded["access_mapping_revision"] == 1
+    assert loaded["tickets"]["Especial"] == settings["tickets"]["Especial"]
+    assert loaded["valid_times"] == 7
+    assert loaded["preferred_group"] == "Hóspedes Vale"
+    # Depois que a migração for salva, escolhas futuras não são sobrescritas.
+    loaded["group_access"]["Day use"] = ["NOVO_VISITOR"]
+    save_settings(loaded, tmp_path)
+    assert load_settings(tmp_path)["group_access"]["Day use"] == ["NOVO_VISITOR"]
 
 
 def test_ticket_validation_and_duplicate_names():
@@ -318,12 +346,17 @@ def test_group_specific_visitor_access_mapping_cannot_use_unapproved_levels():
         visitor_levels_for_group("Visitors", groups, mapping)
 
     ten_doors = [f"door-{i}" for i in range(10)]
-    verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}], ten_doors, ["VISITANTE"])
-    verify_visitor_access_plan([{"id": "LV002", "name": "NIVEL HOSPEDES"}],
+    verify_visitor_access_plan([{"id": "LV001", "name": "DAY_USE"}], ten_doors[:8], ["DAY_USE"])
+    verify_visitor_access_plan([{"id": "LV002", "name": "VISITANTE_SERRA"}],
+                               ten_doors[:8], ["VISITANTE_SERRA"])
+    verify_visitor_access_plan([{"id": "LV003", "name": "VISITANTE_VALE"}],
+                               ten_doors[:3], ["VISITANTE_VALE"])
+    verify_visitor_access_plan([{"id": "LV004", "name": "NIVEL HOSPEDES"}],
                                ten_doors[:3], ["NIVEL HOSPEDES"])
-    with pytest.raises(ValueError, match="dez|10"):
-        verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"}],
-                                   ten_doors[:9], ["VISITANTE"])
+    for name, invalid in (("DAY_USE", 7), ("VISITANTE_SERRA", 9), ("VISITANTE_VALE", 8)):
+        with pytest.raises(ValueError, match="prevê"):
+            verify_visitor_access_plan([{"id": "L", "name": name}],
+                                       ten_doors[:invalid], [name])
     with pytest.raises(ValueError, match="exatamente um"):
         verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"},
                                     {"id": "LV002", "name": "NIVEL HOSPEDES"}],
