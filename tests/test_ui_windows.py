@@ -339,7 +339,7 @@ def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monk
             # This callback runs on Tk's active main loop, just like production.
             observed.append({
                 "busy": root.busy,
-                "visible": root.registration_loading_overlay.winfo_manager() == "place",
+                "visible": root.registration_loading_overlay.winfo_viewable() == 1,
                 "spinning": root._registration_spinner_angle > 0,
                 "register_disabled": root.register_button.cget("state") == "disabled",
                 "delivery_disabled": root.delivery_button.cget("state") == "disabled",
@@ -373,7 +373,7 @@ def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monk
             assert result == {"registered": True} and error is None
         assert not root.busy
         assert not root._registration_loading_active
-        assert root.registration_loading_overlay.winfo_manager() == ""
+        assert root.registration_loading_overlay.state() == "withdrawn"
         assert root._registration_spinner_job is None
         for widget in (root.register_button, root.delivery_button,
                        root.nav_registration, root.nav_settings):
