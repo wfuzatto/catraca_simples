@@ -93,9 +93,13 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
     seen = set()
     for item in data["list"]:
         record = normalize_checkin(item)
-        if record and record["visitor_id"] not in seen:
-            rows.append(record)
-            seen.add(record["visitor_id"])
+        if record:
+            # Um visitante pode ter vários check-ins em períodos diferentes.
+            identity = (record["visitor_id"], record["registration_record_id"],
+                        record["entry_at"], record["exit_at"])
+            if identity not in seen:
+                rows.append(record)
+                seen.add(identity)
     return {"rows": rows, "total": total, "page": page, "page_size": page_size,
             "has_next": page < MAX_PAGES and (page*page_size < total if total else len(data["list"]) == page_size)}
 
