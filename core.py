@@ -34,6 +34,7 @@ def default_settings() -> dict:
         "host": "127.0.0.1", "port": 443, "ca_file": "",
         "cert_pin_sha256": "",
         "preferred_group": "",  # Sugestão local, nunca substitui consulta da OpenAPI.
+        "valid_times": 0,  # 0 = sem limite de autenticações via qrCodeValidNum; 1..100 = limite.
         "tickets": json.loads(json.dumps(DEFAULT_TICKETS)),
         "schedule_windows": {},  # Admin must confirm HikCentral level schedules, no guesses.
         # A recepção must assign only levels approved for each group.
@@ -354,8 +355,20 @@ def validate_visitor(v: Visitor, now: datetime | None = None) -> None:
         raise ValueError("N\u00famero da reserva muito longo.")
 
 
-def registration_payload(v: Visitor) -> dict:
+def validate_valid_times(value: int) -> int:
+    """HikCentral VisitorInfo.accessInfo.qrCodeValidNum: 0 ou 1..100.
+
+    Conforme OpenAPI 2.6.1/3.0.1, o campo refere-se a autenticação por QR.
+    O efeito em reconhecimento facial/NFC requer verificação no dispositivo.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
+        raise ValueError("VALID TIMES deve ser um inteiro entre 0 e 100 (0 = desabilitado).")
+    return value
+
+
+def registration_payload(v: Visitor, valid_times: int = 0) -> dict:
     validate_visitor(v)
+    valid_times = validate_valid_times(valid_times)
     visitor_info = {
         "visitorGivenName": v.first_name.strip(),
         "visitorFamilyName": v.last_name.strip(),
@@ -365,7 +378,7 @@ def registration_payload(v: Visitor) -> dict:
         "companyName": "Vale",
         "certificateType": 111,
         "certificateNo": "",
-        "accessInfo": {"electrostaticDetectionType": 0, "qrCodeValidNum": 1},
+        "accessInfo": {"electrostaticDetectionType": 0, "qrCodeValidNum": valid_times},
     }
     if v.photo_jpeg:
         visitor_info["faces"] = [{"faceData": base64.b64encode(v.photo_jpeg).decode("ascii")}]
