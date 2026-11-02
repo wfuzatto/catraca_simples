@@ -23,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller==6.16.0 pytest==8.4.2
           # Import real startup modules before running any tests: catches removed symbols.
-          python -c "import app; import core; import modern_ui; import responsive_ui; import devices; import hikcentral; print('Startup module imports OK: ' + core.APP_VERSION)"
+          python -c "import app; import core; import modern_ui; import responsive_ui; import devices; import hikcentral; import face_capture_logic; import face_capture_ui; face_capture_logic.LocalFaceDetector(); print('Startup and offline facial detector imports OK: ' + core.APP_VERSION)"
           if ($LASTEXITCODE -ne 0) { throw "Falha de importacao dos modulos do aplicativo" }
           # Isolate Tk interpreters: creating/destroying many CTk windows in
           # the same Windows Python process can invalidate Tcl's library context.
@@ -37,12 +37,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Teste de spinner/erro falhou" }
           python -m pytest -q 'tests/test_ui_windows.py::test_preflight_task_has_no_registration_spinner'
           if ($LASTEXITCODE -ne 0) { throw "Teste de preflight falhou" }
-          python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py
+          python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py face_capture_logic.py face_capture_ui.py
           if ($LASTEXITCODE -ne 0) { throw "Compilacao dos modulos falhou" }
       - name: Empacotar EXE autocontido
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ValeCadastroFacialNFC --collect-all customtkinter --collect-all smartcard --hidden-import win32crypt app.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ValeCadastroFacialNFC --collect-all customtkinter --collect-all smartcard --collect-data cv2 --hidden-import win32crypt app.py
           if ($LASTEXITCODE -ne 0 -or !(Test-Path dist/ValeCadastroFacialNFC.exe)) { throw "EXE nao gerado" }
       - name: Testar inicializacao do EXE compilado sem rede ou HikCentral
         shell: pwsh
@@ -54,6 +54,7 @@ jobs:
           if (!(Test-Path $reportPath)) { throw "EXE nao criou relatorio de inicializacao" }
           $result = Get-Content $reportPath -Raw | ConvertFrom-Json
           if (!$result.ok -or $result.kind -ne "offline_startup_smoke") { throw "Smoke test do EXE falhou" }
+          if (!$result.face_detector_ready) { throw "Detector facial Haar ausente do EXE Windows" }
           if ($result.network_used -or $result.visitor_created) { throw "Smoke test nao deve realizar operacoes remotas" }
           $match = Select-String -Path core.py -Pattern '^APP_VERSION\s*=\s*["'']([^"'']+)["'']'
           $version = $match.Matches[0].Groups[1].Value
