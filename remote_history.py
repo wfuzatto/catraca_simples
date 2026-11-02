@@ -141,7 +141,7 @@ def decode_photo_response(value):
         raise HikError("Imagem retornada ultrapassa o limite permitido.")
     try:
         # O HikCentral pode inserir quebras de linha na codificação Base64.
-        binary = base64.b64decode(re.sub(r"\\s+", "", b64), validate=True)
+        binary = base64.b64decode(re.sub(r"\s+", "", b64), validate=True)
         if len(binary) > 2_000_000 or len(binary) < 4:
             raise ValueError("Tamanho inválido")
         if not (binary.startswith(b"\xff\xd8\xff") or binary.startswith(b"\x89PNG\r\n\x1a\n")):
