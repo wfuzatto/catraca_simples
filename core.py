@@ -15,6 +15,9 @@ TZ = ZoneInfo("America/Sao_Paulo")
 APP_VERSION = "1.0.0-preview.15"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
+VISITOR_LEVEL_NAME = "VISITANTE"
+EXPECTED_VISITOR_POINTS = 10
+
 DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkin": "09:00", "checkout": "17:00"},
                    "2 dias": {"days": 2, "checkin": "09:00", "checkout": "17:00"},
                    "3 dias": {"days": 3, "checkin": "09:00", "checkout": "17:00"}}
@@ -56,6 +59,34 @@ def validate_visitor_group_selection(
     if selected not in available:
         raise ValueError("Grupo não confirmado pelos grupos reais do HikCentral.")
     return selected
+
+
+def visitor_level_for_registration(group: str, groups: list[str], preferred: str = "") -> list[str]:
+    """Política deste hotel: grupo Visitor é uma categoria, não uma autorização.
+
+    Nunca usar group_access legado nem níveis de funcionários All-Day.
+    """
+    validate_visitor_group_selection(group, groups, preferred)
+    return [VISITOR_LEVEL_NAME]
+
+
+def verify_visitor_access_plan(
+    selected: list[dict], doors: list[str],
+    *, expected_points: int = EXPECTED_VISITOR_POINTS
+) -> None:
+    """Validate ONLY the confirmed Visitor-level before any write operation."""
+    if len(selected) != 1 or str(selected[0].get("name", "")).strip().casefold() != VISITOR_LEVEL_NAME.casefold():
+        raise ValueError("Cadastro bloqueado: somente o nível Visitor VISITANTE é permitido.")
+    level_id = str(selected[0].get("id", "")).strip()
+    if not level_id or not doors or len(doors) != len(set(doors)):
+        raise ValueError("Cadastro bloqueado: IDs do nível/pontos de acesso inválidos.")
+    if len(doors) != expected_points:
+        raise ValueError(
+            f"VISITANTE possui {len(doors)} pontos retornados pela API; "
+            f"eram esperados {expected_points}. Revise a configuração no HikCentral. "
+            "Nenhum cadastro foi enviado."
+        )
+
 
 
 def initial_visitor_group(available: list[str], preferred: str = "") -> str:
@@ -379,6 +410,24 @@ def _write_json_atomic(path: Path, data: dict) -> None:
     os.replace(temp, path)
 
 
+
+def mark_appointment_inflight(base: Path | None = None) -> None:
+    """Persist a non-personal checkpoint BEFORE the first remote write.
+
+    If the response to appointment is lost, do not automatically resubmit.
+    """
+    path = (base or app_dir()) / "pending.json"
+    if path.exists():
+        raise RuntimeError("Há cadastro pendente; concilie antes de nova reserva.")
+    _write_json_atomic(path, {
+        "stage": "appointment_inflight",
+        "visitor_id": "", "appointment_id": "",
+        "access_ids": [], "door_ids": [], "registered": False,
+        "assigned": [], "expect_face": False, "expect_card": False
+    })
+
+
+
 def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = None,
                  *, appointment_id: str = "", door_ids: list[str] | None = None,
                  registered: bool = True, expect_face: bool = True,
@@ -388,8 +437,11 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
     if not expect_face and not expect_card:
         raise ValueError("Informe reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
     if path.exists():
-        raise RuntimeError("Há cadastro pendente. Confira o cadastro anterior antes de criar outro.")
+        old = load_pending(base)
+        if not (isinstance(old, dict) and old.get("stage") == "appointment_inflight"):
+            raise RuntimeError("Há cadastro pendente. Confira o cadastro anterior antes de criar outro.")
     _write_json_atomic(path, {
+        "stage": "appointment_confirmed",
         "visitor_id": visitor_id, "appointment_id": appointment_id,
         "access_ids": access_ids, "door_ids": door_ids or [],
         "expect_face": bool(expect_face), "expect_card": bool(expect_card),
