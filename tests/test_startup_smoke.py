@@ -36,4 +36,5 @@ def test_real_gui_offline_smoke_does_not_connect_to_hikcentral(tmp_path, monkeyp
         "visitor_created": False,
         "ok": True,
         "gui_created": True,
+        "face_detector_ready": True,
     }
