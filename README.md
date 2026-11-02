@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.15` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.16` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -160,3 +160,17 @@ A compatibilidade visual e resolução é testada automaticamente com geometria 
 - O programa bloqueia o cadastro quando os níveis selecionados não têm confirmação para os horários configurados; horários diferentes exigem níveis diferentes.
 - Não restrinja saídas de emergência nem rotas de evacuação; os horários operacionais não substituem as medidas de segurança.
 - Testes automatizados cobrem multi-dia, fuso horário, migração, bloqueio sem agenda confirmada e proporção da foto.
+
+## Auditoria do fluxo de visitantes — preview.16
+
+**Política de acesso fixa:** em cada cadastro, independentemente do grupo Visitor selecionado, a aplicação consulta os níveis com `type=2` e exige exatamente um nível `VISITANTE`. O nível precisa retornar **10 IDs distintos de pontos** pela OpenAPI; divergências interrompem o cadastro antes de qualquer escrita. Os 10 IDs são reutilizados para a solicitação de distribuição, sem adicionar ou modificar pontos no HikCentral.
+
+O aplicativo envia explicitamente `VISITANTE` em `accessInfo.accessLevelList` tanto na reserva (`/artemis/api/visitor/v2/appointment`) quanto no check-in (`/artemis/api/visitor/v1/registerment`). Após registro, a atribuição de nível usa `/artemis/api/acs/v1/privilege/group/single/addPersons` com `type=2` e o mesmo ID; a reaplicação usa os dez pontos retornados. Nenhuma chamada a `/artemis/api/resource/v1/person/single/add` ou departamento ACQUAVALE é feita. Os antigos mapeamentos `ENTRADA ACQUAVALE`, `SAIDA ACQUAVALE`, etc. permanecem armazenados apenas para compatibilidade e não são utilizados no cadastro. A tela Configurações os apresenta como legados, sem edição.
+
+**Validade e horário:** o app transmite a mesma validade local `America/Sao_Paulo` no formato ISO 8601 com offset (`-03:00` na data testada) para `appointStartTime`, `appointEndTime`, `visitStartTime`, `visitEndTime`. O horário ACQUAVALE 09:00–17:00 todos os dias pertence ao nível no HikCentral; não é modificado pelo aplicativo. Antes de cadastrar, a recepção precisa ter a confirmação administrativa `VISITANTE=09:00-17:00` em Agendas diárias verificadas. Esta confirmação NÃO substitui uma consulta real de schedule nem um teste de catraca.
+
+**Reexecuções:** antes de enviar a primeira reserva, `pending.json` registra um marcador sem nome, foto, número de cartão ou segredos. Caso a resposta da criação da reserva se perca, nenhum novo envio é feito automaticamente; é necessária conciliação manual no HikCentral antes de remover o bloqueio. Pendências legadas cujos níveis/pontos não coincidam com o único `VISITANTE` e seus dez pontos são bloqueadas, sem reaplicação. Falhas de API não apresentam a mensagem bruta do servidor, que pode conter PII ou credenciais.
+
+**Conferência segura no servidor:** com o executável, rode `ValeCadastroFacialNFC.exe --check-openapi relatorio.json` usando a rede e as credenciais já protegidas no Windows. Este comando só consulta grupos e níveis, valida presença do nível `VISITANTE` com dez pontos e checa periféricos; não cria visitante, não distribui credenciais e não abre catraca. O relatório mostra `required_visitor_level`, `required_visitor_point_count` e sinaliza `effective_schedule_readback=not_verified_by_this_API_check` porque a consulta não prova a agenda; a versão e o template efetivos do HikCentral precisam ser conferidos diretamente no servidor.
+
+**Limites da validação:** testes automatizados e respostas simuladas comprovam quais URLs/payloads seriam enviados e verificam a assinatura da solicitação, validade e política de acesso, mas não comprovam que o HikCentral real aceitou e persistiu um cadastro, nem que os dez terminais aplicaram as regras. Sem autorização específica, nenhum cadastro real foi criado. Documentação pública consultada: HikCentral Professional OpenAPI (publicação 2024) e fluxo PHP `integracao_catracas_hikivision`; confirmar a documentação da versão de HikCentral instalada antes de qualquer mudança nos endpoints.
