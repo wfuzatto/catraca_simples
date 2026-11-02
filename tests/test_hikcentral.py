@@ -313,3 +313,66 @@ def test_find_registration_missing_stays_unresolved():
     api, session = client({"code": "0", "data": {"list": [], "totalNum": 0}})
     assert api.find_existing_registration("v1", "2099-10-31T12:00:00-03:00",
                                           "2099-11-01T23:59:59-03:00") is None
+
+
+def test_real_visitor_api_paths_include_only_visitor_level_and_local_validity():
+    import json
+    from core import verify_visitor_access_plan, registration_payload, Visitor, parse_local
+    api, session = client([
+        {"code": "0", "data": {"appointRecordId": "appointment-1", "visitorId": "visitor-1"}},
+        {"code": "0", "data": {"recordId": "registration-1"}},
+        {"code": "0", "data": {}},
+        {"code": "0", "data": {}},
+    ])
+    selected = [{"id": "17", "name": "VISITANTE",
+                 "elements": [{"Element": {"ID": f"point-{n}"}} for n in range(10)]}]
+    doors = [f"point-{n}" for n in range(10)]
+    verify_visitor_access_plan(selected, doors)
+    start = parse_local("02/11/2026 09:00")
+    end = parse_local("04/11/2026 17:00")
+    info = registration_payload(
+        Visitor("Visitante", "Teste", "Hóspedes Serra", b"", "1234", start, end, "A123"))
+    appointment, visitor_id = api.create_appointment(info, selected)
+    registration = api.register_visitor(info, selected, appointment, visitor_id)
+    assert registration == "registration-1"
+    api.assign_access(visitor_id, selected[0]["id"])
+    api.apply(visitor_id, doors)
+    paths = [url.split(":443")[-1] for url, _ in session.calls]
+    assert paths == [
+        "/artemis/api/visitor/v2/appointment",
+        "/artemis/api/visitor/v1/registerment",
+        "/artemis/api/acs/v1/privilege/group/single/addPersons",
+        "/artemis/api/visitor/v1/auth/reapplication",
+    ]
+    assert all("/resource/v1/person/single/add" not in path for path in paths)
+    reserve = json.loads(session.calls[0][1]["data"])
+    checkin = json.loads(session.calls[1][1]["data"])
+    assignment = json.loads(session.calls[2][1]["data"])
+    for request, start_key, end_key in [
+        (reserve, "appointStartTime", "appointEndTime"),
+        (checkin, "visitStartTime", "visitEndTime")
+    ]:
+        assert request[start_key] == "2026-11-02T09:00:00-03:00"
+        assert request[end_key] == "2026-11-04T17:00:00-03:00"
+        level = request["accessInfo"]["accessLevelList"]
+        assert len(level) == 1
+        assert level[0]["accessLevel"]["id"] == 17
+        assert level[0]["accessLevel"]["baseInfo"]["name"] == "VISITANTE"
+        personal = request["visitorInfoList"][0]["VisitorInfo"]
+        assert personal["visitorGroupName"] == "Hóspedes Serra"
+        assert personal["cards"] == [{"cardNo": "1234"}]
+        assert personal["remark"] == "A123"
+    assert assignment["type"] == 2
+    assert assignment["privilegeGroupId"] == "17"
+    assert assignment["list"] == [{"id": "visitor-1"}]
+    assert json.loads(session.calls[3][1]["data"])["doorIndexCodes"] == ",".join(doors)
+
+
+def test_untrusted_error_messages_do_not_expose_credentials_or_card():
+    from hikcentral import _http_failure
+    secret = "super-secret-cannot-leak"
+    raw = {"code": "500", "msg": f"unexpected error {secret} cardNo=12345678"}
+    msg = _http_failure(500, raw, "/artemis/api/visitor/v1/registerment")
+    assert secret not in msg
+    assert "12345678" not in msg
+    assert "500" in msg
