@@ -59,7 +59,13 @@ def default_settings() -> dict:
             for group in GROUPS
         },
         "access_mapping_revision": VALE_MAPPING_REVISION,
-        "card_format": "DECIMAL_LITTLE", "camera_index": 0
+        "card_format": "DECIMAL_LITTLE", "camera_index": 0,
+        # Captura facial inteligente; perfis antigos recebem defaults via load_settings.
+        "face_auto_capture": True,
+        "face_stability_ms": 900,
+        "face_sensitivity": "Normal",
+        "face_require_quality": True,
+        "face_timeout_s": 35
     }
 
 
