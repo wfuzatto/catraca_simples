@@ -350,14 +350,19 @@ def _settings(app):
     app.tickets_text.pack(fill="both", expand=True)
     levels_edit = ctk.CTkFrame(editors, fg_color="transparent")
     levels_edit.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-    _text(levels_edit, "Níveis de acesso por grupo", size=12, bold=True).pack(anchor="w", pady=(0, 6))
-    app.access_text = tk.Text(
-        levels_edit, height=7, bg="#FAFCFF", fg=INK, insertbackground=INK,
-        relief="flat", highlightthickness=1, highlightbackground="#D5DFEB",
-        font=("Consolas", 10), wrap="word", padx=11, pady=9)
-    app.access_text.pack(fill="both", expand=True)
+    _text(levels_edit, "Nível Visitor obrigatório", size=12, bold=True).pack(
+        anchor="w", pady=(0, 6))
+    _text(levels_edit, "VISITANTE", size=18, color=BLUE, bold=True).pack(
+        anchor="w", pady=(3, 8))
+    _text(levels_edit,
+          "Nível type=2 · 10 pontos de acesso · Agenda ACQUAVALE 09:00–17:00. "
+          "Os grupos são categorias; não concedem níveis All-Day dos funcionários.",
+          size=12, color=MUTED).pack(anchor="w")
+    # Widget de compatibilidade para preservar configurações existentes no disco,
+    # mas NÃO permitir que mapeamentos legados concedam acessos.
+    app.access_text = tk.Text(levels_edit, height=1)
     app.editor_cells = [ticket_edit, levels_edit]
-    _text(catalog, "Use apenas os níveis Visitor autorizados no HikCentral. Grupos sem níveis ficam bloqueados.",
+    _text(catalog, "Somente VISITANTE será enviado. Mapeamentos antigos por grupo são preservados, mas ignorados.",
           size=11, color=MUTED).pack(anchor="w", pady=(8, 0))
 
     _text(catalog, "Agendas diárias verificadas no HikCentral · Nível=09:00-17:00",
@@ -369,9 +374,8 @@ def _settings(app):
     app.schedule_text.pack(fill="x")
     _text(
         catalog,
-        "Antes de cadastrar, confirme no HikCentral que TODOS os níveis usados neste ingresso têm agenda semanal "
-        "e feriados iguais ao horário diário, aplicados e testados nas catracas. "
-        "A API de cadastro envia apenas a data inicial e a final.",
+        "Confirme que o nível VISITANTE mantém os 10 pontos autorizados e a agenda ACQUAVALE "
+        "diária 09:00–17:00. O aplicativo não modifica níveis, agendas ou pontos no servidor.",
         size=11, color="#A05A14").pack(anchor="w", pady=(8, 0))
 
 
