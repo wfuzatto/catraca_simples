@@ -84,14 +84,20 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
         payload["visitorName"] = name
     response = client.post(CHECKINS_PATH, payload)
     data = response.get("data") or {}
-    if not isinstance(data, dict) or not isinstance(data.get("list"), list):
-        raise HikError("HikCentral não retornou lista paginada de check-ins.")
+    if not isinstance(data, dict):
+        raise HikError("HikCentral não retornou resultado paginado de check-ins.")
     total = int(data.get("totalNum") or 0)
+    # Algumas versões omitem list quando a pesquisa não encontra resultados.
+    items = data.get("list")
+    if items is None and total == 0:
+        items = []
+    if not isinstance(items, list):
+        raise HikError("HikCentral não retornou lista paginada de check-ins.")
     if total < 0:
         raise HikError("Total inválido no resultado do HikCentral.")
     rows = []
     seen = set()
-    for item in data["list"]:
+    for item in items:
         record = normalize_checkin(item)
         if record:
             # Um visitante pode ter vários check-ins em períodos diferentes.
@@ -101,7 +107,7 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
                 rows.append(record)
                 seen.add(identity)
     return {"rows": rows, "total": total, "page": page, "page_size": page_size,
-            "has_next": page < MAX_PAGES and (page*page_size < total if total else len(data["list"]) == page_size)}
+            "has_next": page < MAX_PAGES and (page*page_size < total if total else len(items) == page_size)}
 
 
 def visitor_details(client, visitor_id: str):
@@ -134,7 +140,8 @@ def decode_photo_response(value):
     if len(b64) > 2_800_000:
         raise HikError("Imagem retornada ultrapassa o limite permitido.")
     try:
-        binary = base64.b64decode(b64, validate=True)
+        # O HikCentral pode inserir quebras de linha na codificação Base64.
+        binary = base64.b64decode(re.sub(r"\\s+", "", b64), validate=True)
         if len(binary) > 2_000_000 or len(binary) < 4:
             raise ValueError("Tamanho inválido")
         if not (binary.startswith(b"\xff\xd8\xff") or binary.startswith(b"\x89PNG\r\n\x1a\n")):
