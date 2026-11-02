@@ -370,9 +370,9 @@ def _settings(app):
     app.editor_cells = [ticket_edit, levels_edit]
     _text(
         catalog,
-        "Formato: Grupo Visitor=Nível. Ex.: Hóspedes Vale=VISITANTE. "
-        "Cada grupo deve ter exatamente um nível retornado pela OpenAPI Visitor (type=2). "
-        "Não vincule níveis All-Day de funcionários.",
+        "Padrão atual: Day use=DAY_USE (8 pontos), Hóspedes Serra=VISITANTE_SERRA (8 pontos), "
+        "Hóspedes Vale=VISITANTE_VALE (3 pontos). Todos usam a agenda ACQUAVALE. "
+        "Cada grupo exige um nível Visitor type=2; nunca níveis All-Day de funcionários.",
         size=11, color=MUTED).pack(anchor="w", pady=(8, 0))
 
     _text(catalog, "Agendas diárias verificadas no HikCentral · Nível=09:00-17:00",
@@ -384,9 +384,10 @@ def _settings(app):
     app.schedule_text.pack(fill="x")
     _text(
         catalog,
-        "Confirme os horários e pontos de cada nível configurado antes de vinculá-lo ao grupo. "
-        "VISITANTE atualmente usa ACQUAVALE 09:00–17:00 e 10 pontos. "
-        "O aplicativo não altera a configuração do HikCentral.",
+        "DAY_USE e VISITANTE_SERRA: 8 pontos cada. VISITANTE_VALE: 3 pontos. "
+        "Agenda ACQUAVALE 09:00–17:00 diariamente conforme informado pelo hotel. "
+        "O aplicativo apenas consulta níveis e distribui credenciais nos pontos retornados; "
+        "não altera agendas, níveis ou catracas.",
         size=11, color="#A05A14").pack(anchor="w", pady=(8, 0))
 
 
