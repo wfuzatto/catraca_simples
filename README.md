@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.16` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.17` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -161,7 +161,9 @@ A compatibilidade visual e resolução é testada automaticamente com geometria 
 - Não restrinja saídas de emergência nem rotas de evacuação; os horários operacionais não substituem as medidas de segurança.
 - Testes automatizados cobrem multi-dia, fuso horário, migração, bloqueio sem agenda confirmada e proporção da foto.
 
-## Auditoria do fluxo de visitantes — preview.16
+## Histórico: política fixa da preview.16 (substituída na preview.17)
+
+**Importante:** este bloco descreve a Preview 16 e não é mais a política operacional atual. Na Preview 17, os níveis são definidos por grupo.
 
 **Política de acesso fixa:** em cada cadastro, independentemente do grupo Visitor selecionado, a aplicação consulta os níveis com `type=2` e exige exatamente um nível `VISITANTE`. O nível precisa retornar **10 IDs distintos de pontos** pela OpenAPI; divergências interrompem o cadastro antes de qualquer escrita. Os 10 IDs são reutilizados para a solicitação de distribuição, sem adicionar ou modificar pontos no HikCentral.
 
@@ -174,3 +176,17 @@ O aplicativo envia explicitamente `VISITANTE` em `accessInfo.accessLevelList` ta
 **Conferência segura no servidor:** com o executável, rode `ValeCadastroFacialNFC.exe --check-openapi relatorio.json` usando a rede e as credenciais já protegidas no Windows. Este comando só consulta grupos e níveis, valida presença do nível `VISITANTE` com dez pontos e checa periféricos; não cria visitante, não distribui credenciais e não abre catraca. O relatório mostra `required_visitor_level`, `required_visitor_point_count` e sinaliza `effective_schedule_readback=not_verified_by_this_API_check` porque a consulta não prova a agenda; a versão e o template efetivos do HikCentral precisam ser conferidos diretamente no servidor.
 
 **Limites da validação:** testes automatizados e respostas simuladas comprovam quais URLs/payloads seriam enviados e verificam a assinatura da solicitação, validade e política de acesso, mas não comprovam que o HikCentral real aceitou e persistiu um cadastro, nem que os dez terminais aplicaram as regras. Sem autorização específica, nenhum cadastro real foi criado. Documentação pública consultada: HikCentral Professional OpenAPI (publicação 2024) e fluxo PHP `integracao_catracas_hikivision`; confirmar a documentação da versão de HikCentral instalada antes de qualquer mudança nos endpoints.
+
+## Preview.17 — Vínculo de níveis por grupo e diagnóstico de check-in
+
+- Foi restaurado o campo editável **Níveis de acesso por grupo Visitor** na aba Configurações.
+- Sintaxe: `Nome exato do grupo=Nome exato do nível Visitor`, uma linha por grupo. Exemplo de configuração de teste: `Hóspedes Vale=VISITANTE`.
+- Cada grupo exige exatamente **um** nível; o aplicativo recusa grupos sem vínculo ou com vários níveis. O nível deve existir na consulta OpenAPI **type=2**, que exclui níveis de funcionários type=1. O aplicativo não cria nem altera níveis, departamentos ou pontos no HikCentral.
+- O nível `VISITANTE` conserva a validação específica de **10 pontos**; outros níveis Visitor podem ter suas quantidades próprias, retornadas pela API, sem assumir que todos possuem dez.
+- Cada nível utilizado deve ter sua **agenda diária efetiva** confirmada no HikCentral. Registre em Configurações `Nome do nível=09:00-17:00` somente após verificar a agenda aplicada.
+- As associações realizadas na reserva, no check-in e na atribuição de privilégios seguem o mapeamento do grupo escolhido. Um checkpoint de recuperação só permite reaplicar o nível Visitor original comprovado, e nunca outro vínculo assumido.
+- **Verificar última entrega** agora consulta separadamente a entrega aos dispositivos e, se a versão do cadastro deixou datas salvas, o registro de check-in via API somente leitura. Entrega confirmada não é considerada prova de check-in.
+- Em cadastros feitos por versões anteriores, o arquivo local de última entrega pode não ter datas suficientes para essa segunda consulta. Nesse caso, verificar manualmente em **Visitor > Visitor Check-In/Out** e **Visitor Information**, com filtros de data e grupo.
+- Um resultado incerto da reserva deixa um checkpoint local e bloqueia repetição automática para evitar duplicidade. Não remova o arquivo pendente sem conferir o registro real.
+- O endereço/versão da API instalada e a persistência real de um visitante só poderão ser confirmados com consulta ao HikCentral do hotel; testes automatizados usam respostas simuladas. Não foi criado visitante novo durante esta correção.
+
