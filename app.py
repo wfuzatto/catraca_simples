@@ -271,6 +271,7 @@ class ValeApp(tk.Tk):
                 "valid_times": validate_valid_times(int(self.s_valid_times.get().strip())),
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
                 "group_access": parse_access_lines(self.access_text.get("1.0", tk.END)),
+                "access_mapping_revision": self.settings.get("access_mapping_revision", 1),
                 "schedule_windows": parse_schedule_lines(
                     self.schedule_text.get("1.0", tk.END))
             }
