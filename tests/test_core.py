@@ -369,3 +369,46 @@ def test_visitor_timezone_and_daily_window():
     info = payload["visitorInfoList"][0]["VisitorInfo"]
     assert info["remark"] == "123"
     assert info["cards"][0]["cardNo"] == "123456789"
+
+
+@pytest.mark.parametrize("valid_times", [0, 1, 2, 5, 20, 100])
+def test_valid_times_is_written_to_visitor_info_access(valid_times):
+    from core import validate_valid_times
+    start = datetime(2099, 11, 2, 9, tzinfo=TZ)
+    end = datetime(2099, 11, 2, 17, tzinfo=TZ)
+    obj = Visitor("Visitante", "Teste", "Day use", b"", "1234567", start, end)
+    info = registration_payload(obj, valid_times)["visitorInfoList"][0]["VisitorInfo"]
+    assert info["accessInfo"]["qrCodeValidNum"] == valid_times
+    assert info["accessInfo"]["electrostaticDetectionType"] == 0
+    assert validate_valid_times(valid_times) == valid_times
+
+
+@pytest.mark.parametrize("invalid", [-1, 101, 1.5, "1", None, True, False])
+def test_valid_times_rejects_outside_documented_range(invalid):
+    from core import validate_valid_times
+    start = datetime(2099, 11, 2, 9, tzinfo=TZ)
+    end = datetime(2099, 11, 2, 17, tzinfo=TZ)
+    obj = Visitor("Visitante", "Teste", "Day use", b"", "1234567", start, end)
+    with pytest.raises(ValueError, match="VALID TIMES"):
+        registration_payload(obj, invalid)
+    with pytest.raises(ValueError, match="VALID TIMES"):
+        validate_valid_times(invalid)
+
+
+def test_valid_times_new_default_and_old_config_migrated_without_resetting_tickets(tmp_path):
+    from core import validate_valid_times
+    defaults = default_settings()
+    assert defaults["valid_times"] == 0
+    assert registration_payload(
+        Visitor("Visitante", "Teste", "Day use", b"", "1234567",
+                datetime(2099, 11, 2, 9, tzinfo=TZ), datetime(2099, 11, 2, 17, tzinfo=TZ))
+    )["visitorInfoList"][0]["VisitorInfo"]["accessInfo"]["qrCodeValidNum"] == 0
+    old = default_settings()
+    old.pop("valid_times")
+    save_settings(old, tmp_path)
+    migrated = load_settings(tmp_path)
+    assert migrated["valid_times"] == 0
+    assert migrated["tickets"] == old["tickets"]
+    migrated["valid_times"] = 7
+    save_settings(migrated, tmp_path)
+    assert load_settings(tmp_path)["valid_times"] == 7
