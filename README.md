@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.20` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.21` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -230,3 +230,11 @@ Atualização a partir da configuração de Access Control exibida pelo hotel em
 - O self-test utiliza configurações artificiais, verifica os níveis padrão e a quantidade de pontos, inicializa e encerra a interface Tk, não consulta rede, não lê credenciais reais e não cria visitantes.
 - O GitHub Actions recusa publicar se o EXE não abrir, se o teste offline falhar ou se a versão embutida não corresponder ao código-fonte.
 - A compilação e o smoke test não substituem a homologação dos recursos de câmera, leitor NFC e OpenAPI no hotel.
+
+## Preview.21 — Indicador animado durante o cadastro no HikCentral
+
+- O botão **CADASTRAR VISITANTE** continua fazendo a pré-validação (níveis Visitor e catracas) e exibindo o diálogo de confirmação. **Depois de clicar SIM**, aparece um cartão central com um **indicador circular girando**, o texto `Cadastrando visitante...` e `Aguardando resposta do HikCentral.`.
+- Enquanto a solicitação de cadastro, check-in, distribuição e consulta de entrega estiver em andamento, os botões de cadastrar, consultar última entrega e navegação permanecem desabilitados para evitar solicitações repetidas. O worker de OpenAPI continua em thread separada; a interface Tk mantém animação fluida.
+- Quando a API concluir, **com sucesso ou erro**, o indicador para, o cartão desaparece, os botões voltam a ficar disponíveis e a mensagem normal de resultado é mostrada. As proteções existentes de operação pendente e duplicidade continuam em vigor.
+- Não há alteração de payloads, níveis, pontos de acesso, configuração de ingressos, fotos, NFC, nem horários do HikCentral.
+- Testes automatizados no Windows simulam espera, animação e finalização nos caminhos de sucesso e falha e verificam que a prévia de níveis não exibe spinner.
