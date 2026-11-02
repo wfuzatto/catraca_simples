@@ -952,20 +952,11 @@ class ValeApp(tk.Tk):
             messagebox.showinfo("Reenvio", "Solicitação enviada ao visitante existente. Entrega: " + result["state"])
         self.task(work, finish)
 
-    def view_history_selection(self):
+    def view_history_selection(self, _event=None):
         record = self._selected_history()
-        if not record:
-            return
-        messagebox.showinfo(
-            "Dados do cadastro / Correções",
-            f"Visitante: {record.get('first','')} {record.get('last','')}\n"
-            f"Grupo: {record.get('group','')}\n"
-            f"Reserva/apartamento: {record.get('reservation','')}\n"
-            f"Níveis: {', '.join(record.get('access_names', []))}\n"
-            f"Validade: {record.get('entry_at','')} até {record.get('exit_at','')}\n"
-            f"Visitor ID: {record['visitor_id']}\n\n"
-            "Alterações de nome, validade, cartão e foto devem ser feitas no HikCentral. "
-            "Não criaremos nova reserva para corrigir dados existentes. Depois use Reenviar credencial.")
+        if record:
+            from visitor_editor import open_visitor_editor
+            open_visitor_editor(self, record)
 
     def verify_last_delivery(self):
         try:
