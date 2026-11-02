@@ -239,7 +239,8 @@ class ValeApp(tk.Tk):
                 formatted_start = aligned.strftime("%d/%m/%Y %H:%M")
                 if self.start.get() != formatted_start:
                     self.start.set(formatted_start)
-                    return  # trace recalcula novamente com a data já normalizada
+                    # Um callback trace do Tk não reentra automaticamente.
+                    # O fim precisa ser recalculado nesta mesma execução.
             result = end_for_ticket(aligned, ticket)
         except (KeyError, ValueError):
             return
