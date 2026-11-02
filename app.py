@@ -943,6 +943,8 @@ def readonly_api_check(report_path: Path) -> int:
         groups = client.visitor_groups()
         if not groups or not levels:
             raise RuntimeError("OpenAPI não retornou grupos e níveis Visitor.")
+        selected, doors = client.resolve_levels([VISITOR_LEVEL_NAME])
+        verify_visitor_access_plan(selected, doors)
         runtime_ok = opencv_imported and pcsc_library_imported
         report = {
             "ok": runtime_ok,
@@ -951,6 +953,13 @@ def readonly_api_check(report_path: Path) -> int:
             "certificate_pin_configured": bool(settings.get("cert_pin_sha256")),
             "visitor_group_count": len(groups),
             "visitor_level_count": len(levels),
+            "required_visitor_level": VISITOR_LEVEL_NAME,
+            "required_visitor_level_type": 2,
+            "required_visitor_level_found": True,
+            "required_visitor_point_count": len(doors),
+            "effective_schedule_readback": "not_verified_by_this_API_check",
+            "default_level_flag_readback": "not_verified_by_this_API_check",
+            "openhikcentral_writes_performed": False,
             "opencv_imported": opencv_imported,
             "opencv_version": opencv_version,
             "pcsc_library_imported": pcsc_library_imported,
