@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.19` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.20` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -221,3 +221,12 @@ Atualização a partir da configuração de Access Control exibida pelo hotel em
 - Verifique em **Configurações > Níveis de acesso por grupo** e clique **Salvar configurações** após instalar para persistir a migração. Os testes automatizados são simulados e **não criam visitantes reais ou liberam catracas**. Para homologar, execute a consulta de OpenAPI e confira os três níveis e pontos na rede do hotel.
 
 **Atenção:** as seções históricas Preview.16/17 usam o nível de teste `VISITANTE` e não refletem a organização de acesso aprovada na Preview.19.
+
+## Preview.20 — Correção crítica de inicialização do Windows
+
+- A Preview 19 não iniciava devido ao import de `VISITOR_LEVEL_NAME` em `app.py`, removido do `core.py` na atualização dos níveis Visitor. O import obsoleto foi retirado, sem restaurar o nível antigo como padrão.
+- O novo EXE mantém a configuração aprovada: Day use → `DAY_USE` (8 pontos), Hóspedes Serra → `VISITANTE_SERRA` (8), Hóspedes Vale → `VISITANTE_VALE` (3); todos com a janela confirmada de 09:00–17:00.
+- **Proteção contra regressão:** o pipeline verifica explicitamente `import app` e dependências, executa os testes, compila o EXE e, **antes de publicar o Release**, executa o próprio `ValeCadastroFacialNFC.exe --self-test <arquivo.json>` no Windows.
+- O self-test utiliza configurações artificiais, verifica os níveis padrão e a quantidade de pontos, inicializa e encerra a interface Tk, não consulta rede, não lê credenciais reais e não cria visitantes.
+- O GitHub Actions recusa publicar se o EXE não abrir, se o teste offline falhar ou se a versão embutida não corresponder ao código-fonte.
+- A compilação e o smoke test não substituem a homologação dos recursos de câmera, leitor NFC e OpenAPI no hotel.
