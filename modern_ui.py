@@ -284,6 +284,7 @@ def _settings(app):
     app.s_cert_pin, app.s_key, app.s_secret = tk.StringVar(), tk.StringVar(), tk.StringVar()
     app.s_format, app.s_camera = tk.StringVar(), tk.StringVar()
     app.s_preferred_group = tk.StringVar()
+    app.s_valid_times = tk.StringVar(value="0")
 
     # Gateway.
     gateway = _card(scroller)
@@ -332,6 +333,15 @@ def _settings(app):
     app.preferred_box.configure(values=(), state="disabled")
     _text(local, "Grupo selecionado bloqueia o Cadastro neste caixa. Sem preferência permite escolher livremente.",
           size=11, color=MUTED).pack(anchor="w", pady=(9, 0))
+    times_area = ctk.CTkFrame(local, fg_color="transparent")
+    times_area.pack(fill="x", pady=(16, 0))
+    _text(times_area, "VALID TIMES", size=12, bold=True).pack(anchor="w", pady=(0, 6))
+    ttk.Spinbox(times_area, from_=0, to=100, textvariable=app.s_valid_times,
+                font=("Segoe UI", 12), width=9).pack(anchor="w", ipady=7)
+    _text(local,
+          "0 = sem limite de utilizações; 1 a 100 = máximo de utilizações. "
+          "Válido para novos visitantes. A data e a agenda do nível continuam obrigatórias.",
+          size=11, color=MUTED).pack(anchor="w", pady=(7, 0))
 
     # Ticket catalog and access levels. Editable text preserves all original semantics.
     catalog = _card(scroller)
