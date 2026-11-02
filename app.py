@@ -813,7 +813,7 @@ class ValeApp(tk.Tk):
         except Exception:
             local_rows = []
         if not self.key or not self.secret:
-            self._show_history_rows(local_rows, "Somente dados LOCAIS: configure a conexão HikCentral.")
+            self._show_history_rows(local_rows, f"{len(local_rows)} cadastros LOCAIS: configure a conexão HikCentral.")
             return
         if self.busy:
             self.history_status.set("Operação em andamento; atualize a lista ao terminar.")
