@@ -148,41 +148,60 @@ class CaptureGate:
 
 
 class LocalFaceDetector:
-    """Offline OpenCV Haar cascades bundled by PyInstaller --collect-data cv2."""
-    def __init__(self):
+    """Exact offline OpenCV YuNet model/threshold already used by face_scanner.
+
+    The model is SHA256-pinned during build and embedded by PyInstaller.
+    Never silently downgrade to Haar: a fallback would recreate the false
+    'no face' result observed at the front desk.
+    """
+    MODEL_NAME = "face_detection_yunet_2023mar.onnx"
+
+    def __init__(self, model_path=None, detection_threshold=0.85):
         import cv2
+        import sys
         self.cv2 = cv2
-        base = Path(cv2.data.haarcascades)
-        face = base / "haarcascade_frontalface_default.xml"
-        eyes = base / "haarcascade_eye.xml"
-        self.face = cv2.CascadeClassifier(str(face))
-        self.eyes = cv2.CascadeClassifier(str(eyes))
-        if self.face.empty():
-            raise RuntimeError("Detector facial não disponível. Use captura manual.")
+        if not hasattr(cv2, "FaceDetectorYN"):
+            raise RuntimeError("OpenCV não suporta YuNet. Use captura manual.")
+        model = Path(model_path) if model_path is not None else (
+            Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+            / "models" / self.MODEL_NAME
+        )
+        if not model.is_file():
+            raise RuntimeError("Modelo YuNet ausente do aplicativo. Capture manualmente.")
+        self.detector = cv2.FaceDetectorYN.create(
+            str(model), "", (320, 320), float(detection_threshold), 0.3, 5000
+        )
+        self.engine = "yunet"
+        self.model_path = str(model)
 
     def analyze(self, frame, config):
         cv2 = self.cv2
         h, w = frame.shape[:2]
-        ratio = min(1.0, 640/max(w, 1))
-        small = cv2.resize(frame, (round(w*ratio), round(h*ratio))) if ratio < 1 else frame
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        boxes = self.face.detectMultiScale(gray, scaleFactor=1.09, minNeighbors=5, minSize=(45, 45))
-        count = len(boxes)
+        # At reception, preserve a fast offline pipeline on CPU-only machines.
+        scale = min(1.0, 640 / max(1, w))
+        small = (cv2.resize(frame, (max(1, round(w * scale)), max(1, round(h * scale))))
+                 if scale < 1 else frame)
+        sh, sw = small.shape[:2]
+        self.detector.setInputSize((sw, sh))
+        _, detected = self.detector.detect(small)
+        count = 0 if detected is None else len(detected)
         if count != 1:
             return assess_face(count, None, (w, h), config=config)
-        x,y,fw,fh = [int(v) for v in boxes[0]]
-        x0,y0,bw,bh = [int(round(n/ratio)) for n in (x,y,fw,fh)]
-        area = gray[y:y+fh, x:x+fw]
-        blur = cv2.Laplacian(area, cv2.CV_64F).var() if area.size else 0.0
-        bright = float(area.mean()) if area.size else 0.0
-        angle = None
-        if not self.eyes.empty() and area.size:
-            eyes = self.eyes.detectMultiScale(area[:max(1,fh*2//3)], minNeighbors=5, minSize=(10,10))
-            if len(eyes) >= 2:
-                eye_pair = sorted(eyes, key=lambda e:e[2]*e[3], reverse=True)[:2]
-                eye_pair.sort(key=lambda e:e[0])
-                ex1,ey1,ew1,eh1 = eye_pair[0]
-                ex2,ey2,ew2,eh2 = eye_pair[1]
-                angle = degrees(atan2((ey2+eh2/2)-(ey1+eh1/2), (ex2+ew2/2)-(ex1+ew1/2)))
-        return assess_face(1, (x0,y0,bw,bh), (w,h), blur=float(blur),
+        row = detected[0]
+        sx, sy, fw, fh = [float(v) for v in row[:4]]
+        # Preserve unclamped bounds for assessment of cropped faces.
+        box = (round(sx / scale), round(sy / scale),
+               round(fw / scale), round(fh / scale))
+        x, y, bw, bh = box
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(w, x + bw), min(h, y + bh)
+        gray = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY) if x1 > x0 and y1 > y0 else None
+        blur = float(cv2.Laplacian(gray, cv2.CV_64F).var()) if gray is not None and gray.size else 0.0
+        bright = float(gray.mean()) if gray is not None and gray.size else 0.0
+        # YuNet returns five landmarks; use eyes (first two pairs) to assess tilt.
+        eye1 = (float(row[4]), float(row[5]))
+        eye2 = (float(row[6]), float(row[7]))
+        left, right = sorted((eye1, eye2), key=lambda p: p[0])
+        angle = degrees(atan2(right[1] - left[1], max(right[0] - left[0], 0.001)))
+        return assess_face(1, box, (w, h), blur=blur,
                            brightness=bright, angle=angle, config=config)
