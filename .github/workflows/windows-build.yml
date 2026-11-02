@@ -22,6 +22,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller==6.16.0 pytest==8.4.2
+          # Build-time download only; same YuNet as face_scanner, SHA256-pinned.
+          python scripts/download_face_yunet.py
+          if ($LASTEXITCODE -ne 0) { throw "Modelo YuNet oficial inválido ou indisponível" }
           # Import real startup modules before running any tests: catches removed symbols.
           python -c "import app; import core; import modern_ui; import responsive_ui; import devices; import hikcentral; import face_capture_logic; import face_capture_ui; face_capture_logic.LocalFaceDetector(); print('Startup and offline facial detector imports OK: ' + core.APP_VERSION)"
           if ($LASTEXITCODE -ne 0) { throw "Falha de importacao dos modulos do aplicativo" }
@@ -42,7 +45,7 @@ jobs:
       - name: Empacotar EXE autocontido
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ValeCadastroFacialNFC --collect-all customtkinter --collect-all smartcard --collect-data cv2 --hidden-import win32crypt app.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ValeCadastroFacialNFC --collect-all customtkinter --collect-all smartcard --collect-data cv2 --add-data "models/face_detection_yunet_2023mar.onnx;models" --add-data "models/face_detection_yunet_LICENSE.txt;models" --hidden-import win32crypt app.py
           if ($LASTEXITCODE -ne 0 -or !(Test-Path dist/ValeCadastroFacialNFC.exe)) { throw "EXE nao gerado" }
       - name: Testar inicializacao do EXE compilado sem rede ou HikCentral
         shell: pwsh
@@ -54,7 +57,7 @@ jobs:
           if (!(Test-Path $reportPath)) { throw "EXE nao criou relatorio de inicializacao" }
           $result = Get-Content $reportPath -Raw | ConvertFrom-Json
           if (!$result.ok -or $result.kind -ne "offline_startup_smoke") { throw "Smoke test do EXE falhou" }
-          if (!$result.face_detector_ready) { throw "Detector facial Haar ausente do EXE Windows" }
+          if (!$result.face_detector_ready) { throw "Detector facial YuNet ausente do EXE Windows" }
           if ($result.network_used -or $result.visitor_created) { throw "Smoke test nao deve realizar operacoes remotas" }
           $match = Select-String -Path core.py -Pattern '^APP_VERSION\s*=\s*["'']([^"'']+)["'']'
           $version = $match.Matches[0].Groups[1].Value
