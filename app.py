@@ -773,6 +773,10 @@ class ValeApp(tk.Tk):
                     report = self._poll_delivery(client, visitor_id, door_ids,
                                                  expect_face=expect_face, expect_card=expect_card)
                     report_error = ""
+                    try:
+                        set_history_status(visitor_id, state=report["state"])
+                    except Exception:
+                        pass
                 except Exception as exc:
                     report, report_error = None, str(exc)
                 return {"visitor_id": visitor_id, "appointment_id": appointment_id,
