@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.24` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.25` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -260,3 +260,16 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - A atualização usa `POST /artemis/api/visitor/v1/registerment/update` com o ID de check-in existente verificado pela leitura e níveis Visitor originais. **Não chama o endpoint de criar reserva ou de cadastrar novo visitante**.
 - Valida igualdade dos pontos originais antes de editar. Depois usa o endpoint existente de reaplicação e consulta entrega nas catracas.
 - Persiste `visitor_edit_inflight.json` antes da escrita remota para bloquear uma segunda tentativa em caso de falha incerta; operação incerta exige conciliação manual antes de nova tentativa. **A API do HikCentral e a interpretação do ID devolvido precisam ser homologadas em campo.**
+
+## Preview.25 — Captura facial inteligente automática (offline)
+
+- **Foto pela webcam** agora abre câmera com oval de referência e orientações em português: posicione, aproxime, afaste, centralize, mantenha a cabeça reta, melhore a iluminação, ajuste o foco, uma pessoa por vez.
+- Reutiliza o critério do projeto `wfuzatto/face_scanner`: área facial relativa **0,105–0,48**, centralização **±0,16/±0,20**, iluminação **35–225**, nitidez **variância do Laplaciano ≥45**, estabilidade de **900 ms** e contagem **3–2–1**. Valores adaptáveis nas configurações. Quando possível, analisa a inclinação dos olhos usando o detector Haar local.
+- Reconhecimento **apenas de presença, posição e qualidade**, não identifica nem compara rostos. Implementação inteiramente local com OpenCV Haar. Nenhum serviço externo, vídeo ou imagem temporária salva em disco.
+- Webcam lida e analisada em **thread**; visualização do Tk continua responsiva. Captura JPEG de alta qualidade pela resolução suportada pela câmera, sem aplicar filtros estéticos ou deformar proporções.
+- Quando o rosto está adequado e imóvel, inicia contagem e congela o frame automaticamente. Interrupções de enquadramento, luz, foco ou movimento reiniciam a avaliação. O visitante pode **Tirar novamente**, **Capturar manualmente**, **Usar esta foto** ou **Cancelar**.
+- **A foto só é aplicada ao formulário após Usar esta foto**. A API HikCentral não é chamada pela câmera; a operação de registro continua no botão Cadastrar Visitante.
+- **Configurações > Captura facial inteligente**: ativação (padrão ligado), estabilidade (400–3000 ms), sensibilidade, exigir qualidade e tempo para oferecer ajuda manual; mantém o índice da webcam existente e defaults em perfis antigos.
+- Se o detector Haar não carregar ou não houver qualidade suficiente, a captura manual e a opção de selecionar um arquivo permanecem disponíveis. A webcam precisa estar acessível para obter frames.
+- Pipeline Windows valida importação, detector XML offline incluído no PyInstaller, testes de avaliação e máquina de estados, e abertura do EXE sem rede; **não é homologação com webcam real da recepção**.
+- Não modifica NFC, Visitor, agendas ACQUAVALE, níveis, histórico, reenvio, edição, VALID TIMES nem integração HikCentral.
