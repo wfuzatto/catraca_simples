@@ -353,7 +353,7 @@ def start_history_loading(app, message="Buscando dados no HikCentral...", phase=
         return
     app.history_loading_label.configure(text=message)
     if not app.history_loading_frame.winfo_manager():
-        app.history_loading_frame.pack(fill="x", padx=17, pady=(0, 7))
+        app.history_loading_frame.pack(fill="x", padx=17, pady=(0, 7), before=app.history_filters_frame)
     if not getattr(app, "_history_progress_running", False):
         app.history_loading_bar.start()
         app._history_progress_running = True
@@ -414,6 +414,7 @@ def _history(app):
     app.history_end = tk.StringVar(value=today.strftime("%d/%m/%Y"))
     app.history_name = tk.StringVar()
     filters = ctk.CTkFrame(inner, fg_color="transparent")
+    app.history_filters_frame = filters
     filters.pack(fill="x", padx=17, pady=(0, 8))
     ctk.CTkLabel(filters, text="De", text_color=INK).pack(side="left", padx=(0, 4))
     ctk.CTkEntry(filters, textvariable=app.history_start, width=100).pack(side="left", padx=(0, 8))
