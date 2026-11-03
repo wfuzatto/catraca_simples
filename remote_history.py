@@ -446,12 +446,38 @@ def resolve_remote_edit_record(client, record):
     if record.get("door_ids") and set(record["door_ids"]) != set(doors):
         raise HikError("Pontos autorizados anteriores divergentes; edição bloqueada.")
 
+    receipt = None
+    if requires_consent:
+        # O endpoint do histórico não comprova o nível original. Um recibo
+        # LOCAL DPAPI de atualização aceita + entrega confirmada, para ESTE
+        # ID de check-in e exatamente o mesmo plano, permite dispensar
+        # a confirmação repetida por sete dias. Não é prova de que outra
+        # estação não alterou as permissões desde então.
+        try:
+            from visitor_history import get_history
+            from access_receipt import matching_access_receipt
+            local = get_history(visitor_id) or {}
+            candidate = local.get("access_receipt")
+            if matching_access_receipt(
+                    candidate, record, level_id=selected[0]["id"],
+                    level_name=name, door_ids=doors):
+                receipt = candidate
+                requires_consent = False
+                source = "última reaplicação confirmada nesta estação"
+        except (OSError, ValueError, RuntimeError, ImportError):
+            # DPAPI ausente ou de outro usuário Windows não pode servir como
+            # evidência; manter confirmação explícita.
+            pass
     result = dict(record)
     result.update(
         access_names=[name], door_ids=doors,
         access_level_ids=[str(selected[0]["id"])],
         _remote_verified=True, _level_verified_from=source,
-        _requires_access_confirmation=requires_consent)
+        _requires_access_confirmation=requires_consent,
+        _access_receipt_confirmed_at=(
+            receipt.get("confirmed_at") if receipt else ""),
+        _access_assurance_type=("local_acknowledged" if receipt else (
+            "remote_level" if expected is not None else "needs_consent")))
     result["_original_checkin_id"] = checkin_id
     return result, data
 
