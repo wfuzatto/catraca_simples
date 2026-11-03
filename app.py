@@ -1407,7 +1407,7 @@ class ValeApp(tk.Tk):
                     parent=dialog)
                 return
             dialog.destroy()
-            self._auto_resume_pending()
+            self._auto_resume_pending(notify=True)
             self._refresh_pending_button()
 
         ctk.CTkButton(
@@ -1545,7 +1545,7 @@ class ValeApp(tk.Tk):
                                             expect_face=expect_face, expect_card=expect_card)
         return report
 
-    def _auto_resume_pending(self):
+    def _auto_resume_pending(self, *, notify=False):
         """Retoma operações confirmadas; não repete check-in com resultado incerto."""
         data = load_pending()
         if not data or not self.verified:
@@ -1612,11 +1612,21 @@ class ValeApp(tk.Tk):
             self._refresh_pending_button()
             if error:
                 self.status.set("Recuperação pendente: " + str(error))
+                if notify:
+                    messagebox.showwarning("Recuperação pendente",
+                        str(error) + "\\nVerifique o registro no HikCentral.", parent=self)
             elif "unresolved" in value:
                 self.status.set(value["unresolved"])
+                if notify:
+                    messagebox.showwarning("Conciliação não concluída",
+                        value["unresolved"], parent=self)
             else:
                 self._recovery_attempts = 0
                 self.status.set("Cadastro pendente recuperado automaticamente; entrega " + value["state"] + ".")
+                if notify:
+                    messagebox.showinfo("Pendência resolvida",
+                        "Check-in anterior conciliado, sem nova reserva. "
+                        "Entrega da credencial: " + value["state"], parent=self)
                 return
             self._recovery_attempts += 1
             if self._recovery_attempts < 3:
