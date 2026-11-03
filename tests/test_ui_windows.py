@@ -718,3 +718,44 @@ def test_editor_allows_replacement_photo_when_download_fails(monkeypatch):
         popup.destroy()
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Interface Tk do editor exige Windows")
+def test_editor_group_select_uses_connected_group_list(monkeypatch):
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    root = app.ValeApp()
+    try:
+        root.connected_groups = ["Hóspedes Vale", "Hóspedes Serra", "Day use"]
+        root.update()
+        record = {
+            "visitor_id": "1009", "registration_record_id": "check-1009",
+            "first": "Wesley", "last": "Teste", "group": "Hóspedes Vale",
+            "entry_at": "2099-11-03T12:20:00-03:00",
+            "exit_at": "2099-11-03T17:00:00-03:00",
+            "origin": "HikCentral", "access_names": ["VISITANTE_VALE"],
+            "door_ids": ["A", "B", "C"], "card_number": "123123123",
+            "_requires_access_confirmation": True,
+        }
+        visitor_editor.open_visitor_editor(
+            root, record, remote_details={"visitorId": "1009", "cards": [
+                {"cardNo": "123123123"}]})
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children()
+                     if isinstance(x, ctk.CTkToplevel))
+        combo = popup._editor_group_selector
+        assert combo.cget("state") == "readonly"
+        assert combo.get() == "Hóspedes Vale"
+        assert list(combo.cget("values")) == root.connected_groups
+        combo.set("Hóspedes Serra")
+        assert combo.get() == "Hóspedes Serra"
+        assert popup._save_edit_button.cget("state") == "normal"
+        popup.destroy()
+    finally:
+        root.destroy()
