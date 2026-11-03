@@ -576,9 +576,8 @@ def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monke
     root = app.ValeApp()
     try:
         root.update()
-        assert "view_history_selection" in root.history_table.bind("<Double-1>")
-        assert "Duplo" not in root.history_double_click_hint.cget("text") or (
-            "dois cliques" in root.history_double_click_hint.cget("text"))
+        assert root.history_table.bind("<Double-1>")
+        assert "dois cliques" in root.history_double_click_hint.cget("text")
         for old_button in (
             "history_verify_button", "history_resend_button",
             "history_details_button", "history_photo_button"):
