@@ -51,10 +51,42 @@ def test_large_page_size_500_is_transmitted_and_501_is_rejected():
         client, "2026-11-03T00:00:00-03:00",
         "2026-11-04T00:00:00-03:00", page=1, page_size=500)
     assert result["page_size"] == 500
-    assert client.calls[0][1]["pageSize"] == 500
+    # Lotes grandes são agregados sem solicitar tamanho acima de 100
+    # a servidores HikCentral antigos.
+    assert client.calls[0][1]["pageSize"] == 100
     with pytest.raises(ValueError, match="Página"):
         fetch_checkins(client, "2026-11-03T00:00:00-03:00",
                        "2026-11-04T00:00:00-03:00", page_size=501)
+
+
+def test_logical_page_500_aggregates_five_server_pages():
+    class Paged:
+        def __init__(self):
+            self.calls = []
+        def post(self, path, payload):
+            self.calls.append((path, dict(payload)))
+            count = payload["pageSize"]
+            start_id = (payload["pageNo"] - 1) * count
+            return {"data": {
+                "totalNum": 650,
+                "list": [
+                    example_record(visitor=str(start_id+i+1), record=str(start_id+i+1))
+                    for i in range(min(count, 650 - start_id))
+                ],
+            }}
+    client = Paged()
+    result = fetch_checkins(
+        client, "2026-11-03T00:00:00-03:00",
+        "2026-11-04T00:00:00-03:00", page=1, page_size=500)
+    assert len(result["rows"]) == 500
+    assert result["has_next"] and result["total"] == 650
+    assert [p["pageNo"] for _, p in client.calls] == [1, 2, 3, 4, 5]
+    second = fetch_checkins(
+        client, "2026-11-03T00:00:00-03:00",
+        "2026-11-04T00:00:00-03:00", page=2, page_size=500)
+    assert len(second["rows"]) == 150
+    assert [p["pageNo"] for _, p in client.calls[5:]] == [6, 7]
+    assert not second["has_next"]
 
 
 def test_paginated_checkin_allows_multiple_visits_for_same_visitor():
