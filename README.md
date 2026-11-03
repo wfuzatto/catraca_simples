@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.29` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.30` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -311,4 +311,16 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Em **Cadastros efetuados**, os campos **Cadastrado em** e **Início válido** ficam em colunas distintas. Registros antigos sem `registered_at` exibem “—” em vez de um horário estimado.
 - Sem alterações nos grupos, níveis, emissão NFC, câmeras, biometria, cálculo dos dias ou endereços do HikCentral.
 - Regressões automatizadas para cadastros sucessivos, renovação de período e respeito a datas ajustadas manualmente.
+
+
+
+## Preview.30 — VALID TIMES fixo em zero; persistência ao reabrir
+
+- Para **novos visitantes Day use, Hóspedes Serra e Hóspedes Vale**, o campo OpenAPI `visitorInfoList[0].VisitorInfo.accessInfo.qrCodeValidNum` é **sempre 0**, tanto na reserva quanto no check-in, independentemente de configurações antigas (1–100). A edição de visitante existente também aplica 0 caso o operador confirme essa atualização.
+- **Configurações → VALID TIMES** agora exibe `0` em campo somente leitura. O operador não consegue ativar acidentalmente uma contagem de utilizações; as datas de validade e agendas dos níveis permanecem inalteradas.
+- Na inicialização, `load_settings()` lê `%LOCALAPPDATA%\\ValeCatracaSimples\\settings.json` e, se detectar valor anterior diferente de zero, cria uma cópia única `settings.backup-pre-valid-times-zero.json` e corrige **apenas a chave `valid_times`** no JSON. Nome do servidor, porta, índice da câmera, NFC, grupos, ingressos e demais opções permanecem intactos. A gravação manual também força 0.
+- `secrets.dpapi` contém AppKey/AppSecret protegidos pelo perfil Windows, recarregados na abertura. `visitor_history.dpapi` preserva o histórico local sem guardar fotos ou números de cartão. A lista compartilhada consulta o HikCentral após conectar; não existe cópia central das configurações locais entre computadores.
+- **Cadastros anteriores no HikCentral com VALID TIMES = 1 NÃO são corrigidos automaticamente.** O supervisor deve revisá-los na interface do HikCentral; o EXE não altera pessoas antigas sem operação de edição deliberada.
+- A documentação do parâmetro fala de quantidade de autenticações por QR Code; o comportamento dos terminais facial/NFC e a apresentação do toggle no Web Client exigem verificação no servidor real.
+- Testes automatizados cobrem o envio de zero em reserva/check-in, migração de `settings.json`, recarga após reiniciar e preservação das demais preferências. Os testes não consultam visitantes reais.
 
