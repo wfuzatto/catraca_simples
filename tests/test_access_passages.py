@@ -275,3 +275,15 @@ def test_acs_typed_query_does_not_count_denied_or_foreign_person():
     result = fetch_visitor_passages(TypedOnly(), visitor(), now=now())
     assert not result["first_entry_at"] and not result["last_exit_at"]
     assert result["passage_diagnostics"]["successful_access"] == 0
+
+
+def test_known_approved_door_ids_are_sent_to_acs_query():
+    rec = visitor()
+    rec["door_ids"] = ["door-in", "door-out"]
+    fake = MockACS({1: {"total": 1, "list": [
+        {**ev(196893, 1, "2026-11-02T10:05:00-03:00"),
+         "doorIndexCode": "door-in"},
+    ]}})
+    result = fetch_visitor_passages(fake, rec, now=now())
+    assert fake.calls[0]["doorIndexCodes"] == ["door-in", "door-out"]
+    assert result["first_entry_at"] == "2026-11-02T10:05:00-03:00"
