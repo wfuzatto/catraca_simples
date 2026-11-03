@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.30` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.31` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -324,3 +324,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - A documentação do parâmetro fala de quantidade de autenticações por QR Code; o comportamento dos terminais facial/NFC e a apresentação do toggle no Web Client exigem verificação no servidor real.
 - Testes automatizados cobrem o envio de zero em reserva/check-in, migração de `settings.json`, recarga após reiniciar e preservação das demais preferências. Os testes não consultam visitantes reais.
 
+
+## Preview.31 — Supervisão central, registro real, níveis e foto antes de editar
+
+- A lista de check-ins agora lê `registerTime` da própria OpenAPI, exibe dia/hora/segundos no campo **Cadastrado em**, e mantém `visitStartTime` separado em **Início válido**. Não inventa datas para registros antigos: o mesmo `visitStartTime` pode estar repetido por um problema da versão anterior, mas `registerTime` é o horário real salvo pelo HikCentral.
+- O nível de acesso agora é obtido da consulta de **reservas** `appointment/appointmentlist`, em `visitorInfo.accessInfo.accessLevelList`; só é exibido quando a reserva corresponde ao **mesmo Visitor ID, entrada e saída**. Em caso de erro/ausência, mostra **não informado**, nunca atribui automaticamente pelo grupo.
+- **Ver dados / corrigir** abre a janela de detalhes para todos os visitantes consultados, inclusive de outra estação. A foto atual é solicitada à OpenAPI `appointment/downloadpicture` e exibida no topo; é mantida apenas em memória. O operador pode substituí-la por arquivo ou câmera quando há autorização para editar.
+- Para editar cadastro remoto, o aplicativo valida por leitura o **recordId do check-in**, localiza uma **reserva única da mesma pessoa e período**, confirma o **ID do nível Visitor type=2** e os pontos de acesso. A edição somente habilita `Salvar` quando essas provas e as credenciais originais (foto/NFC, conforme aplicável) estão disponíveis; caso contrário, abre a mesma janela **somente leitura**, exibindo o motivo.
+- Nunca cria visitante ou reserva durante a consulta. A ação de salvar continua exigindo confirmação e executa `registerment/update` no ID existente, sem retentativas automáticas de gravação. As configurações, as regras de validação do ingresso, VALID TIMES fixo 0, câmera, grupo e NFC não foram alteradas.
+- Testes automatizados usam respostas simuladas: incluem `registerTime` real, seleção de reservas por identidade e período, validação dos IDs e recusa de edição insegura. A homologação dos fluxos de alteração depende das respostas reais do HikCentral no hotel.
