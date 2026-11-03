@@ -395,8 +395,8 @@ def _history(app):
     _text(heading, "Cadastros efetuados", size=19, bold=True).pack(side="left")
     _secondary(heading, "Atualizar lista", app.refresh_history, width=142).pack(side="right")
     _text(inner,
-          "Cadastrado em = check-in; início/término válido = prazo da credencial. "
-          "Primeira entrada e última saída dependem de eventos de acesso concedido e direção verificável.",
+          "Buscar por nome consulta também Visitor Information, mesmo sem check-in no período. "
+          "Dê dois cliques para ver a foto. A renovação de visitas encerradas requer novo registro.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     app.history_loading_frame = ctk.CTkFrame(inner, fg_color="#E9F2FF", corner_radius=8)
     app.history_loading_label = ctk.CTkLabel(
