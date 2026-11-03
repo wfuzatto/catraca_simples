@@ -588,3 +588,38 @@ def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monke
         assert root.history_loading_frame.winfo_exists()
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Teste do editor exige Tk Windows")
+def test_general_visitor_without_checkin_opens_photo_readonly(monkeypatch):
+    """Visitor Information não possui datas de visita nem recordId: nunca editar."""
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    root = app.ValeApp()
+    try:
+        root.update()
+        record = {
+            "visitor_id": "test-directory",
+            "first": "FABRICIO", "last": "LEMOS",
+            "full_name": "FABRICIO LEMOS",
+            "group": "Hóspedes Vale", "reservation": "",
+            "entry_at": "", "exit_at": "",
+            "access_names": [], "origin": "VisitorInformation",
+        }
+        visitor_editor.open_visitor_editor(
+            root, record, readonly=True,
+            readonly_reason="Visitante sem check-in no período.")
+        root.update_idletasks()
+        windows = [child for child in root.winfo_children()
+                   if isinstance(child, ctk.CTkToplevel)]
+        assert len(windows) == 1
+        assert windows[0]._save_edit_button.cget("state") == "disabled"
+        windows[0].destroy()
+    finally:
+        root.destroy()
