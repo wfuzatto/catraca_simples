@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.39` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.40` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -407,3 +407,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Mesmo trocando de grupo, a edição exige o MESMO Visitor ID e o MESMO recordId de check-in, e verifica que o grupo remoto original não mudou após a abertura da janela. Só permite trocar o plano para outro grupo cuja configuração local seja homologada e esteja disponível no servidor; nunca usa nível de funcionários.
 - Sem troca de grupo, o aplicativo mantém a comparação de níveis e catracas existentes com a última leitura. A mudança deliberada de grupo aplica o novo conjunto de portas; os novos dados são persistidos no histórico local sem criar novo visitante nem reserva.
 - A foto, o NFC, as regras de validade (`qrCodeValidNum=0`), recuperação de pendências e todos os outros parâmetros permanecem inalterados. A homologação da atualização real de grupo depende da configuração OpenAPI do servidor do hotel.
+
+## Preview.40 — interface ágil e limpeza de cache de transações
+
+- A aba **Cadastros efetuados** é construída somente na primeira abertura, uma vez por execução. Navegar até ela **não consulta o histórico criptografado local nem a OpenAPI**. O operador inicia a consulta usando **Atualizar lista**, **Buscar** ou a paginação. Visitar a aba repetidamente reutiliza a mesma tabela (sem empilhar camadas ou duplicar widgets).
+- A sincronização de grupos e níveis necessária ao Cadastro continua automática, em uma thread separada. Consultas pesadas de históricos de acessos ficam restritas à tela de Cadastros e só são iniciadas por solicitação.
+- Em **Configurações > Manutenção da estação**, botão **Limpar cache (transações)**. Ele atua apenas sobre `pending.json`, `visitor_edit_inflight.json` e `last_delivery.json`, sem coringas e sem apagar `settings.json`, backups de configuração, `secrets.dpapi`, `visitor_history.dpapi`, fotografias ou qualquer arquivo desconhecido.
+- A limpeza exige a senha de Configurações, consulta manual do estado das operações em **Visitor Reservation** e **Visitor Check-In/Out**, confirmação dupla e a palavra `CONFERIDO`. Os arquivos ativos são movidos (bytes preservados) para `transaction_audit/` no perfil Windows do operador. Nada é reenviado, apagado do HikCentral ou desfeito no servidor.
+- A operação recusa limpeza se outra tarefa estiver em andamento ou se arquivos mudarem durante a revisão; journals modificados não são liberados silenciosamente. Uma reserva já aceita remotamente pode continuar existente: liberar a trava não autoriza cadastrar novamente o mesmo hóspede.
+- Os testes automatizados verificam a lista de arquivos permitidos, a preservação de configuração e histórico, recusa sem confirmação, snapshot stale, symlink e reutilização da tabela de histórico sem consultas automáticas.
