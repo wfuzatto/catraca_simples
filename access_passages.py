@@ -209,14 +209,21 @@ def fetch_visitor_passages(client, record, *, now=None):
         for mode, identity in filters:
             matched = 0
             unfiltered_error = None
+            before_events = summary["events_returned"]
             try:
                 matched = query_pages(begin, finish, identity)
             except HikError as exc:
-                # eventType é obrigatório na documentação de várias versões.
-                # Não retornar traços em branco sem tentar a versão filtrada.
+                # Nunca mascarar uma paginação incompleta usando apenas uma
+                # segunda consulta: os extremos ficariam incorretos.
+                if summary["events_returned"] > before_events:
+                    raise
                 summary["unfiltered_errors"] += 1
                 unfiltered_error = exc
             if matched:
+                break
+            # Busca por nome sem cartão/ID pode devolver homônimos. Não
+            # repetir os mesmos registros em cinco modalidades de evento.
+            if mode == "name" and summary["events_returned"] > before_events:
                 break
             # Fallback limitado: nunca consultar todas as 22 modalidades para
             # 500 visitantes, o que sobrecarregaria a central. As direções
