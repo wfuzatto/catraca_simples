@@ -66,6 +66,7 @@ def normalize_checkin(row: dict):
         "checkin_state": STATUSES.get(str(row.get("visitorStatus")), "não informado"),
         "state": "consultar na catraca",
         "photo_url": str(base.get("smallPhotoUrl") or ""),
+        "card_number": str((row.get("visitorCardInfo") or {}).get("cardNumber") or ""),
         "origin": "HikCentral",
         "door_ids": [], "access_names": [],
         "expect_face": None, "expect_card": None,
@@ -238,6 +239,57 @@ def resolve_remote_edit_record(client, record):
                   access_level_ids=[levels[0]["id"]],
                   _remote_verified=True)
     return result, data
+
+
+
+def enrich_checkins_with_appointment_levels(client, rows, start_iso, end_iso, *,
+                                          max_pages=10):
+    """Busca níveis REAIS na lista de reservas; sem inferência pelo grupo.
+
+    Se o endpoint não responder, a listagem de check-ins permanece disponível
+    com níveis ausentes, mas a edição do registro não é autorizada.
+    """
+    if not rows:
+        return rows
+    pending = [dict(row) for row in rows]
+    for page in range(1, max_pages + 1):
+        resp = client.post(APPOINTMENTS_PATH, {
+            "pageNo": page, "pageSize": 499,
+            "appointStartTime": start_iso, "appointEndTime": end_iso,
+            "appointState": -1, "sortField": "VisitingTime", "orderType": 1,
+        })
+        data = resp.get("data") or {}
+        if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+            raise HikError("A consulta de reservas não retornou dados legíveis.")
+        for appointment in data["list"]:
+            for row in pending:
+                if _same_visit(appointment, row):
+                    levels = parse_access_levels(appointment)
+                    if levels:
+                        # Nunca marcar como validado sem exclusividade.
+                        row.setdefault("_level_matches", []).append(levels)
+        total = int(data.get("total") or 0)
+        if len(data["list"]) < 499 or (total and page * 499 >= total):
+            break
+    for row in pending:
+        matches = row.pop("_level_matches", [])
+        if len(matches) == 1:
+            row["access_names"] = [x["name"] for x in matches[0]]
+            row["access_level_ids"] = [x["id"] for x in matches[0]]
+    return pending
+
+
+def history_time(value):
+    """Exibir a hora original com segundos; fuso local quando conhecido."""
+    if not value:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(str(value))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(TZ)
+        return dt.strftime("%d/%m/%Y %H:%M:%S")
+    except ValueError:
+        return "—"
 
 
 def visitor_details(client, visitor_id: str):
