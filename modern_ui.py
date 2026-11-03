@@ -506,12 +506,14 @@ def _settings(app):
           size=11, color=MUTED).pack(anchor="w", pady=(9, 0))
     times_area = ctk.CTkFrame(local, fg_color="transparent")
     times_area.pack(fill="x", pady=(16, 0))
-    _text(times_area, "VALID TIMES", size=12, bold=True).pack(anchor="w", pady=(0, 6))
-    ttk.Spinbox(times_area, from_=0, to=100, textvariable=app.s_valid_times,
-                font=("Segoe UI", 12), width=9).pack(anchor="w", ipady=7)
+    _text(times_area, "VALID TIMES (fixo: 0)", size=12, bold=True).pack(anchor="w", pady=(0, 6))
+    # Somente leitura: o valor jamais deve ser elevado para 1 por engano.
+    ttk.Entry(times_area, textvariable=app.s_valid_times, state="readonly",
+              font=("Segoe UI", 12), width=9).pack(anchor="w", ipady=7)
     _text(local,
-          "0 = sem limite de utilizações; 1 a 100 = máximo de utilizações. "
-          "Válido para novos visitantes. A data e a agenda do nível continuam obrigatórias.",
+          "0 = limite de utilizações desativado. Travado por segurança em todos os "
+          "cadastros (Day use, Hóspedes Serra e Hóspedes Vale). "
+          "Datas e agendas dos níveis continuam obrigatórias.",
           size=11, color=MUTED).pack(anchor="w", pady=(7, 0))
 
     # Isolated offline face capture preferences; original Visitor and NFC settings unchanged.
