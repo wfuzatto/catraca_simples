@@ -674,3 +674,47 @@ def test_pending_recovery_button_and_readonly_editor(monkeypatch, tmp_path):
         dialogs[0].destroy()
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Teste do editor exige Tk Windows")
+def test_editor_allows_replacement_photo_when_download_fails(monkeypatch):
+    """HTTP 200/código 128 não deve bloquear seleção ou captura de nova foto."""
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    root = app.ValeApp()
+    try:
+        root.update()
+        record = {
+            "visitor_id": "1009",
+            "registration_record_id": "123",
+            "first": "Teste", "last": "Hóspede",
+            "group": "Hóspedes Vale",
+            "entry_at": "2099-11-03T12:20:00-03:00",
+            "exit_at": "2099-11-03T17:00:00-03:00",
+            "origin": "HikCentral",
+            "access_names": ["VISITANTE_VALE"],
+            "door_ids": ["A", "B", "C"],
+            "_requires_access_confirmation": True,
+            "photo_url": "opaque-photo-ref",
+            "card_number": "123123123",
+        }
+        visitor_editor.open_visitor_editor(
+            root, record,
+            remote_details={"visitorId": "1009", "visitorGroupName": "Hóspedes Vale"},
+            initial_photo=b"", photo_error="HikCentral código 128")
+        root.update_idletasks()
+        dialogs = [x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel)]
+        assert len(dialogs) == 1
+        popup = dialogs[0]
+        assert popup.title().startswith("Editar cadastro")
+        assert popup._save_edit_button.cget("state") == "normal"
+        assert popup._photo_preview_widget.winfo_exists()
+        popup.destroy()
+    finally:
+        root.destroy()
