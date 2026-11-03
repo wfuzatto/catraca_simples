@@ -31,6 +31,7 @@ from remote_history import (search_window, fetch_checkins, visitor_details,
                             enrich_checkins_with_appointment_levels,
                             resolve_remote_edit_record, search_visitor_directory)
 from access_passages import fetch_visitor_passages
+from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -86,6 +87,7 @@ class ValeApp(tk.Tk):
         style.configure("Register.TButton", font=("Segoe UI", 10, "bold"), padding=(18, 9))
         style.configure("TNotebook.Tab", padding=(16, 8))
         self._build()
+        self._refresh_pending_button()
         self._fill_settings()
         # A sincronização e a retomada segura acontecem sem botões manuais.
         self.after(120, self._startup_sync)
@@ -614,11 +616,7 @@ class ValeApp(tk.Tk):
         # Datas editadas manualmente pelo atendente permanecem intactas.
         self._refresh_ticket_period_if_automatic()
         if load_pending():
-            messagebox.showwarning("Cadastro em recuperação",
-                                   "O cadastro anterior ainda não foi concluído ou conciliado. "
-                                   "A recuperação automática preserva os dados existentes "
-                                   "para evitar registros duplicados.")
-            self._auto_resume_pending()
+            self.show_pending_recovery()
             return
         if not self.verified:
             messagebox.showwarning("Verificação", "Aguardando a sincronização automática do HikCentral.")
@@ -1328,6 +1326,157 @@ class ValeApp(tk.Tk):
                 self.history_status.set("Cadastro e nível originais confirmados para edição.")
         self.task(work, finish)
 
+    def _refresh_pending_button(self):
+        """O rodapé mostra a ação correta: entrega ou recuperação pendente."""
+        if not hasattr(self, "delivery_button"):
+            return
+        if load_pending():
+            self.delivery_button.configure(
+                text="Resolver pendência", command=self.show_pending_recovery)
+        else:
+            self.delivery_button.configure(
+                text="Verificar última entrega", command=self.verify_last_delivery)
+
+    def show_pending_recovery(self):
+        """Explica a operação local sem disparar um novo cadastro.
+
+        Só oferece recuperação automática quando os IDs e acessos são conhecidos;
+        pendência sem resposta de reserva exige revisão humana antes de arquivar.
+        """
+        import customtkinter as ctk
+        try:
+            pending = read_pending_diagnostics()
+        except Exception as exc:
+            messagebox.showerror("Pendência ilegível", str(exc), parent=self)
+            return
+        if pending is None:
+            self._refresh_pending_button()
+            messagebox.showinfo("Operação pendente", "Nenhuma pendência encontrada.", parent=self)
+            return
+        current = getattr(self, "_pending_recovery_dialog", None)
+        if current is not None and current.winfo_exists():
+            current.lift()
+            current.focus_force()
+            return
+
+        dialog = ctk.CTkToplevel(self)
+        self._pending_recovery_dialog = dialog
+        dialog.title("Identificar e recuperar cadastro pendente")
+        dialog.geometry("660x620")
+        dialog.minsize(570, 530)
+        dialog.transient(self)
+        dialog.grab_set()
+        frame = ctk.CTkScrollableFrame(dialog)
+        frame.pack(fill="both", expand=True, padx=16, pady=14)
+
+        ctk.CTkLabel(frame, text="Operação anterior encontrada",
+                     font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 9))
+        ctk.CTkLabel(frame, text=pending["description"],
+                     wraplength=580, justify="left").pack(anchor="w", pady=(0, 12))
+        data_lines = [
+            "Última alteração local: " + pending["modified_at"],
+            "Etapa técnica: " + pending["stage"],
+            "Visitor ID: " + (pending["visitor_id"] or "não disponível"),
+            "ID da reserva: " + (pending["appointment_id"] or "não disponível"),
+            "ID do check-in: " + (pending["registration_record_id"] or "não confirmado"),
+            "Check-in confirmado no journal: " + ("sim" if pending["registered"] else "não"),
+            "Início da visita: " + (pending["entry_at"] or "não informado"),
+            "Término da visita: " + (pending["exit_at"] or "não informado"),
+            "Níveis registrados: " + (", ".join(pending["access_names"]) or "não informados"),
+            f"Catracas registradas: {pending['door_count']}; níveis já associados: {pending['assigned_count']}",
+        ]
+        ctk.CTkLabel(frame, text="\\n".join(data_lines),
+                     font=("Consolas", 12), wraplength=580,
+                     justify="left", anchor="w").pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(
+            frame, text=(
+                "Tentar conciliar consulta o check-in já existente, verifica níveis e "
+                "retoma a entrega da credencial sem criar outra reserva. "
+                "Só fica disponível quando o journal contém os IDs necessários."
+            ), wraplength=580, justify="left").pack(anchor="w", pady=(4, 12))
+
+        def try_resume():
+            if self.busy:
+                messagebox.showwarning("Em andamento",
+                    "Uma consulta está em andamento. Tente novamente quando terminar.",
+                    parent=dialog)
+                return
+            if not self.verified:
+                messagebox.showwarning("HikCentral",
+                    "A conexão OpenAPI precisa estar verificada antes de conciliar.",
+                    parent=dialog)
+                return
+            dialog.destroy()
+            self._auto_resume_pending()
+            self._refresh_pending_button()
+
+        ctk.CTkButton(
+            frame, text="Conferir check-in e retomar credencial",
+            command=try_resume, width=340,
+            state="normal" if pending["can_resume"] and not self.busy else "disabled"
+        ).pack(pady=(0, 13))
+
+        ctk.CTkLabel(
+            frame, text=(
+                "LIBERAÇÃO MANUAL — somente após conferir Visitor Reservation e "
+                "Visitor Check-In/Out no HikCentral. Esta ação NÃO reenvia nem "
+                "conclui automaticamente o cadastro; move pending.json para "
+                "um arquivo de auditoria e libera o próximo atendimento. "
+                "Se a reserva tiver sido criada, não faça outra igual."
+            ), wraplength=580, justify="left", text_color="#B45309"
+        ).pack(anchor="w", pady=(8, 9))
+        ctk.CTkLabel(frame, text="Digite CONFERIDO após a revisão:",
+                     anchor="w").pack(fill="x")
+        confirmed = tk.StringVar()
+        ctk.CTkEntry(frame, textvariable=confirmed, width=220).pack(anchor="w", pady=(0, 10))
+
+        def archive_reviewed():
+            if self.busy:
+                messagebox.showwarning("Em andamento",
+                    "Espere o fim da operação atual antes de liberar a estação.",
+                    parent=dialog)
+                return
+            if confirmed.get().strip() != "CONFERIDO":
+                messagebox.showwarning("Confirmação obrigatória",
+                    "Confira a situação no HikCentral e digite CONFERIDO.",
+                    parent=dialog)
+                return
+            warning = (
+                "Você confirma que consultou Visitor Reservation e Visitor Check-In/Out "
+                "no HikCentral e avaliou a possibilidade de cadastro duplicado?\\n\\n"
+                "A pendência será ARQUIVADA neste Windows para auditoria. "
+                "Isto não faz reenvio nem modifica o HikCentral. "
+                "Somente a trava local será removida."
+            )
+            if not messagebox.askyesno("Confirmar liberação manual", warning,
+                                       icon="warning", parent=dialog):
+                return
+            try:
+                archived = archive_pending_after_manual_review(
+                    pending["sha256"], confirmed.get())
+            except Exception as exc:
+                messagebox.showerror("Pendência mudou", str(exc), parent=dialog)
+                return
+            dialog.destroy()
+            self._refresh_pending_button()
+            self.status.set("Pendência arquivada após conferência manual. "
+                            "Nenhuma reserva foi criada ou reenviada.")
+            messagebox.showinfo(
+                "Auditoria preservada",
+                "A estação foi liberada após confirmação.\\n"
+                f"Registro de auditoria: {archived.name}\\n"
+                "Não repita um cadastro já existente no HikCentral.",
+                parent=self)
+
+        ctk.CTkButton(frame, text="Arquivar pendência conferida e liberar",
+                      fg_color="#8C4F00", hover_color="#704000",
+                      command=archive_reviewed, width=340).pack(pady=(0, 8))
+        ctk.CTkButton(frame, text="Cancelar (manter bloqueio)",
+                      fg_color="#64748B", hover_color="#475569",
+                      command=dialog.destroy, width=250).pack(pady=(0, 10))
+        dialog.lift()
+        dialog.focus_force()
+
     def verify_last_delivery(self):
         try:
             data = load_last_delivery()
@@ -1460,6 +1609,7 @@ class ValeApp(tk.Tk):
             return {"visitor_id": pending["visitor_id"], "state": status}
 
         def finish(value, error):
+            self._refresh_pending_button()
             if error:
                 self.status.set("Recuperação pendente: " + str(error))
             elif "unresolved" in value:
