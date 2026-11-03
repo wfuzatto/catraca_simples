@@ -958,6 +958,9 @@ class ValeApp(tk.Tk):
                 self.history_start.get(), self.history_end.get())
             page = self._history_page
             name = self.history_name.get()
+            page_size = int(self.history_page_size.get())
+            if page_size not in (10, 50, 100, 200, 500):
+                raise ValueError("Quantidade de cadastros por página inválida.")
         except Exception as exc:
             self.history_status.set("Filtro inválido: " + str(exc))
             return
@@ -968,7 +971,8 @@ class ValeApp(tk.Tk):
             self, "Carregando cadastros do HikCentral...", phase="records")
         def work():
             client = self.client()
-            result = fetch_checkins(client, start_iso, end_iso, page, name)
+            result = fetch_checkins(
+                client, start_iso, end_iso, page, name, page_size=page_size)
             try:
                 result["rows"] = enrich_checkins_with_appointment_levels(
                     client, result["rows"], start_iso, end_iso)
@@ -978,10 +982,11 @@ class ValeApp(tk.Tk):
                 result["level_warning"] = " Níveis não consultados: " + str(exc)
             result["directory_rows"] = []
             result["directory_warning"] = ""
-            if name.strip() and page == 1:
+            if name.strip() and page == 1 and len(result["rows"]) < page_size:
                 try:
                     result["directory_rows"] = search_visitor_directory(
-                        client, name.strip(), page=1)
+                        client, name.strip(), page=1,
+                        page_size=page_size - len(result["rows"]))
                 except Exception as exc:
                     result["directory_warning"] = (
                         " Visitor Information indisponível: " + str(exc))
@@ -1034,6 +1039,8 @@ class ValeApp(tk.Tk):
             checkin_count = len(rows)
             listed_ids = {r["visitor_id"] for r in rows}
             for directory_row in result.get("directory_rows", []):
+                if len(rows) >= page_size:
+                    break
                 if directory_row["visitor_id"] not in listed_ids:
                     rows.append(directory_row)
                     listed_ids.add(directory_row["visitor_id"])
@@ -1048,12 +1055,21 @@ class ValeApp(tk.Tk):
             self._show_history_rows(rows, description)
             # Eventos de catraca só podem ser buscados para visitas com intervalo.
             self._load_history_passages(rows[:checkin_count], description)
-            self.history_page_label.set(f"Página {page} • {result['total']} registros")
+            self.history_page_label.set(
+                f"Página {page} • {result['total']} registros • {page_size} por página")
             self.history_next_button.configure(
                 state="normal" if result["has_next"] else "disabled")
             self.history_previous_button.configure(
                 state="normal" if page > 1 else "disabled")
         self.task(work, finish)
+
+    def history_page_size_changed(self):
+        """Changing page size is local until the operator explicitly searches."""
+        self._history_page = 1
+        if hasattr(self, "history_status"):
+            self.history_status.set(
+                f"Quantidade alterada para {self.history_page_size.get()} por página. "
+                "Clique em Atualizar lista ou Buscar para consultar.")
 
     def history_change_page(self, delta):
         next_page = self._history_page + delta
