@@ -203,3 +203,97 @@ def test_remote_edit_requires_original_checkin_id_and_level_id():
         resolve_remote_edit_record(Client(registered="different"), record)
     with pytest.raises(HikError, match="ID do nível"):
         resolve_remote_edit_record(Client(level_id="different"), record)
+
+
+def test_search_general_visitor_information_by_name_includes_person_without_checkin():
+    from remote_history import DIRECTORY_PATH, search_visitor_directory
+    client = FakeClient({"data": {"VisitorInfoList": {"VisitorInfo": [
+        {"VisitorInfo": {
+            "visitorId": "901", "visitorGivenName": "FABRICIO ROGERIO CAMPOS",
+            "visitorFamilyName": "LEMOS", "visitorGroupName": "Hóspedes Vale",
+            "smallPhotoUrl": "photo-ref",
+        }},
+        {"VisitorInfo": {
+            "visitorId": "902", "visitorGivenName": "BRUNO",
+            "visitorFamilyName": "SILVA", "visitorGroupName": "Day use",
+        }},
+    ]}, "total": 2}})
+    rows = search_visitor_directory(client, "FABRICIO")
+    assert len(rows) == 1
+    assert rows[0]["visitor_id"] == "901"
+    assert rows[0]["full_name"] == "FABRICIO ROGERIO CAMPOS LEMOS"
+    assert rows[0]["checkin_state"] == "sem check-in no período"
+    assert rows[0]["registration_record_id"] == ""
+    assert rows[0]["entry_at"] == "" and rows[0]["exit_at"] == ""
+    assert rows[0]["origin"] == "VisitorInformation"
+    path, payload, options = client.calls[0]
+    assert path == DIRECTORY_PATH
+    assert payload["searchCriteria"] == {"personName": "FABRICIO"}
+    assert payload["pageNo"] == 1 and not options
+
+
+def test_directory_supports_list_and_never_guesses_visitor_id_from_name():
+    from remote_history import search_visitor_directory
+    client = FakeClient({"data": {"list": [
+        {"VisitorInfo": {"visitorGivenName": "FABRICIO", "visitorFamilyName": "SILVA"}},
+        {"VisitorInfo": {"visitorId": "123", "visitorGivenName": "FABRICIO", "visitorFamilyName": "LEMOS"}},
+    ], "total": 2}})
+    rows = search_visitor_directory(client, "fabricio")
+    assert [x["visitor_id"] for x in rows] == ["123"]
+
+
+def test_remote_edit_blocked_for_visitor_already_checked_out():
+    from remote_history import resolve_remote_edit_record
+    checked_out = normalize_checkin(example_record())
+    checked_out["checkin_state"] = "saída no terminal"
+    class FailIfCalled:
+        def post(self, *args, **kwargs):
+            raise AssertionError("Visitante encerrado não deve ser atualizado.")
+        def find_existing_registration(self, *args):
+            raise AssertionError("Não reabrir check-in anterior.")
+    with pytest.raises(HikError, match="Registrar novamente"):
+        resolve_remote_edit_record(FailIfCalled(), checked_out)
+
+
+def test_active_visitor_can_use_exact_level_from_visitor_information_when_appointment_missing():
+    from remote_history import resolve_remote_edit_record
+    record = normalize_checkin(example_record())
+    class ExistingVisitor:
+        def find_existing_registration(self, *args):
+            return "40"
+        def post(self, path, payload):
+            if path.endswith("appointmentlist"):
+                return {"data": {"list": [], "total": 0}}
+            if path.endswith("single/visitorinfo"):
+                return {"data": {
+                    "visitorId": "812", "visitorGroupName": "Hóspedes Vale",
+                    "accessInfo": {"accessLevelList": [
+                        {"accessLevel": {"id": "10", "baseInfo": {"name": "VISITANTE_VALE"}}}
+                    ]}}}
+            raise AssertionError("Não deve haver nenhum POST de escrita.")
+        def resolve_levels(self, names):
+            assert names == ["VISITANTE_VALE"]
+            return ([{"id": "10", "name": "VISITANTE_VALE",
+                      "elements": [{"Element": {"ID": str(i)}} for i in range(3)]}],
+                    [str(i) for i in range(3)])
+    verified, details = resolve_remote_edit_record(ExistingVisitor(), record)
+    assert verified["_remote_verified"] is True
+    assert verified["_level_verified_from"] == "Visitor Information"
+    assert verified["access_level_ids"] == ["10"]
+    assert details["visitorId"] == "812"
+
+
+def test_active_visitor_with_unverified_level_stays_readonly():
+    from remote_history import resolve_remote_edit_record
+    record = normalize_checkin(example_record())
+    class MissingLevel:
+        def find_existing_registration(self, *args):
+            return "40"
+        def post(self, path, payload):
+            if path.endswith("appointmentlist"):
+                return {"data": {"list": [], "total": 0}}
+            if path.endswith("single/visitorinfo"):
+                return {"data": {"visitorId": "812", "visitorGroupName": "Hóspedes Vale"}}
+            raise AssertionError("Never call write endpoints")
+    with pytest.raises(HikError, match="não confirmou um único nível"):
+        resolve_remote_edit_record(MissingLevel(), record)
