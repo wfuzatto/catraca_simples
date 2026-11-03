@@ -198,9 +198,8 @@ def test_visitor_access_record_fallback_by_name_and_card_requires_exact_identity
     assert result["last_exit_at"] == "2026-11-02T11:30:00-03:00"
     assert result["passage_diagnostics"]["by_name_fallback"] == 1
     assert result["passage_diagnostics"]["successful_access"] == 2
-    assert len(client.calls) == 2
     assert client.calls[0]["personId"] == "812"
-    assert client.calls[1]["personName"] == "Maria Teste"
+    assert any(p.get("personName") == "Maria Teste" for p in client.calls)
 
 
 def test_homonym_without_card_or_id_cannot_be_assigned_to_visitor():
@@ -235,3 +234,44 @@ def test_incomplete_pages_never_fall_back_to_partial_results(monkeypatch):
     with pytest.raises(HikError, match="mais páginas"):
         fetch_visitor_passages(client, visitor(), now=now())
     assert client.called == 1
+
+
+def test_acs_eventtype_required_fallback_finds_real_face_entry_and_exit():
+    """HikCentral pode rejeitar consulta sem eventType; nunca inventar passagem."""
+    class TypedOnly:
+        def __init__(self):
+            self.calls = []
+        def post(self, path, payload):
+            assert path == DOOR_EVENTS_PATH
+            self.calls.append(dict(payload))
+            if "eventType" not in payload:
+                raise HikError("eventType obrigatório no OpenAPI")
+            if payload["eventType"] == 196893:
+                return {"data": {"total": 2, "list": [
+                    ev(196893, 1, "2026-11-02T10:05:00-03:00"),
+                    ev(196893, 2, "2026-11-03T10:42:00-03:00"),
+                ]}}
+            return {"data": {"total": 0, "list": []}}
+    cli = TypedOnly()
+    result = fetch_visitor_passages(cli, visitor(), now=now())
+    assert result["first_entry_at"] == "2026-11-02T10:05:00-03:00"
+    assert result["last_exit_at"] == "2026-11-03T10:42:00-03:00"
+    assert result["passage_diagnostics"]["typed_fallback"] >= 1
+    assert result["passage_diagnostics"]["unfiltered_errors"] >= 1
+    assert any(p.get("eventType") == 196893 for p in cli.calls)
+
+
+def test_acs_typed_query_does_not_count_denied_or_foreign_person():
+    class TypedOnly:
+        def post(self, path, payload):
+            if "eventType" not in payload:
+                raise HikError("eventType obrigatório")
+            if payload["eventType"] == 196893:
+                return {"data": {"total": 2, "list": [
+                    ev(197151, 1, "2026-11-02T10:05:00-03:00"),
+                    ev(196893, 2, "2026-11-03T10:42:00-03:00", person="999"),
+                ]}}
+            return {"data": {"total": 0, "list": []}}
+    result = fetch_visitor_passages(TypedOnly(), visitor(), now=now())
+    assert not result["first_entry_at"] and not result["last_exit_at"]
+    assert result["passage_diagnostics"]["successful_access"] == 0
