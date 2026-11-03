@@ -30,6 +30,7 @@ from remote_history import (search_window, fetch_checkins, visitor_details,
                             fetch_visitor_photo, history_time,
                             enrich_checkins_with_appointment_levels,
                             resolve_remote_edit_record)
+from access_passages import fetch_visitor_passages
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -77,6 +78,7 @@ class ValeApp(tk.Tk):
         self._settings_auth_prompt_queued = False
         self._history_records = {}
         self._history_page = 1
+        self._history_access_generation = 0
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(".", font=("Segoe UI", 10))
@@ -813,6 +815,8 @@ class ValeApp(tk.Tk):
 
 
     def _show_history_rows(self, rows, label):
+        # Cancela resultados de consultas antigas quando filtros/página mudarem.
+        self._history_access_generation += 1
         # O mesmo Visitor ID pode ter registros de check-in diferentes.
         self._history_records = {}
         self.history_table.delete(*self.history_table.get_children())
@@ -822,12 +826,91 @@ class ValeApp(tk.Tk):
             self.history_table.insert("", "end", iid=key, values=(
                 history_time(record.get("registered_at")),
                 history_time(record.get("entry_at")),
+                history_time(record.get("exit_at")),
                 " ".join(filter(None, (record.get("first"), record.get("last")))),
                 record.get("group", ""),
-                ", ".join(record.get("access_names", [])) or "não informado",
                 record.get("checkin_state", "não verificado"),
-                record.get("state", "não verificada")))
+                history_time(record.get("first_entry_at")),
+                history_time(record.get("last_exit_at"))))
         self.history_status.set(label)
+
+    def _load_history_passages(self, rows, status_base):
+        """Completa as duas colunas por consultas ACS somente de leitura.
+
+        A lista aparece imediatamente; até 4 conexões independentes consultam
+        em paralelo, sem bloquear o editor ou o formulário de cadastro.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        generation = self._history_access_generation
+        if not rows:
+            return
+        self.history_status.set(status_base + " | Consultando passagens nas catracas...")
+        records = [(str(i), dict(row)) for i, row in enumerate(rows)]
+
+        def done_one(key, outcome, error):
+            if generation != self._history_access_generation or not self.winfo_exists():
+                return
+            record = self._history_records.get(key)
+            if record is None:
+                return
+            if error:
+                record["_passage_error"] = str(error)
+                return
+            record.update(outcome)
+            if not self.history_table.exists(key):
+                return
+            values = list(self.history_table.item(key, "values"))
+            values[-2] = history_time(record.get("first_entry_at"))
+            values[-1] = history_time(record.get("last_exit_at"))
+            self.history_table.item(key, values=values)
+
+        def complete(scanned, failures):
+            if generation != self._history_access_generation or not self.winfo_exists():
+                return
+            if failures:
+                self.history_status.set(
+                    status_base + f" | Passagens: {scanned}/{len(records)} consultas; "
+                    f"{failures} sem resposta válida da API ACS. "
+                    "Traços (—) não significam ausência comprovada de passagem.")
+            else:
+                self.history_status.set(
+                    status_base + f" | Passagens ACS consultadas: {scanned}/{len(records)}. "
+                    "Traço (—) = nenhuma entrada/saída classificável nos eventos retornados.")
+
+        def fetch_one(item):
+            key, record = item
+            # Uma sessão separada por worker; requests.Session não é
+            # compartilhada por múltiplas threads.
+            return key, fetch_visitor_passages(self.client(), record)
+
+        def background():
+            successes = 0
+            failures = 0
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {executor.submit(fetch_one, item): item[0] for item in records}
+                for future in as_completed(futures):
+                    if generation != self._history_access_generation:
+                        for pending in futures:
+                            pending.cancel()
+                        break
+                    key = futures[future]
+                    outcome, error = None, None
+                    try:
+                        _, outcome = future.result()
+                        successes += 1
+                    except Exception as exc:
+                        error = exc
+                        failures += 1
+                    try:
+                        self.after(0, lambda k=key, o=outcome, e=error: done_one(k, o, e))
+                    except (RuntimeError, tk.TclError):
+                        break
+            try:
+                self.after(0, lambda: complete(successes + failures, failures))
+            except (RuntimeError, tk.TclError):
+                pass
+
+        threading.Thread(target=background, daemon=True).start()
 
     def refresh_history(self):
         # Por padrão sempre consulta o HikCentral. Histórico DPAPI é somente
@@ -905,10 +988,12 @@ class ValeApp(tk.Tk):
                     row["_local_verified"] = True
                     row["state"] = local.get("state", "não verificada")
                 rows.append(row)
-            self._show_history_rows(
-                rows, f"HikCentral: {len(rows)} nesta página; {result['total']} registros encontrados. "
-                      "Qualquer estação autorizada pode consultar." +
-                      result.get("level_warning", ""))
+            description = (
+                f"HikCentral: {len(rows)} nesta página; {result['total']} registros encontrados. "
+                "Eventos de catraca são pesquisados pelo Visitor ID." +
+                result.get("level_warning", ""))
+            self._show_history_rows(rows, description)
+            self._load_history_passages(rows, description)
             self.history_page_label.set(f"Página {page} • {result['total']} registros")
             self.history_next_button.configure(
                 state="normal" if result["has_next"] else "disabled")
