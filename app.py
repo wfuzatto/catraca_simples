@@ -27,7 +27,9 @@ from settings_auth import verify_settings_password
 import modern_ui
 from visitor_history import list_history, save_registration, set_history_status, get_history
 from remote_history import (search_window, fetch_checkins, visitor_details,
-                            fetch_visitor_photo)
+                            fetch_visitor_photo, history_time,
+                            enrich_checkins_with_appointment_levels,
+                            resolve_remote_edit_record)
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -818,11 +820,11 @@ class ValeApp(tk.Tk):
             key = str(index)
             self._history_records[key] = record
             self.history_table.insert("", "end", iid=key, values=(
-                record.get("registered_at", "")[:16].replace("T", " ") or "—",
-                record.get("entry_at", "")[:16].replace("T", " "),
+                history_time(record.get("registered_at")),
+                history_time(record.get("entry_at")),
                 " ".join(filter(None, (record.get("first"), record.get("last")))),
                 record.get("group", ""),
-                ", ".join(record.get("access_names", [])) or "—",
+                ", ".join(record.get("access_names", [])) or "não informado",
                 record.get("checkin_state", "não verificado"),
                 record.get("state", "não verificada")))
         self.history_status.set(label)
@@ -851,7 +853,16 @@ class ValeApp(tk.Tk):
 
         self.history_status.set("Consultando registros compartilhados do HikCentral...")
         def work():
-            return fetch_checkins(self.client(), start_iso, end_iso, page, name)
+            client = self.client()
+            result = fetch_checkins(client, start_iso, end_iso, page, name)
+            try:
+                result["rows"] = enrich_checkins_with_appointment_levels(
+                    client, result["rows"], start_iso, end_iso)
+                result["level_warning"] = ""
+            except Exception as exc:
+                # Ainda exibir check-ins, mas identificar a falta de níveis.
+                result["level_warning"] = " Níveis não consultados: " + str(exc)
+            return result
 
         def finish(result, error):
             if error:
@@ -880,14 +891,24 @@ class ValeApp(tk.Tk):
                         matched = False
                 row = dict(remote)
                 if matched:
-                    for key in ("access_names", "door_ids", "expect_face", "expect_card", "registered_at"):
+                    for key in ("door_ids", "expect_face", "expect_card"):
                         row[key] = local.get(key)
+                    # Não substituir horário de check-in do HikCentral por
+                    # um horário local posterior (sucesso/entrega).
+                    if not row.get("registered_at"):
+                        row["registered_at"] = local.get("registered_at", "")
+                    # Níveis remotos são a referência. Local só preenche quando
+                    # a API de reservas não retornou o nível original.
+                    if not row.get("access_names"):
+                        row["access_names"] = local.get("access_names", [])
+                        row["access_level_ids"] = []
                     row["_local_verified"] = True
                     row["state"] = local.get("state", "não verificada")
                 rows.append(row)
             self._show_history_rows(
                 rows, f"HikCentral: {len(rows)} nesta página; {result['total']} registros encontrados. "
-                      "Qualquer estação autorizada pode consultar.")
+                      "Qualquer estação autorizada pode consultar." +
+                      result.get("level_warning", ""))
             self.history_page_label.set(f"Página {page} • {result['total']} registros")
             self.history_next_button.configure(
                 state="normal" if result["has_next"] else "disabled")
@@ -1072,12 +1093,61 @@ class ValeApp(tk.Tk):
 
     def view_history_selection(self, _event=None):
         record = self._selected_history()
-        if record:
-            if record.get("origin") == "HikCentral" and not record.get("_local_verified"):
-                self.view_remote_history(record)
-                return
+        if not record:
+            return
+        if self.busy:
+            messagebox.showwarning("Em andamento", "Aguarde a operação atual.", parent=self)
+            return
+        if not self.key or not self.secret:
             from visitor_editor import open_visitor_editor
-            open_visitor_editor(self, record)
+            open_visitor_editor(self, record, readonly=True,
+                                readonly_reason="Sem conexão autenticada para edição.")
+            return
+
+        self.history_status.set("Consultando nível, check-in e foto original no HikCentral...")
+        def work():
+            client = self.client()
+            verified, detail, issue = None, {}, ""
+            if record.get("origin") == "HikCentral":
+                try:
+                    verified, detail = resolve_remote_edit_record(client, record)
+                except Exception as exc:
+                    issue = str(exc)
+                    try:
+                        detail = visitor_details(client, record["visitor_id"])
+                    except Exception:
+                        pass
+            else:
+                verified = dict(record)
+                try:
+                    detail = visitor_details(client, record["visitor_id"])
+                except Exception:
+                    pass
+            photo = b""
+            photo_error = ""
+            try:
+                photo = fetch_visitor_photo(
+                    client, record["visitor_id"], record.get("photo_url", ""))
+            except Exception as exc:
+                photo_error = str(exc)
+            return verified or dict(record), detail, photo, issue, photo_error
+
+        def finish(result, error):
+            if error:
+                self.history_status.set("Não foi possível consultar o visitante: " + str(error))
+                return
+            verified, detail, photo, issue, photo_error = result
+            from visitor_editor import open_visitor_editor
+            open_visitor_editor(self, verified, remote_details=detail,
+                                initial_photo=photo,
+                                readonly=bool(issue),
+                                readonly_reason=issue,
+                                photo_error=photo_error)
+            if issue:
+                self.history_status.set("Detalhes carregados. Edição protegida: " + issue)
+            else:
+                self.history_status.set("Cadastro e nível originais confirmados para edição.")
+        self.task(work, finish)
 
     def verify_last_delivery(self):
         try:
