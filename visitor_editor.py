@@ -90,6 +90,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         body, text="Foto não disponível na API", width=200, height=200,
         fg_color=("#E9EEF5", "#243043"), corner_radius=10)
     photo_panel.pack(pady=(0, 7))
+    dialog._photo_preview_widget = photo_panel  # Permite teste GUI e limpeza automática.
     original_photo = b""
     try:
         if initial_photo:
@@ -258,6 +259,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     ". Consulte o check-in para confirmação.", parent=app)
         app.task(work, done)
         dialog.destroy()
-    ctk.CTkButton(body, text="Salvar e reenviar ao HikCentral", command=submit,
-                  state="disabled" if readonly else "normal").pack(pady=12)
+    save_button = ctk.CTkButton(body, text="Salvar e reenviar ao HikCentral",
+                                command=submit,
+                                state="disabled" if readonly else "normal")
+    dialog._save_edit_button = save_button
+    save_button.pack(pady=12)
     ctk.CTkButton(body, text="Cancelar", command=dialog.destroy).pack(pady=6)
