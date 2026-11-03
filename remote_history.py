@@ -17,6 +17,7 @@ from hikcentral import HikError
 CHECKINS_PATH = "/artemis/api/visitor/v1/register/getVistorRegisterRecord"
 PHOTO_PATH = "/artemis/api/visitor/v1/appointment/downloadpicture"
 DETAIL_PATH = "/artemis/api/visitor/v1/visitor/single/visitorinfo"
+DIRECTORY_PATH = "/artemis/api/visitor/v1/visitor/visitorInfo"
 APPOINTMENTS_PATH = "/artemis/api/visitor/v1/appointment/appointmentlist"
 PAGE_SIZE = 100
 MAX_PAGES = 100
@@ -116,6 +117,111 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
                 seen.add(identity)
     return {"rows": rows, "total": total, "page": page, "page_size": page_size,
             "has_next": page < MAX_PAGES and (page*page_size < total if total else len(items) == page_size)}
+
+
+
+
+def _visitor_directory_rows(data):
+    """Extrai pessoas de formatos conhecidos sem supor que houve check-in."""
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+    options = [
+        data.get("list"), data.get("visitorInfoList"),
+        data.get("VisitorInfoList"), data.get("visitorList"),
+        data.get("VisitorList"), data.get("VisitorInfo"),
+    ]
+    for container in options:
+        if isinstance(container, list):
+            return container
+        if isinstance(container, dict):
+            for key in ("list", "VisitorInfo", "Visitor", "visitor", "visitorInfo"):
+                if isinstance(container.get(key), list):
+                    return container[key]
+            if any(key in container for key in ("visitorId", "ID", "visitorGivenName", "visitorFamilyName")):
+                return [container]
+    if any(key in data for key in ("visitorId", "ID", "visitorGivenName", "visitorFamilyName")):
+        return [data]
+    return []
+
+
+def _normalized_person_name(value):
+    import unicodedata
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return " ".join("".join(
+        char for char in normalized if not unicodedata.combining(char)
+    ).split())
+
+
+def _normalize_directory_person(item, name):
+    if not isinstance(item, dict):
+        return None
+    data = item.get("VisitorInfo") or item.get("visitorInfo") or item
+    if not isinstance(data, dict):
+        return None
+    base = data.get("BaseInfo") or data.get("baseInfo") or data
+    if not isinstance(base, dict):
+        base = data
+    vid = str(data.get("visitorId") or data.get("ID") or data.get("id")
+              or base.get("visitorId") or base.get("ID") or "").strip()
+    if not vid or len(vid) > 64:
+        return None
+    first = str(data.get("visitorGivenName") or base.get("visitorGivenName")
+                or data.get("firstName") or "").strip()
+    last = str(data.get("visitorFamilyName") or base.get("visitorFamilyName")
+               or data.get("lastName") or "").strip()
+    full = str(base.get("fullName") or data.get("fullName") or
+               " ".join(filter(None, (first, last)))).strip()
+    if not first and full:
+        first, _, last = full.partition(" ")
+    if not full or _normalized_person_name(name) not in _normalized_person_name(full):
+        return None
+    group = str(data.get("visitorGroupName") or base.get("visitorGroupName")
+                or data.get("visitorGroup") or "").strip()
+    return {
+        "visitor_id": vid, "registration_record_id": "",
+        "first": first, "last": last, "full_name": full,
+        "group": group, "reservation": str(data.get("remark") or ""),
+        "entry_at": "", "exit_at": "", "registered_at": "",
+        "checkin_state": "sem check-in no período",
+        "state": "não consultado",
+        "photo_url": str(data.get("smallPhotoUrl") or base.get("smallPhotoUrl") or ""),
+        "card_number": "", "origin": "VisitorInformation",
+        "door_ids": [], "access_names": [],
+        "expect_face": None, "expect_card": None,
+    }
+
+
+def search_visitor_directory(client, name, *, page=1, page_size=100):
+    """Busca nomes em Visitor Information, independentemente da data da visita.
+
+    A resposta é *somente consulta*. Nunca oferece permissões inferidas,
+    nem usa o ID de outra pessoa por coincidência parcial de nome.
+    """
+    name = str(name or "").strip()
+    if len(name) < 3 or len(name) > 128:
+        raise ValueError("Informe pelo menos 3 caracteres e no máximo 128.")
+    if not 1 <= page <= 100 or not 1 <= page_size <= 500:
+        raise ValueError("Página inválida.")
+    response = client.post(DIRECTORY_PATH, {
+        "pageNo": page, "pageSize": page_size,
+        "searchCriteria": {"personName": name},
+    })
+    raw = response.get("data")
+    entries = _visitor_directory_rows(raw)
+    if not isinstance(raw, (dict, list)):
+        raise HikError("Visitor Information não retornou dados utilizáveis.")
+    if not entries and isinstance(raw, dict):
+        count = raw.get("total") or raw.get("totalNum") or 0
+        if count:
+            raise HikError("Visitor Information retornou um formato de lista desconhecido.")
+    unique = {}
+    for item in entries:
+        row = _normalize_directory_person(item, name)
+        if row:
+            unique[row["visitor_id"]] = row
+    return list(unique.values())
 
 
 
