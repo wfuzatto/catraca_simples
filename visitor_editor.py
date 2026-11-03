@@ -8,6 +8,7 @@ from datetime import datetime
 import customtkinter as ctk
 from core import Visitor, TZ, parse_local, registration_payload, prepare_face_jpeg, load_pending, app_dir, _write_json_atomic, verify_visitor_access_plan
 from visitor_history import save_registration, set_history_status
+from access_receipt import make_access_receipt
 
 
 
@@ -132,6 +133,13 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             " pontos de acesso. Será exigida confirmação específica."),
             text_color="#B45309", wraplength=530,
             justify="left").pack(pady=(0, 6))
+    elif not readonly and record.get("_access_assurance_type") == "local_acknowledged":
+        ctk.CTkLabel(body, text=(
+            "Nível Visitor " + ", ".join(record.get("access_names", [])) +
+            ": reaplicação anterior confirmada neste computador. "
+            "O HikCentral continua sem informar o vínculo original pela API; "
+            "alterações realizadas por outra estação podem não ser detectadas."),
+            text_color="#475569", wraplength=530, justify="left").pack(pady=(0, 6))
     if readonly:
         ctk.CTkLabel(body,
                      text="Somente consulta: " + (readonly_reason or
@@ -302,6 +310,38 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 expect_face=bool(obj.photo_jpeg), expect_card=bool(obj.card_number))
             set_history_status(record["visitor_id"], state=report["state"],
                                checkin_state="a confirmar")
+            report["access_receipt_saved"] = False
+            if str(report.get("state") or "").casefold() == "confirmed":
+                # Readback consultivo: o ID devolvido pelo UPDATE pode ser
+                # appointRecordId e mudar após edição. A prova local só é
+                # escrita quando o MESMO visitante/período foi reencontrado.
+                try:
+                    actual_id = client.find_existing_registration(
+                        record["visitor_id"], payload["visitStartTime"],
+                        payload["visitEndTime"])
+                    if actual_id:
+                        verified_record = {
+                            **record,
+                            "first": obj.first_name, "last": obj.last_name,
+                            "reservation": obj.reservation,
+                            "entry_at": payload["visitStartTime"],
+                            "exit_at": payload["visitEndTime"],
+                            "registration_record_id": str(actual_id),
+                            "access_names": [str(selected[0]["name"])],
+                            "door_ids": list(doors),
+                            "state": report["state"],
+                            "checkin_state": "a confirmar",
+                        }
+                        receipt = make_access_receipt(
+                            verified_record, level_id=selected[0]["id"],
+                            door_ids=doors)
+                        save_registration({**verified_record, "access_receipt": receipt})
+                        report["access_receipt_saved"] = True
+                except (ValueError, RuntimeError, OSError, KeyError):
+                    # A atualização do servidor já foi aceita. Uma falha
+                    # em reler ou salvar evidência local não justifica
+                    # repetir o POST de escrita nem fingir confirmação.
+                    pass
             journal.unlink(missing_ok=True)
             return report
         def done(result, error):
@@ -311,9 +351,15 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     str(error) + "\nConfira no HikCentral antes de repetir a edição.",
                     parent=app)
             else:
+                note = (
+                    " A confirmação do nível foi registrada nesta estação "
+                    "para evitar avisos repetidos sobre o mesmo check-in."
+                    if result.get("access_receipt_saved") else
+                    " O vínculo do nível continua não verificável pela OpenAPI; "
+                    "a confirmação poderá ser solicitada novamente.")
                 messagebox.showinfo("Atualização enviada",
                     "Mesmo visitante atualizado. Entrega: " + result["state"] +
-                    ". Consulte o check-in para confirmação.", parent=app)
+                    ". Consulte o check-in para confirmação." + note, parent=app)
         app.task(work, done)
         dialog.destroy()
     save_button = ctk.CTkButton(body, text="Salvar e reenviar ao HikCentral",
