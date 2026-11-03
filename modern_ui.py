@@ -342,6 +342,46 @@ def _setting_field(parent, row, column, title, variable, *, secret=False):
 
 
 
+def start_history_loading(app, message="Buscando dados no HikCentral...", phase="records"):
+    """Indicador de consulta não bloqueante, inclusive ao abrir um editor remoto."""
+    phases = getattr(app, "_history_loading_phases", None)
+    if phases is None:
+        phases = {}
+        app._history_loading_phases = phases
+    phases[phase] = message
+    if not hasattr(app, "history_loading_frame") or not app.history_loading_frame.winfo_exists():
+        return
+    app.history_loading_label.configure(text=message)
+    if not app.history_loading_frame.winfo_manager():
+        app.history_loading_frame.pack(fill="x", padx=17, pady=(0, 7))
+    if not getattr(app, "_history_progress_running", False):
+        app.history_loading_bar.start()
+        app._history_progress_running = True
+
+
+def stop_history_loading(app, phase="records"):
+    """Não ocultar a barra se outra consulta (lista/edição/passagens) continua."""
+    phases = getattr(app, "_history_loading_phases", {})
+    phases.pop(phase, None)
+    if not hasattr(app, "history_loading_frame") or not app.history_loading_frame.winfo_exists():
+        return
+    if phases:
+        app.history_loading_label.configure(text=list(phases.values())[-1])
+        return
+    if getattr(app, "_history_progress_running", False):
+        app.history_loading_bar.stop()
+    app._history_progress_running = False
+    app.history_loading_frame.pack_forget()
+
+
+def update_history_loading(app, message, phase="passages"):
+    phases = getattr(app, "_history_loading_phases", {})
+    if phase in phases:
+        phases[phase] = message
+        if hasattr(app, "history_loading_label"):
+            app.history_loading_label.configure(text=message)
+
+
 def _history(app):
     """Central check-ins from HikCentral, with explicit local offline fallback."""
     page = app.history_tab
@@ -356,8 +396,19 @@ def _history(app):
     _secondary(heading, "Atualizar lista", app.refresh_history, width=142).pack(side="right")
     _text(inner,
           "Cadastrado em = check-in; início/término válido = prazo da credencial. "
-          "Primeira entrada e última saída vêm exclusivamente de passagens nas catracas (quando disponíveis).",
+          "Primeira entrada e última saída dependem de eventos de acesso concedido e direção verificável.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
+    app.history_loading_frame = ctk.CTkFrame(inner, fg_color="#E9F2FF", corner_radius=8)
+    app.history_loading_label = ctk.CTkLabel(
+        app.history_loading_frame, text="Consultando HikCentral...",
+        anchor="w", text_color=INK, font=("Segoe UI", 12, "bold"))
+    app.history_loading_label.pack(fill="x", padx=12, pady=(8, 0))
+    app.history_loading_bar = ctk.CTkProgressBar(
+        app.history_loading_frame, mode="indeterminate", height=7,
+        progress_color=BLUE)
+    app.history_loading_bar.pack(fill="x", padx=12, pady=(0, 10))
+    app._history_loading_phases = {}
+    app._history_progress_running = False
     today = datetime.now(TZ)
     app.history_start = tk.StringVar(value=(today-timedelta(days=30)).strftime("%d/%m/%Y"))
     app.history_end = tk.StringVar(value=today.strftime("%d/%m/%Y"))
