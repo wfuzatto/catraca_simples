@@ -355,8 +355,8 @@ def _history(app):
     _text(heading, "Cadastros efetuados", size=19, bold=True).pack(side="left")
     _secondary(heading, "Atualizar lista", app.refresh_history, width=142).pack(side="right")
     _text(inner,
-          "Cadastrado em = horário real disponível no histórico; Início válido = validade do ingresso. "
-          "Consulta central HikCentral e fotos sob demanda; edição remota exige validar acessos originais.",
+          "Cadastrado em = check-in; início/término válido = prazo da credencial. "
+          "Primeira entrada e última saída vêm exclusivamente de passagens nas catracas (quando disponíveis).",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     today = datetime.now(TZ)
     app.history_start = tk.StringVar(value=(today-timedelta(days=30)).strftime("%d/%m/%Y"))
@@ -373,19 +373,24 @@ def _history(app):
     _secondary(filters, "Buscar", app.history_apply_filters, width=90).pack(side="left")
     table_area = ctk.CTkFrame(inner, fg_color="transparent")
     table_area.pack(fill="both", expand=True, padx=17)
-    fields = ("registered", "date", "name", "group", "level", "checkin", "delivery")
+    fields = ("registered", "start", "end", "name", "group",
+              "checkin", "first_entry", "last_exit")
     app.history_table = ttk.Treeview(table_area, columns=fields, show="headings", selectmode="browse")
     for key, label, width in (
-        ("registered", "Cadastrado em", 135), ("date", "Início válido", 135),
-        ("name", "Visitante", 180), ("group", "Grupo", 125),
-        ("level", "Nível", 145), ("checkin", "Check-in", 120),
-        ("delivery", "Catracas", 115)):
+        ("registered", "Cadastrado em", 156), ("start", "Início válido", 155),
+        ("end", "Término válido", 155), ("name", "Visitante", 190),
+        ("group", "Grupo", 128), ("checkin", "Check-in", 124),
+        ("first_entry", "Primeira entrada", 159), ("last_exit", "Última saída", 159)):
         app.history_table.heading(key, text=label)
-        app.history_table.column(key, width=width, minwidth=90)
-    app.history_table.pack(side="left", fill="both", expand=True)
+        app.history_table.column(key, width=width, minwidth=110, stretch=False)
+    table_area.grid_rowconfigure(0, weight=1)
+    table_area.grid_columnconfigure(0, weight=1)
+    app.history_table.grid(row=0, column=0, sticky="nsew")
     scroll = ttk.Scrollbar(table_area, orient="vertical", command=app.history_table.yview)
-    scroll.pack(side="right", fill="y")
-    app.history_table.configure(yscrollcommand=scroll.set)
+    scroll.grid(row=0, column=1, sticky="ns")
+    hscroll = ttk.Scrollbar(table_area, orient="horizontal", command=app.history_table.xview)
+    hscroll.grid(row=1, column=0, sticky="ew")
+    app.history_table.configure(yscrollcommand=scroll.set, xscrollcommand=hscroll.set)
     app.history_table.bind("<<TreeviewSelect>>", app._history_selection)
     app.history_table.bind("<Double-1>", app.view_history_selection)
     paging = ctk.CTkFrame(inner, fg_color="transparent")
