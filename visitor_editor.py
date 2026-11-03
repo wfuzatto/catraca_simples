@@ -69,6 +69,12 @@ def selected_editor_access(group, available_groups, settings):
 
 def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                         readonly=False, readonly_reason="", photo_error=""):
+    # Nunca empilhar várias janelas modais por cliques repetidos.
+    active = getattr(app, "_active_visitor_editor", None)
+    if active is not None and active.winfo_exists():
+        active.lift()
+        active.focus_force()
+        return
     if app.busy:
         messagebox.showwarning("Em andamento",
             "Aguarde a consulta atual antes de abrir o visitante.", parent=app)
@@ -81,6 +87,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                            "A visualização permanece disponível; resolva a pendência "
                            "na aba Cadastro para habilitar alterações.")
     dialog = ctk.CTkToplevel(app)
+    app._active_visitor_editor = dialog
     dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro") + " — " + record["visitor_id"])
     dialog.geometry("630x750")
     dialog.transient(app)
