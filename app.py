@@ -1135,8 +1135,8 @@ class ValeApp(tk.Tk):
             if error:
                 messagebox.showwarning(
                     "Visitor Access Record",
-                    "A consulta ao histórico ACS não foi concluída:\\n" + str(error) +
-                    "\\n\\nVerifique as permissões OpenAPI Access Control do HikCentral.",
+                    "A consulta ao histórico ACS não foi concluída:\n" + str(error) +
+                    "\n\nVerifique as permissões OpenAPI Access Control do HikCentral.",
                     parent=self)
                 return
             diag = record.get("passage_diagnostics")
@@ -1148,13 +1148,13 @@ class ValeApp(tk.Tk):
             undirected = int(diag.get("without_direction", 0))
             messagebox.showinfo(
                 "Visitor Access Record",
-                f"Eventos da pessoa retornados: {diag.get('events_returned', 0)}\\n"
-                f"Acessos concedidos confirmados: {count}\\n"
-                f"Acessos sem direção: {undirected}\\n\\n"
-                f"Primeira autenticação: {history_time(record.get('first_access_at'))}\\n"
-                f"Última autenticação: {history_time(record.get('last_access_at'))}\\n"
-                f"Primeira ENTRADA confirmada: {history_time(record.get('first_entry_at'))}\\n"
-                f"Última SAÍDA confirmada: {history_time(record.get('last_exit_at'))}\\n\\n"
+                f"Eventos da pessoa retornados: {diag.get('events_returned', 0)}\n"
+                f"Acessos concedidos confirmados: {count}\n"
+                f"Acessos sem direção: {undirected}\n\n"
+                f"Primeira autenticação: {history_time(record.get('first_access_at'))}\n"
+                f"Última autenticação: {history_time(record.get('last_access_at'))}\n"
+                f"Primeira ENTRADA confirmada: {history_time(record.get('first_entry_at'))}\n"
+                f"Última SAÍDA confirmada: {history_time(record.get('last_exit_at'))}\n\n"
                 "O primeiro/último acesso só pode ser classificado como entrada/saída "
                 "quando o registro informa direção ou um leitor identificado.",
                 parent=self)
