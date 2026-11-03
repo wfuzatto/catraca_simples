@@ -801,3 +801,33 @@ def test_history_is_lazy_and_never_autofetches_on_tab_change(monkeypatch):
         assert root.history_tab.winfo_children().__len__() == 1
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Tk Windows")
+def test_history_today_default_and_page_size_selection_do_not_autofetch(monkeypatch):
+    import app
+    from datetime import datetime
+    from core import TZ, default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(app.ValeApp, "refresh_history",
+                        lambda self: pytest.fail("Consulta não pode ser automática."))
+    root = app.ValeApp()
+    try:
+        assert not root._history_ui_built
+        root.book.select(root.history_tab)
+        root.update()
+        today = datetime.now(TZ).strftime("%d/%m/%Y")
+        assert root.history_start.get() == today
+        assert root.history_end.get() == today
+        assert root.history_page_size.get() == "10"
+        assert tuple(root.history_page_size_box["values"]) == (
+            "10", "50", "100", "200", "500")
+        for size in ("50", "100", "200", "500", "10"):
+            root.history_page_size.set(size)
+            root.history_page_size_changed()
+            assert root._history_page == 1
+            assert "Atualizar lista" in root.history_status.get()
+    finally:
+        root.destroy()
