@@ -25,6 +25,13 @@ GRANTED_TYPES = frozenset({
     197127, 198914, 198915, 200516, 110025, 110022, 110026,
 })
 
+# Algumas versões OpenAPI exigem eventType na busca. A consulta primária
+# continua sendo por pessoa, sem filtro de modalidade; se ela falhar/voltar
+# vazia, tentamos tipos mais comuns (face, cartão+face, multi-fator, QR).
+# Não afirmar que uma consulta filtrada cobre todos os eventos possíveis.
+FALLBACK_EVENT_TYPES = (196893, 196890, 196883, 198914, 110025)
+
+
 
 def _parse_event_time(value):
     if not isinstance(value, str) or not value.strip():
@@ -100,6 +107,7 @@ def fetch_visitor_passages(client, record, *, now=None):
         "successful_access": 0, "without_direction": 0,
         "first_entry_count": 0, "last_exit_count": 0,
         "unknown_event_type": 0, "queries": 0, "by_name_fallback": 0,
+        "typed_fallback": 0, "filtered_search": 0, "unfiltered_errors": 0,
     }
     if stop <= start:
         return {
@@ -162,55 +170,83 @@ def fetch_visitor_passages(client, record, *, now=None):
             summary["without_direction"] += 1
         return True
 
+    def query_pages(begin, finish, identity, event_type=None):
+        matched = 0
+        for page in range(1, MAX_PAGES_PER_PERIOD + 1):
+            payload = {
+                "startTime": begin.isoformat(timespec="seconds"),
+                "endTime": finish.isoformat(timespec="seconds"),
+                **identity,
+                "personType": 1,
+                "doorIndexCodes": doors,
+                "pageNo": page, "pageSize": PAGE_SIZE,
+                "sortField": "SwipeTime", "orderType": 0,
+            }
+            if event_type is not None:
+                payload["eventType"] = event_type
+                summary["filtered_search"] += 1
+            summary["queries"] += 1
+            response = client.post(DOOR_EVENTS_PATH, payload)
+            data = response.get("data") or {}
+            if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+                raise HikError(
+                    "API Visitor Access Record retornou dados incompatíveis "
+                    "(verifique endpoint e permissões ACS).")
+            items = data["list"]
+            try:
+                total = int(data.get("total") or 0)
+            except (TypeError, ValueError) as exc:
+                raise HikError("Total inválido no histórico de passagens.") from exc
+            for event in items:
+                if process_event(event):
+                    matched += 1
+            if len(items) < PAGE_SIZE or (total and page * PAGE_SIZE >= total):
+                return matched
+        raise HikError(
+            "Histórico com mais páginas que o limite seguro; horários não estimados.")
+
     for begin, finish in _periods(start, stop):
-        previous_error = None
         for mode, identity in filters:
             matched = 0
+            unfiltered_error = None
             try:
-                for page in range(1, MAX_PAGES_PER_PERIOD + 1):
-                    payload = {
-                        "startTime": begin.isoformat(timespec="seconds"),
-                        "endTime": finish.isoformat(timespec="seconds"),
-                        **identity,
-                        "personType": 1,
-                        "doorIndexCodes": doors,
-                        "pageNo": page, "pageSize": PAGE_SIZE,
-                        "sortField": "SwipeTime", "orderType": 0,
-                    }
-                    summary["queries"] += 1
-                    response = client.post(DOOR_EVENTS_PATH, payload)
-                    data = response.get("data") or {}
-                    if not isinstance(data, dict) or not isinstance(data.get("list"), list):
-                        raise HikError("API Visitor Access Record retornou dados incompatíveis.")
-                    items = data["list"]
-                    try:
-                        total = int(data.get("total") or 0)
-                    except (TypeError, ValueError) as exc:
-                        raise HikError("Total inválido no histórico de passagens.") from exc
-                    for event in items:
-                        if process_event(event):
-                            matched += 1
-                    if len(items) < PAGE_SIZE or (total and page * PAGE_SIZE >= total):
-                        break
-                else:
-                    raise HikError(
-                        "Histórico com mais páginas que o limite seguro; horários não estimados.")
+                matched = query_pages(begin, finish, identity)
             except HikError as exc:
-                # Somente tentar outra identificação se a PRIMEIRA consulta
-                # falhou antes de recuperar qualquer dado. Não aproveitar
-                # resultados parciais de paginação, que dariam falsas extremidades.
-                if mode == "id" and len(filters) > 1 and matched == 0 and page == 1:
-                    previous_error = exc
-                    continue
-                raise
-            if mode == "name":
-                summary["by_name_fallback"] += 1
-            # Se o filtro por pessoa encontrou eventos, não pesquisar pelo nome.
+                # eventType é obrigatório na documentação de várias versões.
+                # Não retornar traços em branco sem tentar a versão filtrada.
+                summary["unfiltered_errors"] += 1
+                unfiltered_error = exc
             if matched:
                 break
-        else:
-            if previous_error is not None and len(filters) == 1:
-                raise previous_error
+            # Fallback limitado: nunca consultar todas as 22 modalidades para
+            # 500 visitantes, o que sobrecarregaria a central. As direções
+            # retornadas são eventos reais, mas a busca é parcial.
+            summary["typed_fallback"] += 1
+            typed_ok = 0
+            typed_error = None
+            for event_type in FALLBACK_EVENT_TYPES:
+                try:
+                    matched += query_pages(begin, finish, identity, event_type)
+                    typed_ok += 1
+                except HikError as exc:
+                    typed_error = exc
+                    # Quando um tipo falha, não usar extremos incompletos.
+                    # Pode ser falta de permissão ACS ou incompatibilidade.
+                    break
+            if typed_error is not None:
+                if mode == "id" and len(filters) > 1 and matched == 0:
+                    continue
+                raise HikError(
+                    "Consulta dos tipos de evento incompleta: " + str(typed_error))
+            if not typed_ok:
+                if mode == "id" and len(filters) > 1:
+                    continue
+                raise HikError(
+                    "A OpenAPI não aceitou as consultas de eventos por pessoa.") from unfiltered_error
+            if mode == "name":
+                summary["by_name_fallback"] += 1
+            if matched:
+                break
 
     return {
         "first_entry_at": min(entry_times).isoformat(timespec="seconds") if entry_times else "",
