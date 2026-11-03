@@ -1304,7 +1304,8 @@ class ValeApp(tk.Tk):
             photo_error = ""
             try:
                 photo = fetch_visitor_photo(
-                    client, record["visitor_id"], record.get("photo_url", ""))
+                    client, record["visitor_id"], record.get("photo_url", ""),
+                    details=detail)
             except Exception as exc:
                 photo_error = str(exc)
             return verified or dict(record), detail, photo, issue, photo_error
