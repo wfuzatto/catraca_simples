@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.32` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.33` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -343,3 +343,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Após carregar a lista, até quatro consultas paralelas, cada uma com sua própria sessão OpenAPI, completam as colunas sem bloquear edição ou novos cadastros. Ao mudar de página, os resultados antigos não são aplicados na nova tabela. `—` significa sem evento classificável confirmado, não necessariamente que o visitante nunca passou.
 - A busca de passagens depende de permissão na API **Access Control / door events** e da direção correta dos leitores/catracas no HikCentral. A homologação depende das respostas reais do servidor do hotel.
 - Nenhuma alteração na lógica de cadastro, foto, NFC, validade de ingressos, grupos, níveis, catracas, configurações nem envio de credenciais.
+
+## Preview.33 — Carregamento e diagnóstico do Visitor Access Record
+
+- A aba **Cadastros efetuados** mostra uma barra de carregamento indeterminada e mensagem explícita enquanto busca cadastros no HikCentral e, depois, progresso `X/Y` da consulta aos eventos de acesso da página. Ao abrir **Ver dados / corrigir** e **Ver foto**, o indicador também aparece e é ocultado após sucesso ou falha.
+- **Primeira entrada** e **Última saída** continuam exigindo eventos reais de acesso concedido e **direção comprovada**, conforme `checkInAndOutType` ou nome do leitor/porta. Nenhuma data administrativa ou autenticação sem sentido definido é tratada como saída.
+- O backend de `acs/v1/door/events` pesquisa primeiro por `personId`; se o servidor não retornar ocorrências, tenta pesquisa pelo nome, **aceitando somente eventos com o Visitor ID original ou cartão e nome coincidentes**. Não aceita homônimos e não reaproveita uma paginação incompleta.
+- O rodapé passa a informar quantidade de consultas, eventos retornados, autenticações concedidas e casos sem direção, além do primeiro erro da API quando houver. Selecionando um visitante remoto e clicando **Consultar catracas**, é possível comparar primeira/última autenticação (como no Visitor Access Record) com a primeira entrada/última saída confirmada, sem alterar dados.
+- Ainda é necessária homologação com a versão e permissões do HikCentral do hotel: a interface Web Client pode mostrar primeiro/último registro de autenticação mesmo quando a API não fornece direção; o programa não inventará entrada ou saída nesses casos.
+- O login, configurações, foto, câmera, NFC, permissões, grupos e cadastro permanecem inalterados.
