@@ -459,20 +459,12 @@ def _history(app):
     ctk.CTkLabel(inner, textvariable=app.history_status, text_color=MUTED,
                  anchor="w", font=("Segoe UI", 12), wraplength=780).pack(
                      fill="x", padx=18, pady=(4, 10))
-    actions = ctk.CTkFrame(inner, fg_color="transparent")
-    actions.pack(fill="x", padx=18, pady=(0, 18))
-    app.history_verify_button = _secondary(
-        actions, "Consultar catracas", app.verify_history_selection, width=170)
-    app.history_verify_button.pack(side="left", padx=(0, 9))
-    app.history_resend_button = _primary(
-        actions, "Reenviar credencial", app.resend_history_selection, width=182)
-    app.history_resend_button.pack(side="left", padx=(0, 9))
-    app.history_details_button = _secondary(
-        actions, "Ver dados / corrigir", app.view_history_selection, width=160)
-    app.history_details_button.pack(side="left", padx=(0, 9))
-    app.history_photo_button = _secondary(
-        actions, "Ver foto (HikCentral)", app.show_history_photo, width=160)
-    app.history_photo_button.pack(side="left")
+    # Todas as ações do visitante estão na janela aberta por duplo clique.
+    # A consulta de passagens continua automática, sem botão redundante.
+    app.history_double_click_hint = _text(
+        inner, "Dê dois cliques em um visitante para ver a foto, consultar os dados e corrigir o cadastro.",
+        size=11, color=MUTED)
+    app.history_double_click_hint.pack(anchor="w", padx=18, pady=(0, 13))
 
 
 def _settings(app):
