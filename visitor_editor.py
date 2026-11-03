@@ -303,13 +303,13 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             if not messagebox.askyesno(
                     "Confirmar atualização de visitante",
                     "Visitante ID: " + str(record["visitor_id"]) +
-                    "\\nGrupo selecionado: " + new_group +
-                    "\\nNível Visitor a aplicar: " + requested_level[0] +
-                    "\\n\\n" +
+                    "\nGrupo selecionado: " + new_group +
+                    "\nNível Visitor a aplicar: " + requested_level[0] +
+                    "\n\n" +
                     ("ATENÇÃO: o grupo será alterado de '" + original_group +
-                     "' para '" + new_group + "'. Isso altera as permissões.\\n\\n"
+                     "' para '" + new_group + "'. Isso altera as permissões.\n\n"
                      if new_group != original_group else
-                     "Será reaplicado o nível configurado para esse grupo.\\n\\n") +
+                     "Será reaplicado o nível configurado para esse grupo.\n\n") +
                     "O registro de check-in será atualizado sem criar outra reserva. "
                     "Confirma a aplicação do grupo e nível selecionados?",
                     parent=dialog):
@@ -339,7 +339,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             identity = str(info.get("visitorId") or info.get("ID") or "")
             actual_group = str(info.get("visitorGroupName") or
                                info.get("visitorGroup") or "")
-            if identity != str(record["visitor_id"]) or (
+            if (identity and identity != str(record["visitor_id"])) or (
                     actual_group and actual_group != original_group):
                 raise ValueError(
                     "A identidade ou grupo foi alterado em outra estação. "
