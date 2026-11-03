@@ -112,11 +112,20 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                         "não foi possível validar todos os dados originais."),
                      text_color="#B14F26", wraplength=540,
                      justify="left").pack(pady=(0, 8))
+    def formatted_visit_time(field):
+        # Visitor Information contém pessoas sem um check-in no período.
+        # Não fabricar datas nem falhar ao abrir a foto.
+        try:
+            value = record.get(field) or ""
+            return datetime.fromisoformat(value).astimezone(TZ).strftime("%d/%m/%Y %H:%M")
+        except (ValueError, TypeError):
+            return ""
+
     initial = {
         "first": record.get("first", ""), "last": record.get("last", ""),
         "reservation": record.get("reservation", ""),
-        "entry": datetime.fromisoformat(record["entry_at"]).astimezone(TZ).strftime("%d/%m/%Y %H:%M"),
-        "exit": datetime.fromisoformat(record["exit_at"]).astimezone(TZ).strftime("%d/%m/%Y %H:%M"),
+        "entry": formatted_visit_time("entry_at"),
+        "exit": formatted_visit_time("exit_at"),
         "card": card_number if record.get("origin") == "HikCentral" else "",
     }
     fields = {}
