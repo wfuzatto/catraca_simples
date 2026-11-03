@@ -747,6 +747,7 @@ class ValeApp(tk.Tk):
                         "report": report, "report_error": report_error}
 
             def finish(result, error):
+                self._refresh_pending_button()
                 if error:
                     pending = load_pending()
                     if pending:
