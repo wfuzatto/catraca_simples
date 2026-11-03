@@ -399,7 +399,7 @@ def test_valid_times_survives_both_visitor_appointment_and_checkin_payloads(vali
     for _, request in session.calls:
         body = json.loads(request["data"])
         sent = body["visitorInfoList"][0]["VisitorInfo"]
-        assert sent["accessInfo"]["qrCodeValidNum"] == valid_times
+        assert sent["accessInfo"]["qrCodeValidNum"] == 0  # Sem limite no HikCentral
         assert sent["accessInfo"]["electrostaticDetectionType"] == 0
         assert sent["cards"][0]["cardNo"] == "123456"
     assert json.loads(session.calls[0][1]["data"])["appointStartTime"] == "2026-11-02T09:00:00-03:00"
