@@ -45,6 +45,18 @@ def test_date_filter_includes_last_day_and_rejects_long_queries():
         search_window("02/11/2026", "01/11/2026")
 
 
+def test_large_page_size_500_is_transmitted_and_501_is_rejected():
+    client = FakeClient({"data": {"list": [], "totalNum": 0}})
+    result = fetch_checkins(
+        client, "2026-11-03T00:00:00-03:00",
+        "2026-11-04T00:00:00-03:00", page=1, page_size=500)
+    assert result["page_size"] == 500
+    assert client.calls[0][1]["pageSize"] == 500
+    with pytest.raises(ValueError, match="Página"):
+        fetch_checkins(client, "2026-11-03T00:00:00-03:00",
+                       "2026-11-04T00:00:00-03:00", page_size=501)
+
+
 def test_paginated_checkin_allows_multiple_visits_for_same_visitor():
     records = [example_record(record="40"), example_record(record="41")]
     client = FakeClient({"code": "0", "data": {
