@@ -51,7 +51,8 @@ def save_registration(record, base=None):
     allowed = ("visitor_id", "appointment_id", "registration_record_id",
                "first", "last", "group", "reservation",
                "door_ids", "access_names", "entry_at", "exit_at",
-               "registered_at", "expect_face", "expect_card", "state", "checkin_state")
+               "registered_at", "expect_face", "expect_card", "state", "checkin_state",
+               "access_receipt")
     clean = {key: record[key] for key in allowed if key in record}
     clean["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     records = _read(base)
@@ -61,6 +62,13 @@ def save_registration(record, base=None):
             # snapshot from the initial registration attempt.
             if old.get("checkin_state") == "confirmado" and clean.get("checkin_state") != "confirmado":
                 clean.pop("checkin_state", None)
+            # A prova de acesso pertence SOMENTE ao mesmo check-in,
+            # período e grupo. Não herdar o aceite para outra estadia.
+            protected_fields = ("registration_record_id", "entry_at",
+                                "exit_at", "group")
+            if any(key in clean and str(clean[key]) != str(old.get(key))
+                   for key in protected_fields):
+                old.pop("access_receipt", None)
             records[i].update(clean)
             break
     else:
