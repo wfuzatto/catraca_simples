@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.36` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.37` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -379,3 +379,13 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - A **visualização de visitantes, fotos e dados** continua possível mesmo com pendência. O editor abre em modo somente leitura e bloqueia salvamento até resolver a operação. Cadastros novos e atualizações não podem ignorar a trava de segurança.
 - Os testes automatizados cobrem resumo da pendência sem IDs, retomada possível com IDs, recusa de confirmação ausente, arquivamento auditável, proteção contra journal modificado e interface Windows sem gravação durante pendência.
 - Preservadas as regras de validade, NFC, câmera, fotografias, grupos, níveis e acesso; nenhuma alteração em servidores ou catracas ocorre ao abrir a janela.
+
+## Preview.37 — Editar visitante ativo mesmo quando OpenAPI omite nível/foto
+
+- O editor valida o **mesmo Visitor ID, o mesmo recordId e o check-in ativo** antes de permitir atualização; nunca cria uma nova reserva. Visitas encerradas seguem usando Registrar novamente no Web Client.
+- O nível é recuperado preferencialmente de `accessInfo.accessLevelList` fornecido pela reserva, pelos detalhes do visitante ou pelo próprio registro de check-in; diferenças de IDs ou níveis continuam bloqueadas.
+- Quando TODAS essas fontes omitem os níveis, mas existe um mapeamento de grupo homologado (`VALE_VISITOR_LEVELS`), valida em tempo real que o nível Visitor `type=2` e seus pontos continuam presentes e com a quantidade aprovada. Nesse modo o operador recebe uma advertência explícita e **deve autorizar a reaplicação desse nível**, que poderá substituir permissões antigas não retornadas. Sem confirmação, nenhuma gravação ocorre. A interface não apresenta essa operação como preservação comprovada do nível anterior.
+- A recuperação de foto tenta referências fornecidas pelos dados do visitante e os tipos pequeno/grande no endpoint original, sem fazer requests diretos a URLs de imagem. Se a OpenAPI recusar a imagem (ex.: código interno 128), o editor **permite selecionar/capturar uma foto substituta**, mas bloqueia salvar sem a nova foto quando houver face anterior possível.
+- A pulseira NFC original deverá estar presente nos detalhes, no registro consultado ou ser reinformada antes de atualizar. O campo `qrCodeValidNum` permanece fixo em 0, e a operação de edição mantém a verificação de pontos e a confirmação antes de enviar para o HikCentral.
+- As ações reais permanecem sujeitas às permissões da instalação HikCentral. O ambiente de CI testa respostas simuladas e inicialização do EXE, mas **não comprova a aceitação de uma atualização real do Visitor ID 1009** nem resolve o endpoint de fotos quando o servidor devolve erro.
+- O ZIP local contendo credenciais/DPAPI nunca é publicado nem incluído neste repositório.
