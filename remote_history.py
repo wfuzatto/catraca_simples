@@ -80,7 +80,7 @@ def normalize_checkin(row: dict):
 
 def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
                    name: str = "", page_size: int = PAGE_SIZE):
-    if not 1 <= page <= MAX_PAGES or not 1 <= page_size < 500:
+    if not 1 <= page <= MAX_PAGES or not 1 <= page_size <= 500:
         raise ValueError("Página inválida.")
     name = name.strip()
     if len(name) > 64 or (name and not re.fullmatch(r"[\w À-ÿ.\-']+", name)):
