@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.31` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.32` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -333,3 +333,13 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Para editar cadastro remoto, o aplicativo valida por leitura o **recordId do check-in**, localiza uma **reserva única da mesma pessoa e período**, confirma o **ID do nível Visitor type=2** e os pontos de acesso. A edição somente habilita `Salvar` quando essas provas e as credenciais originais (foto/NFC, conforme aplicável) estão disponíveis; caso contrário, abre a mesma janela **somente leitura**, exibindo o motivo.
 - Nunca cria visitante ou reserva durante a consulta. A ação de salvar continua exigindo confirmação e executa `registerment/update` no ID existente, sem retentativas automáticas de gravação. As configurações, as regras de validação do ingresso, VALID TIMES fixo 0, câmera, grupo e NFC não foram alteradas.
 - Testes automatizados usam respostas simuladas: incluem `registerTime` real, seleção de reservas por identidade e período, validação dos IDs e recusa de edição insegura. A homologação dos fluxos de alteração depende das respostas reais do HikCentral no hotel.
+
+## Preview.32 — Término da validade, primeira entrada e última saída
+
+- Aba **Cadastros efetuados**: colunas **Cadastrado em**, **Início válido**, **Término válido**, **Visitante**, **Grupo**, **Check-in**, **Primeira entrada** e **Última saída**. Foram removidas as colunas **Nível** e **Catracas**. Há rolagem horizontal para monitores menores.
+- **Término válido** utiliza somente `visitEndTime` retornado pela OpenAPI, em horário local; não significa saída efetiva.
+- **Primeira entrada** e **Última saída** consultam `POST /artemis/api/acs/v1/door/events`, com filtro por `personId` exato e intervalo daquela visita. Apenas eventos **Access Granted** com direção explícita por `checkInAndOutType` ou leitor/porta identificados como ENTRADA/SAÍDA contam como passagem. Não é utilizado `registerTime` ou horário de auto-check-out para fingir uma passagem.
+- O endpoint ACS permite consultas por página, mas somente em janelas de no máximo 31 dias. Consultas longas são divididas em períodos. Listas truncadas, erros ou permissões insuficientes não geram horários presumidos.
+- Após carregar a lista, até quatro consultas paralelas, cada uma com sua própria sessão OpenAPI, completam as colunas sem bloquear edição ou novos cadastros. Ao mudar de página, os resultados antigos não são aplicados na nova tabela. `—` significa sem evento classificável confirmado, não necessariamente que o visitante nunca passou.
+- A busca de passagens depende de permissão na API **Access Control / door events** e da direção correta dos leitores/catracas no HikCentral. A homologação depende das respostas reais do servidor do hotel.
+- Nenhuma alteração na lógica de cadastro, foto, NFC, validade de ingressos, grupos, níveis, catracas, configurações nem envio de credenciais.
