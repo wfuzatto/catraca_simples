@@ -973,13 +973,10 @@ class ValeApp(tk.Tk):
             client = self.client()
             result = fetch_checkins(
                 client, start_iso, end_iso, page, name, page_size=page_size)
-            try:
-                result["rows"] = enrich_checkins_with_appointment_levels(
-                    client, result["rows"], start_iso, end_iso)
-                result["level_warning"] = ""
-            except Exception as exc:
-                # Ainda exibir check-ins, mas identificar a falta de níveis.
-                result["level_warning"] = " Níveis não consultados: " + str(exc)
+            # Níveis não aparecem na tabela. Consultar centenas de reservas
+            # antecipadamente atrasava a lista inteira; a confirmação remota
+            # do nível continua sendo feita ao abrir um cadastro para editar.
+            result["level_warning"] = ""
             result["directory_rows"] = []
             result["directory_warning"] = ""
             if name.strip() and page == 1 and len(result["rows"]) < page_size:
