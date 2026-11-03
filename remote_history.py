@@ -89,7 +89,7 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
     if not 1 <= page <= MAX_PAGES or not 1 <= page_size <= 500:
         raise ValueError("Página inválida.")
     name = name.strip()
-    if len(name) > 64 or (name and not re.fullmatch(r"[\\w À-ÿ.\\-']+", name)):
+    if len(name) > 64 or (name and not re.fullmatch(r"[\w À-ÿ.\-']+", name)):
         raise ValueError("Pesquisa por nome inválida (máximo 64 caracteres).")
     server_size = min(page_size, PAGE_SIZE)
     server_first_page = (page - 1) * page_size // server_size + 1
