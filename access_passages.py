@@ -196,7 +196,10 @@ def fetch_visitor_passages(client, record, *, now=None):
                     raise HikError(
                         "Histórico com mais páginas que o limite seguro; horários não estimados.")
             except HikError as exc:
-                if mode == "id" and len(filters) > 1:
+                # Somente tentar outra identificação se a PRIMEIRA consulta
+                # falhou antes de recuperar qualquer dado. Não aproveitar
+                # resultados parciais de paginação, que dariam falsas extremidades.
+                if mode == "id" and len(filters) > 1 and matched == 0 and page == 1:
                     previous_error = exc
                     continue
                 raise
