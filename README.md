@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.40` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.41` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -416,3 +416,13 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - A limpeza exige a senha de Configurações, consulta manual do estado das operações em **Visitor Reservation** e **Visitor Check-In/Out**, confirmação dupla e a palavra `CONFERIDO`. Os arquivos ativos são movidos (bytes preservados) para `transaction_audit/` no perfil Windows do operador. Nada é reenviado, apagado do HikCentral ou desfeito no servidor.
 - A operação recusa limpeza se outra tarefa estiver em andamento ou se arquivos mudarem durante a revisão; journals modificados não são liberados silenciosamente. Uma reserva já aceita remotamente pode continuar existente: liberar a trava não autoriza cadastrar novamente o mesmo hóspede.
 - Os testes automatizados verificam a lista de arquivos permitidos, a preservação de configuração e histórico, recusa sem confirmação, snapshot stale, symlink e reutilização da tabela de histórico sem consultas automáticas.
+
+## Preview.41 — Cadastros do dia e paginação ajustável
+
+- Em **Cadastros efetuados**, os campos **De** e **Até** começam com a data corrente do Windows convertida para `America/Sao_Paulo` (hoje → hoje). O operador continua podendo escolher outros dias. Como na Preview.40, a tela não consulta o HikCentral até clicar em **Atualizar lista** ou **Buscar**.
+- Campo **Por página** com as opções **10, 50, 100, 200, 500** (10 por padrão). O número é aplicado à paginação real do servidor: lotes de 200/500 são compostos por requisições de até 100 registros, evitando limites em versões mais antigas da OpenAPI. O botão de paginação avança em páginas lógicas daquele tamanho.
+- **Primeira entrada / Última saída** são lidas exclusivamente do histórico ACS `/artemis/api/acs/v1/door/events`, sem confundir com início e fim da validade. Se a OpenAPI exigir `eventType` e a consulta inicial vier vazia/falhar, tenta modalidades de acesso comuns (face, face+cartão, multifator, QR). Isso não cobre todas as modalidades possíveis; os horários podem ser parciais e são mostrados somente quando identidade, evento concedido e direção são comprovados.
+- Para reduzir pesquisas vazias, o programa busca os IDs de portas reais do nível Visitor homologado uma única vez por grupo da página (somente leitura). A ausência de permissão para consultar portas não atribui acessos e não impede consultar eventos por Visitor ID.
+- O rodapé diferencia: **sem eventos**, **eventos com pessoa/ID divergente**, **autenticações sem sentido ENTRADA/SAÍDA**, **falha de permissão da OpenAPI** e **busca parcial por modalidade**. O Web Client pode ter dados não retornados pela OpenAPI dessa instalação; nunca inventar horários.
+- A listagem não busca previamente centenas de reservas para conferir níveis que nem são exibidos: a verificação de acesso permanece sob demanda no editor. Câmera, NFC, arquivos de configuração, limpeza de transações e políticas de acesso não foram modificados.
+- Testes automatizados usam dados simulados e não verificam o servidor HikCentral do hotel. Os valores reais de Primeira Entrada / Última Saída devem ser homologados comparando a tela com **Visitor Access Record** do Web Client.
