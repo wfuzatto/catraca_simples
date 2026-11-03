@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.37` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.38` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -389,3 +389,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - A pulseira NFC original deverá estar presente nos detalhes, no registro consultado ou ser reinformada antes de atualizar. O campo `qrCodeValidNum` permanece fixo em 0, e a operação de edição mantém a verificação de pontos e a confirmação antes de enviar para o HikCentral.
 - As ações reais permanecem sujeitas às permissões da instalação HikCentral. O ambiente de CI testa respostas simuladas e inicialização do EXE, mas **não comprova a aceitação de uma atualização real do Visitor ID 1009** nem resolve o endpoint de fotos quando o servidor devolve erro.
 - O ZIP local contendo credenciais/DPAPI nunca é publicado nem incluído neste repositório.
+
+## Preview.38 — Alinhamento de confirmação do nível Visitor
+
+- Quando a OpenAPI omite `accessInfo.accessLevelList`, o editor continua validando **Visitor ID, registro do check-in ativo, nome do grupo, ID do nível Visitor `type=2` e IDs exatos das catracas**. Níveis divergentes retornados pelo servidor bloqueiam a edição.
+- A edição com reaplicação do nível `VISITANTE_VALE` exige aceite explícito uma primeira vez. **Somente se o HikCentral aceitar a atualização, a entrega às catracas retornar `confirmed` e uma nova consulta reencontrar a pessoa e o período corretos**, o app registra um comprovante limitado ao **mesmo check-in e plano de acesso** no histórico `visitor_history.dpapi` do Windows.
+- Por até **7 dias**, quando a API continuar omitindo o nível, o comprovante protegido pode dispensar **a repetição da autorização de reaplicação idêntica**. Mostra uma informação neutra de que a última aplicação foi confirmada nesta estação. **Isso não constitui prova de associação atual no HikCentral** e não detecta necessariamente alterações por outros computadores. Uma nova visita, outra data, outro Visitor ID/check-in, grupo, nível ou porta, ou o fim do prazo, exigem autorização novamente.
+- O comprovante não guarda foto, cartão NFC, chave OpenAPI nem senha. Ele é descartado quando o registro local muda. Se a entrega for `queued`, falhar, ou não houver releitura confiável, o comprovante não é salvo; o aviso reaparece para não sugerir uma confirmação inexistente.
+- A consulta da OpenAPI `privilege/group/single/personList` com `type=2` é indicada como não suportada para visitantes em algumas versões; **nenhuma solução trata a lista de grupos locais como prova remota**. A verificação de permissões de outros computadores requer API compatível ou serviço compartilhado de auditoria.
+- Nenhuma regra de NFC, foto, validade, agenda, câmeras, endpoints de escrita ou grupos é alterada.
