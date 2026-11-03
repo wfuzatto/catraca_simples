@@ -2,6 +2,8 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
+from io import BytesIO
+from PIL import Image, ImageTk
 from datetime import datetime
 import customtkinter as ctk
 from core import Visitor, TZ, parse_local, registration_payload, prepare_face_jpeg, load_pending, app_dir, _write_json_atomic, verify_visitor_access_plan
@@ -42,23 +44,76 @@ def open_editor_camera(dialog, settings, on_accept):
         raise
 
 
-def open_visitor_editor(app, record):
+def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
+                        readonly=False, readonly_reason="", photo_error=""):
     if app.busy or load_pending():
         messagebox.showwarning("Edição bloqueada", "Existe operação pendente.")
         return
     dialog = ctk.CTkToplevel(app)
-    dialog.title("Editar cadastro — " + record["visitor_id"])
-    dialog.geometry("580x640")
+    dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro") + " — " + record["visitor_id"])
+    dialog.geometry("630x750")
     dialog.transient(app)
     dialog.grab_set()
     body = ctk.CTkScrollableFrame(dialog)
     body.pack(fill="both", expand=True, padx=14, pady=12)
+
+    detail = remote_details if isinstance(remote_details, dict) else {}
+    visitor = detail.get("VisitorInfo") or detail.get("visitorInfo") or detail
+    if not isinstance(visitor, dict):
+        visitor = {}
+    raw_cards = visitor.get("cards") or []
+    card_values = [str(x.get("cardNo") or "") for x in raw_cards if isinstance(x, dict)] \
+        if isinstance(raw_cards, list) else []
+    card_number = next((x for x in card_values if x), "") or record.get("card_number", "")
+    has_remote_face = bool(
+        record.get("photo_url") or visitor.get("faces") or
+        (visitor.get("visitorPhoto") or {}).get("haveVisitorPhoto"))
+    has_remote_card = bool(raw_cards or card_number)
+    if record.get("origin") == "HikCentral" and not readonly:
+        # Sem fotografia recuperada, a atualização poderia eliminar a
+        # credencial facial anterior no endpoint registerment/update.
+        if has_remote_face and not initial_photo:
+            readonly = True
+            readonly_reason = "A foto facial original não pôde ser recuperada."
+        if has_remote_card and not card_number:
+            readonly = True
+            readonly_reason = "A pulseira original não foi retornada pela OpenAPI."
+        if not has_remote_face and not has_remote_card:
+            readonly = True
+            readonly_reason = "A OpenAPI não confirmou as credenciais originais."
+
+    ctk.CTkLabel(body, text="Foto atual no HikCentral", font=("Segoe UI", 14, "bold")).pack(pady=(0, 5))
+    photo_panel = ctk.CTkLabel(
+        body, text="Foto não disponível na API", width=200, height=200,
+        fg_color=("#E9EEF5", "#243043"), corner_radius=10)
+    photo_panel.pack(pady=(0, 7))
+    original_photo = b""
+    try:
+        if initial_photo:
+            original_photo = prepare_face_jpeg(initial_photo)
+            with Image.open(BytesIO(original_photo)) as image:
+                image.thumbnail((220, 220), Image.Resampling.LANCZOS)
+                preview = ImageTk.PhotoImage(image.copy())
+            photo_panel.configure(image=preview, text="")
+            photo_panel.image = preview
+    except Exception:
+        original_photo = b""
+        photo_panel.configure(text="Foto indisponível")
+    if photo_error and not original_photo:
+        ctk.CTkLabel(body, text="Foto não retornada: " + photo_error,
+                     wraplength=530, justify="left").pack(pady=(0, 6))
+    if readonly:
+        ctk.CTkLabel(body,
+                     text="Somente consulta: " + (readonly_reason or
+                        "não foi possível validar todos os dados originais."),
+                     text_color="#B14F26", wraplength=540,
+                     justify="left").pack(pady=(0, 8))
     initial = {
         "first": record.get("first", ""), "last": record.get("last", ""),
         "reservation": record.get("reservation", ""),
         "entry": datetime.fromisoformat(record["entry_at"]).astimezone(TZ).strftime("%d/%m/%Y %H:%M"),
         "exit": datetime.fromisoformat(record["exit_at"]).astimezone(TZ).strftime("%d/%m/%Y %H:%M"),
-        "card": "",
+        "card": card_number if record.get("origin") == "HikCentral" else "",
     }
     fields = {}
     for field, label in [("first", "Nome"), ("last", "Sobrenome"),
@@ -68,7 +123,8 @@ def open_visitor_editor(app, record):
                          ("card", "Pulseira/NFC (informar novamente)")]:
         ctk.CTkLabel(body, text=label, anchor="w").pack(fill="x", pady=(8, 2))
         var = tk.StringVar(value=initial[field])
-        ctk.CTkEntry(body, textvariable=var).pack(fill="x")
+        ctk.CTkEntry(body, textvariable=var,
+                     state="disabled" if readonly else "normal").pack(fill="x")
         fields[field] = var
     ctk.CTkLabel(body,
         text="Grupo: " + record.get("group", "") + " | Nível: " +
@@ -78,8 +134,20 @@ def open_visitor_editor(app, record):
              "Reinforme as credenciais usadas antes de editar. "
              "O Visitor ID e os pontos autorizados serão preservados.",
         wraplength=505, justify="left").pack(pady=8)
-    chosen_photo = {"bytes": b""}
-    status = tk.StringVar(value="Nenhuma foto nova selecionada")
+    chosen_photo = {"bytes": original_photo}
+    status = tk.StringVar(value=(
+        "Foto original carregada; selecione outra para substituir."
+        if original_photo else "Nenhuma foto original disponível"))
+    def update_photo_preview(data):
+        try:
+            with Image.open(BytesIO(data)) as source:
+                source.thumbnail((220, 220), Image.Resampling.LANCZOS)
+                frame = ImageTk.PhotoImage(source.copy())
+            photo_panel.configure(image=frame, text="")
+            photo_panel.image = frame
+        except Exception as exc:
+            status.set("Pré-visualização indisponível: " + str(exc))
+
     def select_photo():
         path = filedialog.askopenfilename(parent=dialog,
             filetypes=[("Fotos", "*.jpg *.jpeg *.png *.bmp")])
@@ -87,12 +155,14 @@ def open_visitor_editor(app, record):
             try:
                 chosen_photo["bytes"] = prepare_face_jpeg(Path(path).read_bytes())
                 status.set("Foto selecionada")
+                update_photo_preview(chosen_photo["bytes"])
             except Exception as exc:
                 messagebox.showerror("Foto", str(exc), parent=dialog)
     def use_camera_photo(stream):
         # Somente a foto deste registro editado; não modifica o novo cadastro.
         chosen_photo["bytes"] = prepare_face_jpeg(stream.read())
         status.set("Foto capturada pela câmera")
+        update_photo_preview(chosen_photo["bytes"])
         return True
 
     def capture_photo():
@@ -104,11 +174,16 @@ def open_visitor_editor(app, record):
     photo_buttons = ctk.CTkFrame(body, fg_color="transparent")
     photo_buttons.pack(pady=5)
     ctk.CTkButton(photo_buttons, text="Selecionar foto",
-                  command=select_photo).pack(side="left", padx=5)
+                  command=select_photo,
+                  state="disabled" if readonly else "normal").pack(side="left", padx=5)
     ctk.CTkButton(photo_buttons, text="Abrir câmera",
-                  command=capture_photo).pack(side="left", padx=5)
+                  command=capture_photo,
+                  state="disabled" if readonly else "normal").pack(side="left", padx=5)
     ctk.CTkLabel(body, textvariable=status).pack()
     def submit():
+        if readonly:
+            messagebox.showwarning("Edição protegida", readonly_reason, parent=dialog)
+            return
         if app.busy or load_pending():
             messagebox.showwarning("Bloqueado", "Outra operação em andamento.", parent=dialog)
             return
@@ -137,9 +212,13 @@ def open_visitor_editor(app, record):
             client = app.client()
             old_id = client.find_existing_registration(
                 record["visitor_id"], record["entry_at"], record["exit_at"])
-            if not old_id:
+            if not old_id or old_id != record["registration_record_id"]:
                 raise ValueError("Check-in original não confirmado pela consulta.")
             selected, doors = client.resolve_levels(record["access_names"])
+            if record.get("access_level_ids") and (
+                    [str(x["id"]) for x in selected] !=
+                    [str(x) for x in record["access_level_ids"]]):
+                raise ValueError("O nível original mudou. Edição bloqueada.")
             verify_visitor_access_plan(selected, doors, record["access_names"])
             if set(doors) != set(record["door_ids"]):
                 raise ValueError("Pontos alterados; edição bloqueada.")
@@ -176,5 +255,6 @@ def open_visitor_editor(app, record):
                     ". Consulte o check-in para confirmação.", parent=app)
         app.task(work, done)
         dialog.destroy()
-    ctk.CTkButton(body, text="Salvar e reenviar ao HikCentral", command=submit).pack(pady=12)
+    ctk.CTkButton(body, text="Salvar e reenviar ao HikCentral", command=submit,
+                  state="disabled" if readonly else "normal").pack(pady=12)
     ctk.CTkButton(body, text="Cancelar", command=dialog.destroy).pack(pady=6)
