@@ -1614,7 +1614,7 @@ class ValeApp(tk.Tk):
                 self.status.set("Recuperação pendente: " + str(error))
                 if notify:
                     messagebox.showwarning("Recuperação pendente",
-                        str(error) + "\\nVerifique o registro no HikCentral.", parent=self)
+                        str(error) + "\nVerifique o registro no HikCentral.", parent=self)
             elif "unresolved" in value:
                 self.status.set(value["unresolved"])
                 if notify:
