@@ -289,15 +289,18 @@ def test_valid_times_setting_is_visible_saved_and_reopened_without_live_api(monk
         root.update()
         assert root.s_valid_times.get() == "0"
         assert root.s_valid_times._name
+        # Mesmo uma alteração programática da variável não muda o zero seguro.
         root.s_valid_times.set("7")
         assert root.save_config(silent=True)
-        assert load_settings(tmp_path)["valid_times"] == 7
+        assert load_settings(tmp_path)["valid_times"] == 0
+        assert root.s_valid_times.get() == "0"
         root.s_valid_times.set("101")
-        assert not root.save_config(silent=True)
-        assert load_settings(tmp_path)["valid_times"] == 7
-        root.s_valid_times.set("0")
         assert root.save_config(silent=True)
         assert load_settings(tmp_path)["valid_times"] == 0
+        root._fill_settings()
+        assert root.s_valid_times.get() == "0"
+        # Ao iniciar outro executável no mesmo perfil, as preferências são lidas.
+        root.settings = load_settings(tmp_path)
         root._fill_settings()
         assert root.s_valid_times.get() == "0"
     finally:
