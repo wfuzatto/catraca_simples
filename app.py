@@ -845,6 +845,9 @@ class ValeApp(tk.Tk):
         if not rows:
             return
         self.history_status.set(status_base + " | Consultando passagens nas catracas...")
+        modern_ui.start_history_loading(
+            self, f"Buscando acessos no Visitor Access Record (0/{len(rows)})...",
+            phase="passages")
         records = [(str(i), dict(row)) for i, row in enumerate(rows)]
 
         def done_one(key, outcome, error):
@@ -864,18 +867,29 @@ class ValeApp(tk.Tk):
             values[-1] = history_time(record.get("last_exit_at"))
             self.history_table.item(key, values=values)
 
-        def complete(scanned, failures):
+        def complete(scanned, failures, aggregate, first_error):
             if generation != self._history_access_generation or not self.winfo_exists():
                 return
+            modern_ui.stop_history_loading(self, phase="passages")
+            checks = (
+                f"{scanned}/{len(records)} consultas, "
+                f"{aggregate['successful_access']} acessos concedidos, "
+                f"{aggregate['without_direction']} sem direção, "
+                f"{aggregate['events_returned']} eventos retornados")
             if failures:
+                # Exibir um erro concreto; nunca deixar somente “—” sem explicar.
                 self.history_status.set(
-                    status_base + f" | Passagens: {scanned}/{len(records)} consultas; "
-                    f"{failures} sem resposta válida da API ACS. "
-                    "Traços (—) não significam ausência comprovada de passagem.")
+                    status_base + f" | Passagens: {checks}; "
+                    f"{failures} falha(s) na OpenAPI. Primeiro erro: {first_error}")
+            elif aggregate["successful_access"] and aggregate["without_direction"]:
+                self.history_status.set(
+                    status_base + f" | Passagens: {checks}. "
+                    "Sem sentido de passagem: verifique leitores ENTRADA/SAÍDA "
+                    "ou checkInAndOutType no HikCentral.")
             else:
                 self.history_status.set(
-                    status_base + f" | Passagens ACS consultadas: {scanned}/{len(records)}. "
-                    "Traço (—) = nenhuma entrada/saída classificável nos eventos retornados.")
+                    status_base + f" | Passagens: {checks}. "
+                    "Traço (—) = nenhum evento de entrada/saída classificado.")
 
         def fetch_one(item):
             key, record = item
@@ -886,6 +900,8 @@ class ValeApp(tk.Tk):
         def background():
             successes = 0
             failures = 0
+            first_error = ""
+            aggregate = {"successful_access": 0, "without_direction": 0, "events_returned": 0}
             with ThreadPoolExecutor(max_workers=4) as executor:
                 futures = {executor.submit(fetch_one, item): item[0] for item in records}
                 for future in as_completed(futures):
@@ -898,15 +914,25 @@ class ValeApp(tk.Tk):
                     try:
                         _, outcome = future.result()
                         successes += 1
+                        diag = outcome.get("passage_diagnostics", {})
+                        for field in aggregate:
+                            aggregate[field] += int(diag.get(field, 0))
                     except Exception as exc:
                         error = exc
                         failures += 1
+                        if not first_error:
+                            first_error = str(exc)
+                    progress = successes + failures
                     try:
+                        self.after(0, lambda count=progress: modern_ui.update_history_loading(
+                            self, f"Buscando acessos no Visitor Access Record ({count}/{len(records)})...",
+                            phase="passages"))
                         self.after(0, lambda k=key, o=outcome, e=error: done_one(k, o, e))
                     except (RuntimeError, tk.TclError):
                         break
             try:
-                self.after(0, lambda: complete(successes + failures, failures))
+                self.after(0, lambda a=successes+failures, b=failures,
+                           c=dict(aggregate), d=first_error: complete(a, b, c, d))
             except (RuntimeError, tk.TclError):
                 pass
 
@@ -935,6 +961,9 @@ class ValeApp(tk.Tk):
             return
 
         self.history_status.set("Consultando registros compartilhados do HikCentral...")
+        modern_ui.stop_history_loading(self, phase="passages")
+        modern_ui.start_history_loading(
+            self, "Carregando cadastros do HikCentral...", phase="records")
         def work():
             client = self.client()
             result = fetch_checkins(client, start_iso, end_iso, page, name)
@@ -948,6 +977,7 @@ class ValeApp(tk.Tk):
             return result
 
         def finish(result, error):
+            modern_ui.stop_history_loading(self, phase="records")
             if error:
                 self._show_history_rows(
                     local_rows, "HikCentral indisponível: exibindo SOMENTE histórico LOCAL. " +
@@ -1041,10 +1071,13 @@ class ValeApp(tk.Tk):
             messagebox.showwarning("Foto", "Conecte o HikCentral para buscar a foto.")
             return
         self.history_status.set("Solicitando foto do HikCentral...")
+        modern_ui.start_history_loading(
+            self, "Carregando foto do HikCentral...", phase="photo")
         def work():
             return fetch_visitor_photo(
                 self.client(), record["visitor_id"], record.get("photo_url", ""))
         def finish(image_bytes, error):
+            modern_ui.stop_history_loading(self, phase="photo")
             if error:
                 messagebox.showwarning("Foto do HikCentral",
                     "A foto não pôde ser recuperada pela OpenAPI: " + str(error), parent=self)
@@ -1190,6 +1223,8 @@ class ValeApp(tk.Tk):
             return
 
         self.history_status.set("Consultando nível, check-in e foto original no HikCentral...")
+        modern_ui.start_history_loading(
+            self, "Carregando dados e foto do visitante...", phase="editor")
         def work():
             client = self.client()
             verified, detail, issue = None, {}, ""
@@ -1218,6 +1253,7 @@ class ValeApp(tk.Tk):
             return verified or dict(record), detail, photo, issue, photo_error
 
         def finish(result, error):
+            modern_ui.stop_history_loading(self, phase="editor")
             if error:
                 self.history_status.set("Não foi possível consultar o visitante: " + str(error))
                 return
