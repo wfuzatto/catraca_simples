@@ -46,9 +46,17 @@ def open_editor_camera(dialog, settings, on_accept):
 
 def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                         readonly=False, readonly_reason="", photo_error=""):
-    if app.busy or load_pending():
-        messagebox.showwarning("Edição bloqueada", "Existe operação pendente.")
+    if app.busy:
+        messagebox.showwarning("Em andamento",
+            "Aguarde a consulta atual antes de abrir o visitante.", parent=app)
         return
+    # Uma operação pendente impede gravações, mas não pode impedir o operador
+    # de VISUALIZAR um visitante e sua foto.
+    if load_pending():
+        readonly = True
+        readonly_reason = ("Há uma operação de cadastro pendente neste Windows. "
+                           "A visualização permanece disponível; resolva a pendência "
+                           "na aba Cadastro para habilitar alterações.")
     dialog = ctk.CTkToplevel(app)
     dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro") + " — " + record["visitor_id"])
     dialog.geometry("630x750")
