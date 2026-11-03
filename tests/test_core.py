@@ -132,7 +132,7 @@ def test_migrate_legacy_saved_levels_without_touching_other_settings(tmp_path):
     assert loaded["schedule_windows"]["DAY_USE"] == "09:00-17:00"
     assert loaded["access_mapping_revision"] == 1
     assert loaded["tickets"]["Especial"] == settings["tickets"]["Especial"]
-    assert loaded["valid_times"] == 7
+    assert loaded["valid_times"] == 0
     assert loaded["preferred_group"] == "Hóspedes Vale"
     # Depois que a migração for salva, escolhas futuras não são sobrescritas.
     loaded["group_access"]["Day use"] = ["NOVO_VISITOR"]
@@ -418,7 +418,7 @@ def test_valid_times_is_written_to_visitor_info_access(valid_times):
     end = datetime(2099, 11, 2, 17, tzinfo=TZ)
     obj = Visitor("Visitante", "Teste", "Day use", b"", "1234567", start, end)
     info = registration_payload(obj, valid_times)["visitorInfoList"][0]["VisitorInfo"]
-    assert info["accessInfo"]["qrCodeValidNum"] == valid_times
+    assert info["accessInfo"]["qrCodeValidNum"] == 0  # Nunca enviar um limite de visitas
     assert info["accessInfo"]["electrostaticDetectionType"] == 0
     assert validate_valid_times(valid_times) == valid_times
 
@@ -451,4 +451,51 @@ def test_valid_times_new_default_and_old_config_migrated_without_resetting_ticke
     assert migrated["tickets"] == old["tickets"]
     migrated["valid_times"] = 7
     save_settings(migrated, tmp_path)
-    assert load_settings(tmp_path)["valid_times"] == 7
+    assert load_settings(tmp_path)["valid_times"] == 0
+
+
+def test_existing_nonzero_settings_migrate_and_survive_reopening(tmp_path):
+    """Simula settings.json produzido pelo EXE antigo; demais preferências preservadas."""
+    import json
+    previous = default_settings()
+    previous.update({
+        "valid_times": 1, "host": "192.168.100.102", "camera_index": 2,
+        "preferred_group": "Hóspedes Serra", "card_format": "DECIMAL_BIG",
+    })
+    previous["tickets"]["Especial"] = {"days": 4, "checkin": "09:00", "checkout": "17:00"}
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(previous, ensure_ascii=False), encoding="utf-8")
+
+    first_boot = load_settings(tmp_path)
+    assert first_boot["valid_times"] == 0
+    assert first_boot["host"] == previous["host"]
+    assert first_boot["camera_index"] == previous["camera_index"]
+    assert first_boot["preferred_group"] == previous["preferred_group"]
+    assert first_boot["card_format"] == previous["card_format"]
+    assert first_boot["tickets"]["Especial"] == previous["tickets"]["Especial"]
+    assert json.loads(path.read_text(encoding="utf-8"))["valid_times"] == 0
+    backup = tmp_path / "settings.backup-pre-valid-times-zero.json"
+    assert json.loads(backup.read_text(encoding="utf-8"))["valid_times"] == 1
+
+    second_boot = load_settings(tmp_path)
+    assert second_boot == first_boot
+
+    # Nem a gravação posterior de preferências pode reativar o limite.
+    second_boot["valid_times"] = 100
+    second_boot["camera_index"] = 4
+    save_settings(second_boot, tmp_path)
+    third_boot = load_settings(tmp_path)
+    assert third_boot["valid_times"] == 0
+    assert third_boot["camera_index"] == 4
+    assert third_boot["tickets"]["Especial"] == previous["tickets"]["Especial"]
+
+
+@pytest.mark.parametrize("group", ["Day use", "Hóspedes Serra", "Hóspedes Vale"])
+def test_valid_times_zero_is_applied_to_all_visitor_groups(group):
+    start = datetime(2099, 11, 2, 9, tzinfo=TZ)
+    end = datetime(2099, 11, 2, 17, tzinfo=TZ)
+    visit = Visitor("Teste", "Recepção", group, b"", "1234567", start, end)
+    for old_value in (0, 1, 5, 100):
+        info = registration_payload(visit, old_value)["visitorInfoList"][0]["VisitorInfo"]
+        assert info["visitorGroupName"] == group
+        assert info["accessInfo"]["qrCodeValidNum"] == 0
