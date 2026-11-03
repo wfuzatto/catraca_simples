@@ -626,11 +626,14 @@ def test_general_visitor_without_checkin_opens_photo_readonly(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Teste da janela de pendências exige Windows")
-def test_pending_recovery_button_and_readonly_editor(monkeypatch):
+def test_pending_recovery_button_and_readonly_editor(monkeypatch, tmp_path):
     import app
+    import core
     import visitor_editor
     import customtkinter as ctk
     from core import default_settings
+    (tmp_path / "pending.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(core, "app_dir", lambda: tmp_path)
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
