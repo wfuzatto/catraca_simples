@@ -547,16 +547,68 @@ def decode_photo_response(value):
     return binary
 
 
-def fetch_visitor_photo(client, visitor_id: str, pic_url: str = ""):
+def _photo_references(details):
+    """Referências retornadas pelo HikCentral, nunca URLs buscadas pelo cliente."""
+    if not isinstance(details, dict):
+        return []
+    nodes = [details]
+    for key in ("VisitorInfo", "visitorInfo", "visitorPhoto", "VisitorPhoto",
+                "baseInfo", "BaseInfo"):
+        value = details.get(key)
+        if isinstance(value, dict):
+            nodes.append(value)
+            nested = value.get("visitorPhoto") or value.get("VisitorPhoto")
+            if isinstance(nested, dict):
+                nodes.append(nested)
+    refs = []
+    for node in nodes:
+        for field in ("smallPhotoUrl", "bigPhotoUrl", "picUrl", "photoUrl"):
+            val = node.get(field)
+            if isinstance(val, str) and 0 < len(val.strip()) <= 256 and val.strip() not in refs:
+                refs.append(val.strip())
+    return refs[:4]
+
+
+def fetch_visitor_photo(client, visitor_id: str, pic_url: str = "", *,
+                        details=None):
+    """Tenta referências reais e os tipos suportados, sem enviar imagem externa.
+
+    A API do HikCentral pode rejeitar a foto com código interno 128 mesmo com
+    HTTP 200. Isso não significa que o visitante não possui uma foto no Web
+    Client. O editor permitirá capturar outra foto se a OpenAPI não a fornecer.
+    """
     if not visitor_id or len(visitor_id) > 64:
         raise ValueError("Visitor ID inválido.")
-    # O endereço opaco da foto é encaminhado somente à OpenAPI, nunca aberto
-    # como URL externo (evita SSRF e vazamento das credenciais Artemis).
     pic_url = (pic_url or "").strip()
     if len(pic_url) > 256:
         raise HikError("Referência de foto inválida.")
-    request = {"visitorId": visitor_id, "picType": "0"}
+    refs = []
     if pic_url:
-        request["picUrl"] = pic_url
-    response = client.post(PHOTO_PATH, request, allow_image_data=True)
-    return decode_photo_response(response.get("data"))
+        refs.append(pic_url)
+    for item in _photo_references(details):
+        if item not in refs:
+            refs.append(item)
+    errors = []
+    # O picUrl é exigido na API documentada. Se não houver referência, a
+    # tentativa legada sem picUrl é somente a última alternativa.
+    candidates = []
+    for item in refs[:3]:
+        candidates.append((item, "0"))
+    if refs:
+        candidates.append((refs[0], "1"))
+    if not candidates:
+        candidates.append(("", "0"))
+    for ref, pic_type in candidates[:4]:
+        request = {"visitorId": visitor_id, "picType": pic_type}
+        if ref:
+            request["picUrl"] = ref
+        try:
+            response = client.post(PHOTO_PATH, request, allow_image_data=True)
+            return decode_photo_response(response.get("data"))
+        except (HikError, ValueError) as exc:
+            errors.append(str(exc))
+    detail = errors[0] if errors else "Nenhuma referência válida encontrada."
+    raise HikError("Não foi possível recuperar a foto pela OpenAPI. "
+                   "A imagem pode existir no Web Client. "
+                   "É possível selecionar uma foto nova ou usar a câmera para "
+                   "substituí-la conscientemente. " + detail)
