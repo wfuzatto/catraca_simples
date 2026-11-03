@@ -444,7 +444,10 @@ class ValeApp(tk.Tk):
             return
         if current == str(self.history_tab):
             self._settings_unlocked = False
-            self.refresh_history()
+            # Never fetch history on navigation. The data view and its
+            # widgets initialize only on first visit; subsequent visits
+            # reuse the same widget tree rather than stacking frames.
+            modern_ui.ensure_history_ui(self)
         if current == str(self.registration_tab):
             self._settings_unlocked = False
             if not self.register_button.winfo_manager():
@@ -1327,6 +1330,83 @@ class ValeApp(tk.Tk):
             else:
                 self.history_status.set("Cadastro e nível originais confirmados para edição.")
         self.task(work, finish)
+
+    def clean_transaction_cache(self):
+        """Clear only local transaction journals, preserving settings/history.
+
+        Require a reviewed, explicit confirmation; never create or resend a
+        visitor/appointment and never run while another task is active.
+        """
+        from transaction_cleanup import (
+            inspect_transaction_files, archive_transaction_files)
+        if self.busy:
+            messagebox.showwarning(
+                "Transação em andamento",
+                "Finalize a operação atual antes da limpeza.", parent=self)
+            return
+        if not self._settings_unlocked:
+            messagebox.showwarning(
+                "Configurações protegidas",
+                "Abra Configurações com a senha antes de limpar transações.",
+                parent=self)
+            return
+        try:
+            snapshot = inspect_transaction_files()
+        except Exception as exc:
+            messagebox.showerror("Limpeza de transações", str(exc), parent=self)
+            return
+        if not snapshot:
+            messagebox.showinfo(
+                "Cache de transações",
+                "Nenhum arquivo de transação ativo. "
+                "Configurações e histórico permanecem intactos.", parent=self)
+            return
+        names = "\n".join(
+            "• " + item["name"] for item in snapshot)
+        alert = (
+            "Arquivos de transação encontrados:\n" + names + "\n\n"
+            "Atenção: uma reserva ou check-in pode TER SIDO CRIADO "
+            "no HikCentral, mesmo que o programa não tenha recebido a "
+            "resposta.\n\n"
+            "CONFIRA Visitor Reservation e Visitor Check-In/Out no HikCentral "
+            "para evitar duplicar hóspedes.\n\n"
+            "Esta ação NÃO reenvia nem desfaz operações remotas. "
+            "Os arquivos originais serão movidos para uma pasta de auditoria "
+            "deste usuário do Windows; configurações, senhas e histórico não "
+            "serão alterados.\n\n"
+            "Você conferiu os registros no HikCentral e deseja liberar "
+            "as transações locais?")
+        if not messagebox.askyesno(
+                "Revisar transações antes de limpar", alert,
+                icon="warning", parent=self):
+            return
+        confirmation = simpledialog.askstring(
+            "Confirmar limpeza de transações",
+            "Após conferir no HikCentral, digite CONFERIDO para liberar:",
+            parent=self)
+        if confirmation is None:
+            return
+        if self.busy:
+            messagebox.showwarning(
+                "Em andamento", "Não é possível limpar durante uma operação.",
+                parent=self)
+            return
+        try:
+            archived = archive_transaction_files(snapshot, confirmation)
+        except Exception as exc:
+            messagebox.showerror(
+                "Limpeza não concluída", str(exc), parent=self)
+            return
+        self._refresh_pending_button()
+        self.status.set(
+            f"{len(archived)} apontamento(s) local(is) arquivado(s), "
+            "nenhuma alteração no HikCentral ou configurações.")
+        messagebox.showinfo(
+            "Transações locais liberadas",
+            f"{len(archived)} arquivo(s) de transação arquivado(s) "
+            "em transaction_audit.\n"
+            "As configurações e o histórico foram preservados.",
+            parent=self)
 
     def _refresh_pending_button(self):
         """O rodapé mostra a ação correta: entrega ou recuperação pendente."""
