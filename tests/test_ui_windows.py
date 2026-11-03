@@ -750,7 +750,7 @@ def test_editor_group_select_uses_connected_group_list(monkeypatch):
         popup = next(x for x in root.winfo_children()
                      if isinstance(x, ctk.CTkToplevel))
         combo = popup._editor_group_selector
-        assert combo.cget("state") == "readonly"
+        assert combo.instate(["readonly"])
         assert combo.get() == "Hóspedes Vale"
         assert list(combo.cget("values")) == root.connected_groups
         combo.set("Hóspedes Serra")
