@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.34` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.35` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -360,3 +360,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Consulta do histórico ACS para preencher as colunas de entrada e saída continua automática; nenhum evento ou permissão foi alterado.
 - Preservados os filtros, paginação, carregamento, cadastro de visitantes, câmera, NFC, níveis, horários, integração OpenAPI e o botão de salvar existente no editor.
 - Teste da interface Windows verifica ausência dos quatro botões, preservação do duplo clique e controles de lista.
+
+## Preview.35 — Visitantes fora do histórico e renovação segura de check-in ativo
+
+- Quando o operador pesquisa por **nome**, a aba Cadastros efetuados busca também em `POST /artemis/api/visitor/v1/visitor/visitorInfo`, a **Visitor Information** do HikCentral, mesmo que a pessoa não tenha check-in no intervalo selecionado. A consulta central de check-ins e os filtros continuam funcionando.
+- Pessoas encontradas apenas na base geral são exibidas com **sem check-in no período** e horários em branco (—); o duplo clique abre os detalhes e a foto, **somente para consulta**. Não são usadas datas artificiais, nível presumido nem IDs de outros hóspedes. Essa busca mostra a primeira página de até 100 pessoas retornadas pela API para um nome; refine o nome caso haja muitos resultados.
+- Para check-ins ainda **ativos**, a edição exige identidade e `recordId` confirmados na consulta de check-in. Primeiro busca a reserva original; se ela não tiver associação única, pode validar **um único nível** retornado explicitamente pelo `visitor/single/visitorinfo`, com o mesmo Visitor ID, grupo, ID do nível e portas ainda existentes. Sem essas provas a edição permanece somente leitura.
+- Um check-in encerrado (`check-out`, saída no terminal ou saída automática) **não deve ser reaberto pela API de edição de check-in**: a documentação do HikCentral explica que o checkout revoga as permissões. Para uma nova estadia, o operador usa **Visitor Information → Registrar novamente** no Web Client, reutilizando dados e credenciais do mesmo visitante. Automatizar esse novo registro exige validar o fluxo próprio da versão instalada no servidor.
+- Nenhum novo cadastro nem reserva é criado automaticamente ao pesquisar ou visualizar. As alterações da Preview.35 não mexem em NFC, câmera, grupos, validade, agenda, parâmetros de integração ou níveis existentes.
+- Testes cobrem busca por nome na base geral, proteção contra misturar pessoas, visitante sem datas e atualização de check-in ativo com nível real validado, sem operações remotas de escrita nos testes.
