@@ -549,7 +549,9 @@ def test_history_loading_indicator_for_list_and_editor(monkeypatch):
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
     root = app.ValeApp()
     try:
+        root.book.select(root.history_tab)
         root.update()
+        assert root._history_ui_built
         assert not root.history_loading_frame.winfo_manager()
         modern_ui.start_history_loading(root, "Carregando cadastros...", phase="records")
         root.update()
