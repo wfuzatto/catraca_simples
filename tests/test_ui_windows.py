@@ -534,3 +534,32 @@ def test_history_table_has_validity_and_actual_passage_columns(monkeypatch):
         assert values[7] == "03/11/2026 16:15:00"
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Indicador de progresso usa Tk do Windows")
+def test_history_loading_indicator_for_list_and_editor(monkeypatch):
+    """Progressbar visível, com fases simultâneas e retorno ao estado inicial."""
+    import app
+    import modern_ui
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    root = app.ValeApp()
+    try:
+        root.update()
+        assert not root.history_loading_frame.winfo_manager()
+        modern_ui.start_history_loading(root, "Carregando cadastros...", phase="records")
+        root.update()
+        assert root.history_loading_frame.winfo_manager() == "pack"
+        assert "Carregando cadastros" in root.history_loading_label.cget("text")
+        modern_ui.start_history_loading(root, "Carregando foto e dados...", phase="editor")
+        assert "Carregando foto" in root.history_loading_label.cget("text")
+        modern_ui.stop_history_loading(root, phase="records")
+        assert root.history_loading_frame.winfo_manager() == "pack"
+        modern_ui.stop_history_loading(root, phase="editor")
+        root.update()
+        assert not root.history_loading_frame.winfo_manager()
+        assert not root._history_progress_running
+    finally:
+        root.destroy()
