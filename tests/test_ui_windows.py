@@ -453,3 +453,45 @@ def test_new_history_tab_keeps_registration_and_settings_intact(monkeypatch):
         assert root.register_button.winfo_manager() == "pack"
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Visualização real da foto exige Tk do Windows")
+def test_remote_editor_shows_photo_at_top_and_blocks_unverified_updates(monkeypatch):
+    """Teste de janela offline: nenhuma chamada ao HikCentral, nenhum cadastro alterado."""
+    import io
+    import customtkinter as ctk
+    import app
+    import visitor_editor
+    from PIL import Image
+    from core import default_settings
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    root = app.ValeApp()
+    try:
+        root.update()
+        stream = io.BytesIO()
+        Image.new("RGB", (80, 80), "white").save(stream, "JPEG")
+        record = {
+            "visitor_id": "test-photo-812",
+            "first": "Visitante", "last": "Teste",
+            "group": "Hóspedes Serra", "reservation": "Apto 3",
+            "entry_at": "2099-11-02T10:00:00-03:00",
+            "exit_at": "2099-11-04T17:00:00-03:00",
+            "origin": "HikCentral", "access_names": [],
+        }
+        visitor_editor.open_visitor_editor(
+            root, record, initial_photo=stream.getvalue(), readonly=True,
+            readonly_reason="Sem nível original verificado.")
+        root.update_idletasks()
+        dialogs = [child for child in root.winfo_children()
+                   if isinstance(child, ctk.CTkToplevel)]
+        assert len(dialogs) == 1
+        dialog = dialogs[0]
+        assert getattr(dialog._photo_preview_widget, "image", None) is not None
+        assert dialog._save_edit_button.cget("state") == "disabled"
+        dialog.destroy()
+    finally:
+        root.destroy()
