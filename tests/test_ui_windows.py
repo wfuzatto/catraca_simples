@@ -495,3 +495,42 @@ def test_remote_editor_shows_photo_at_top_and_blocks_unverified_updates(monkeypa
         dialog.destroy()
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Layout da lista necessita Tk no Windows")
+def test_history_table_has_validity_and_actual_passage_columns(monkeypatch):
+    """Sem HikCentral: coluna de validade nunca substitui passagem física."""
+    import app
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    root = app.ValeApp()
+    try:
+        columns = tuple(root.history_table["columns"])
+        assert columns == (
+            "registered", "start", "end", "name", "group",
+            "checkin", "first_entry", "last_exit")
+        titles = [root.history_table.heading(col)["text"] for col in columns]
+        assert titles == [
+            "Cadastrado em", "Início válido", "Término válido",
+            "Visitante", "Grupo", "Check-in", "Primeira entrada", "Última saída"]
+        assert "Nível" not in titles and "Catracas" not in titles
+        assert root.history_table.cget("xscrollcommand")
+
+        root._show_history_rows([{
+            "visitor_id": "123", "registered_at": "2026-11-03T10:00:00-03:00",
+            "entry_at": "2026-11-03T09:00:00-03:00",
+            "exit_at": "2026-11-05T17:00:00-03:00",
+            "first": "Ana", "last": "Teste", "group": "Hóspedes Vale",
+            "checkin_state": "check-in efetuado",
+            "first_entry_at": "2026-11-03T10:15:00-03:00",
+            "last_exit_at": "2026-11-03T16:15:00-03:00",
+        }], "Teste offline")
+        values = root.history_table.item("0")["values"]
+        assert len(values) == 8
+        assert values[2] == "05/11/2026 17:00:00"
+        assert values[6] == "03/11/2026 10:15:00"
+        assert values[7] == "03/11/2026 16:15:00"
+    finally:
+        root.destroy()
