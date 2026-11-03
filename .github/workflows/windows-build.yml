@@ -26,7 +26,7 @@ jobs:
           python scripts/download_face_yunet.py
           if ($LASTEXITCODE -ne 0) { throw "Modelo YuNet oficial inválido ou indisponível" }
           # Import real startup modules before running any tests: catches removed symbols.
-          python -c "import app; import core; import modern_ui; import responsive_ui; import devices; import hikcentral; import face_capture_logic; import face_capture_ui; import remote_history; import access_passages; import pending_recovery; import access_receipt; face_capture_logic.LocalFaceDetector(); print('Startup and offline facial detector imports OK: ' + core.APP_VERSION)"
+          python -c "import app; import core; import modern_ui; import responsive_ui; import devices; import hikcentral; import face_capture_logic; import face_capture_ui; import remote_history; import access_passages; import pending_recovery; import access_receipt; import transaction_cleanup; face_capture_logic.LocalFaceDetector(); print('Startup and offline facial detector imports OK: ' + core.APP_VERSION)"
           if ($LASTEXITCODE -ne 0) { throw "Falha de importacao dos modulos do aplicativo" }
           # Isolate Tk interpreters: creating/destroying many CTk windows in
           # the same Windows Python process can invalidate Tcl's library context.
@@ -48,7 +48,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Teste de spinner/erro falhou" }
           python -m pytest -q 'tests/test_ui_windows.py::test_preflight_task_has_no_registration_spinner'
           if ($LASTEXITCODE -ne 0) { throw "Teste de preflight falhou" }
-          python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py face_capture_logic.py face_capture_ui.py remote_history.py access_passages.py pending_recovery.py access_receipt.py
+          python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py face_capture_logic.py face_capture_ui.py remote_history.py access_passages.py pending_recovery.py access_receipt.py transaction_cleanup.py
           if ($LASTEXITCODE -ne 0) { throw "Compilacao dos modulos falhou" }
       - name: Empacotar EXE autocontido
         shell: pwsh
