@@ -446,7 +446,7 @@ def test_new_history_tab_keeps_registration_and_settings_intact(monkeypatch):
         root.book.select(root.history_tab)
         root.update()
         assert root.history_table.winfo_exists()
-        assert "0 cadastros" in root.history_status.get()
+        assert "Atualizar lista" in root.history_status.get()
         assert root.register_button.winfo_manager() == ""
         root.book.select(root.registration_tab)
         root.update()
@@ -507,6 +507,8 @@ def test_history_table_has_validity_and_actual_passage_columns(monkeypatch):
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
     root = app.ValeApp()
     try:
+        root.book.select(root.history_tab)
+        root.update()
         columns = tuple(root.history_table["columns"])
         assert columns == (
             "registered", "start", "end", "name", "group",
@@ -575,6 +577,8 @@ def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monke
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
     root = app.ValeApp()
     try:
+        root.update()
+        root.book.select(root.history_tab)
         root.update()
         assert root.history_table.bind("<Double-1>")
         assert "dois cliques" in root.history_double_click_hint.cget("text")
@@ -757,5 +761,37 @@ def test_editor_group_select_uses_connected_group_list(monkeypatch):
         assert combo.get() == "Hóspedes Serra"
         assert popup._save_edit_button.cget("state") == "normal"
         popup.destroy()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Tk Windows UI")
+def test_history_is_lazy_and_never_autofetches_on_tab_change(monkeypatch):
+    """Building or revisiting History must not contact HikCentral/read DPAPI."""
+    import app
+    import modern_ui
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(app, "list_history", lambda: (
+        pytest.fail("Historical DPAPI read should be explicit")))
+    monkeypatch.setattr(app, "fetch_checkins", lambda *a, **kw: (
+        pytest.fail("Remote history should not be fetched automatically")))
+    root = app.ValeApp()
+    try:
+        assert root._history_ui_built is False
+        assert not hasattr(root, "history_table")
+        root.book.select(root.history_tab)
+        root.update()
+        assert root._history_ui_built is True
+        tree = root.history_table
+        assert "Atualizar lista" in root.history_status.get()
+        root.book.select(root.registration_tab)
+        root.update()
+        root.book.select(root.history_tab)
+        root.update()
+        assert root.history_table is tree
+        assert root.history_tab.winfo_children().__len__() == 1
     finally:
         root.destroy()
