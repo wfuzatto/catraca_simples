@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.33` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.34` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -352,3 +352,11 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - O rodapé passa a informar quantidade de consultas, eventos retornados, autenticações concedidas e casos sem direção, além do primeiro erro da API quando houver. Selecionando um visitante remoto e clicando **Consultar catracas**, é possível comparar primeira/última autenticação (como no Visitor Access Record) com a primeira entrada/última saída confirmada, sem alterar dados.
 - Ainda é necessária homologação com a versão e permissões do HikCentral do hotel: a interface Web Client pode mostrar primeiro/último registro de autenticação mesmo quando a API não fornece direção; o programa não inventará entrada ou saída nesses casos.
 - O login, configurações, foto, câmera, NFC, permissões, grupos e cadastro permanecem inalterados.
+
+## Preview.34 — Cadastros efetuados com menos botões
+
+- Removida a linha de ações **Consultar catracas**, **Reenviar credencial**, **Ver dados / corrigir** e **Ver foto (HikCentral)** da aba **Cadastros efetuados**.
+- O **duplo clique** na linha continua abrindo a janela com dados, foto e edição (quando as provas remotas de nível, identidade e credenciais permitirem).
+- Consulta do histórico ACS para preencher as colunas de entrada e saída continua automática; nenhum evento ou permissão foi alterado.
+- Preservados os filtros, paginação, carregamento, cadastro de visitantes, câmera, NFC, níveis, horários, integração OpenAPI e o botão de salvar existente no editor.
+- Teste da interface Windows verifica ausência dos quatro botões, preservação do duplo clique e controles de lista.
