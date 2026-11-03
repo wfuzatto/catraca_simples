@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageTk
 
-from core import (APP_VERSION, GROUPS, TZ, Visitor, load_settings, save_settings, load_api_keys,
+from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   initial_visitor_group, validate_visitor_group_selection, validate_valid_times,
                   visitor_levels_for_group, verify_visitor_access_plan,
                   mark_appointment_inflight,
@@ -911,13 +911,35 @@ class ValeApp(tk.Tk):
                     status_base + f" | Passagens: {checks}. "
                     "Traço (—) = nenhum evento de entrada/saída comprovado.")
 
-        def fetch_one(item):
+        def fetch_one(item, group_doors):
             key, record = item
+            rec = dict(record)
+            # Alguns registros de visitantes não retornam door_ids no
+            # check-in. Os níveis Visitor configurados são usados apenas
+            # para filtrar EVENTOS consultivos, não para atribuir acessos.
+            if not rec.get("door_ids"):
+                rec["door_ids"] = group_doors.get(rec.get("group"), [])
             # Uma sessão separada por worker; requests.Session não é
             # compartilhada por múltiplas threads.
-            return key, fetch_visitor_passages(self.client(), record)
+            return key, fetch_visitor_passages(self.client(), rec)
 
         def background():
+            # No máximo uma consulta das portas por grupo desta página,
+            # não uma consulta de grupos por visitante.
+            group_doors = {}
+            approved_access = self.settings.get("group_access", {})
+            for group in {rec.get("group") for _, rec in records}:
+                level_name = VALE_VISITOR_LEVELS.get(group)
+                if not level_name or approved_access.get(group) != [level_name]:
+                    continue
+                try:
+                    selected, doors = self.client().resolve_levels([level_name])
+                    verify_visitor_access_plan(selected, doors, [level_name])
+                    group_doors[group] = list(doors)
+                except Exception:
+                    # A falta de permissão para consultar grupos não implica
+                    # que não existam eventos. Tentar pelo ID da pessoa.
+                    group_doors[group] = []
             successes = 0
             failures = 0
             first_error = ""
@@ -927,7 +949,10 @@ class ValeApp(tk.Tk):
                 "typed_fallback": 0, "unfiltered_errors": 0,
             }
             with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {executor.submit(fetch_one, item): item[0] for item in records}
+                futures = {
+                    executor.submit(fetch_one, item, group_doors): item[0]
+                    for item in records
+                }
                 for future in as_completed(futures):
                     if generation != self._history_access_generation:
                         for pending in futures:
