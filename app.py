@@ -29,7 +29,7 @@ from visitor_history import list_history, save_registration, set_history_status,
 from remote_history import (search_window, fetch_checkins, visitor_details,
                             fetch_visitor_photo, history_time,
                             enrich_checkins_with_appointment_levels,
-                            resolve_remote_edit_record)
+                            resolve_remote_edit_record, search_visitor_directory)
 from access_passages import fetch_visitor_passages
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
@@ -974,6 +974,15 @@ class ValeApp(tk.Tk):
             except Exception as exc:
                 # Ainda exibir check-ins, mas identificar a falta de níveis.
                 result["level_warning"] = " Níveis não consultados: " + str(exc)
+            result["directory_rows"] = []
+            result["directory_warning"] = ""
+            if name.strip() and page == 1:
+                try:
+                    result["directory_rows"] = search_visitor_directory(
+                        client, name.strip(), page=1)
+                except Exception as exc:
+                    result["directory_warning"] = (
+                        " Visitor Information indisponível: " + str(exc))
             return result
 
         def finish(result, error):
@@ -1018,12 +1027,25 @@ class ValeApp(tk.Tk):
                     row["_local_verified"] = True
                     row["state"] = local.get("state", "não verificada")
                 rows.append(row)
+            # Visitantes podem existir na base geral SEM check-in no intervalo.
+            # Não os confundir com visitas verificadas nem permitir gravação.
+            checkin_count = len(rows)
+            listed_ids = {r["visitor_id"] for r in rows}
+            for directory_row in result.get("directory_rows", []):
+                if directory_row["visitor_id"] not in listed_ids:
+                    rows.append(directory_row)
+                    listed_ids.add(directory_row["visitor_id"])
+            directory_count = len(rows) - checkin_count
             description = (
-                f"HikCentral: {len(rows)} nesta página; {result['total']} registros encontrados. "
-                "Eventos de catraca são pesquisados pelo Visitor ID." +
-                result.get("level_warning", ""))
+                f"HikCentral: {checkin_count} check-ins nesta página; "
+                f"{result['total']} check-ins no período."
+                + (f" {directory_count} visitante(s) adicional(is) encontrado(s) "
+                   "em Visitor Information, sem check-in no período." if directory_count else "")
+                + result.get("directory_warning", "")
+                + result.get("level_warning", ""))
             self._show_history_rows(rows, description)
-            self._load_history_passages(rows, description)
+            # Eventos de catraca só podem ser buscados para visitas com intervalo.
+            self._load_history_passages(rows[:checkin_count], description)
             self.history_page_label.set(f"Página {page} • {result['total']} registros")
             self.history_next_button.configure(
                 state="normal" if result["has_next"] else "disabled")
@@ -1261,6 +1283,18 @@ class ValeApp(tk.Tk):
                         detail = visitor_details(client, record["visitor_id"])
                     except Exception:
                         pass
+            elif record.get("origin") == "VisitorInformation":
+                # Base geral pode conter visitantes sem visita ativa ou encerrados.
+                # Sem recordId de check-in, nunca permitir atualizar/reaplicar.
+                issue = ("Visitante encontrado em Visitor Information, mas sem "
+                         "check-in no período consultado. Para renovar uma estadia "
+                         "encerrada, use o recurso Registrar novamente do HikCentral.")
+                detail = visitor_details(client, record["visitor_id"])
+                detail_id = str(
+                    detail.get("visitorId") or
+                    (detail.get("VisitorInfo") or {}).get("visitorId") or "")
+                if detail_id and detail_id != record["visitor_id"]:
+                    raise ValueError("Visitor ID do detalhe diverge do selecionado.")
             else:
                 verified = dict(record)
                 try:
