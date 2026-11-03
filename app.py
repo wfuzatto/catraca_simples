@@ -874,10 +874,11 @@ class ValeApp(tk.Tk):
                 return
             modern_ui.stop_history_loading(self, phase="passages")
             checks = (
-                f"{scanned}/{len(records)} consultas, "
+                f"{scanned}/{len(records)} visitantes, "
                 f"{aggregate['successful_access']} acessos concedidos, "
                 f"{aggregate['without_direction']} sem direção, "
-                f"{aggregate['events_returned']} eventos retornados")
+                f"{aggregate['events_returned']} eventos recebidos, "
+                f"{aggregate['typed_fallback']} buscas por tipo")
             if failures:
                 # Exibir um erro concreto; nunca deixar somente “—” sem explicar.
                 self.history_status.set(
@@ -886,12 +887,29 @@ class ValeApp(tk.Tk):
             elif aggregate["successful_access"] and aggregate["without_direction"]:
                 self.history_status.set(
                     status_base + f" | Passagens: {checks}. "
-                    "Sem sentido de passagem: verifique leitores ENTRADA/SAÍDA "
-                    "ou checkInAndOutType no HikCentral.")
+                    "Há autenticações sem direção: configure os leitores "
+                    "ENTRADA/SAÍDA ou confira checkInAndOutType no HikCentral.")
+            elif not aggregate["successful_access"] and aggregate["other_visitors"]:
+                self.history_status.set(
+                    status_base + f" | Passagens: {checks}. "
+                    "A OpenAPI retornou eventos, mas não comprovou o Visitor ID "
+                    "ou a combinação de cartão e nome. Verifique IDs no Access Record.")
+            elif not aggregate["events_returned"]:
+                self.history_status.set(
+                    status_base + f" | Passagens: {checks}. "
+                    "Nenhum evento ACS retornado: confira os registros em "
+                    "Visitor Access Record, a permissão de consulta OpenAPI, "
+                    "a sincronização de eventos e o fuso horário.")
+            elif aggregate["typed_fallback"]:
+                self.history_status.set(
+                    status_base + f" | Passagens: {checks}. "
+                    "Foi necessário consultar eventos por modalidade "
+                    "(face, cartão/face, multifator e QR). Os horários podem "
+                    "não cobrir outras modalidades de autenticação.")
             else:
                 self.history_status.set(
                     status_base + f" | Passagens: {checks}. "
-                    "Traço (—) = nenhum evento de entrada/saída classificado.")
+                    "Traço (—) = nenhum evento de entrada/saída comprovado.")
 
         def fetch_one(item):
             key, record = item
@@ -903,7 +921,11 @@ class ValeApp(tk.Tk):
             successes = 0
             failures = 0
             first_error = ""
-            aggregate = {"successful_access": 0, "without_direction": 0, "events_returned": 0}
+            aggregate = {
+                "successful_access": 0, "without_direction": 0,
+                "events_returned": 0, "other_visitors": 0,
+                "typed_fallback": 0, "unfiltered_errors": 0,
+            }
             with ThreadPoolExecutor(max_workers=4) as executor:
                 futures = {executor.submit(fetch_one, item): item[0] for item in records}
                 for future in as_completed(futures):
