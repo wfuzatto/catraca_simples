@@ -1,12 +1,15 @@
 """Editor de registros Visitor já existentes. Nunca cria pessoa/reserva."""
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from io import BytesIO
 from PIL import Image, ImageTk
 from datetime import datetime
 import customtkinter as ctk
-from core import Visitor, TZ, parse_local, registration_payload, prepare_face_jpeg, load_pending, app_dir, _write_json_atomic, verify_visitor_access_plan
+from core import (Visitor, TZ, parse_local, registration_payload,
+                  prepare_face_jpeg, load_pending, app_dir, _write_json_atomic,
+                  verify_visitor_access_plan, visitor_levels_for_group,
+                  VALE_VISITOR_LEVELS)
 from visitor_history import save_registration, set_history_status
 from access_receipt import make_access_receipt
 
@@ -43,6 +46,25 @@ def open_editor_camera(dialog, settings, on_accept):
         if dialog.winfo_exists():
             dialog.grab_set()
         raise
+
+
+def selected_editor_access(group, available_groups, settings):
+    """Select the operator-approved mapping; never infer actual existing rights.
+
+    Uses exactly the same group restrictions and group_access settings as the
+    main registration screen; remote type=2 privilege group and doors are
+    independently checked just before applying any changes.
+    """
+    group = str(group or "").strip()
+    requested = visitor_levels_for_group(
+        group, available_groups, settings.get("group_access", {}),
+        settings.get("preferred_group", ""))
+    approved = VALE_VISITOR_LEVELS.get(group)
+    if not approved or requested != [approved]:
+        raise ValueError(
+            "O grupo selecionado não possui o nível Visitor homologado. "
+            "Confira Configurações; nenhuma alteração foi enviada.")
+    return requested
 
 
 def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
@@ -124,22 +146,11 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             "uma NOVA foto antes de salvar. A original não foi recuperada. "
             "Nada será substituído antes da confirmação do cadastro."),
             text_color="#B45309", wraplength=530, justify="left").pack(pady=(0, 6))
-    if not readonly and record.get("_requires_access_confirmation"):
-        ctk.CTkLabel(body, text=(
-            "ACESSO EM RECUPERAÇÃO: o HikCentral não retornou o nível anterior. "
-            "O salvamento poderá reaplicar o nível homologado " +
-            ", ".join(record.get("access_names", [])) +
-            " e seus " + str(len(record.get("door_ids", []))) +
-            " pontos de acesso. Será exigida confirmação específica."),
-            text_color="#B45309", wraplength=530,
-            justify="left").pack(pady=(0, 6))
-    elif not readonly and record.get("_access_assurance_type") == "local_acknowledged":
-        ctk.CTkLabel(body, text=(
-            "Nível Visitor " + ", ".join(record.get("access_names", [])) +
-            ": reaplicação anterior confirmada neste computador. "
-            "O HikCentral continua sem informar o vínculo original pela API; "
-            "alterações realizadas por outra estação podem não ser detectadas."),
-            text_color="#475569", wraplength=530, justify="left").pack(pady=(0, 6))
+    # A seleção do grupo determina o plano A APLICAR. Ela não é prova
+    # de associação anterior (a OpenAPI pode omitir accessInfo). Evitar
+    # o alerta laranja repetitivo; a confirmação do salvamento mostra
+    # o grupo, nível e catracas efetivamente escolhidos.
+
     if readonly:
         ctk.CTkLabel(body,
                      text="Somente consulta: " + (readonly_reason or
@@ -173,9 +184,43 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         ctk.CTkEntry(body, textvariable=var,
                      state="disabled" if readonly else "normal").pack(fill="x")
         fields[field] = var
-    ctk.CTkLabel(body,
-        text="Grupo: " + record.get("group", "") + " | Nível: " +
-             ", ".join(record.get("access_names", [])), wraplength=505).pack(pady=10)
+    ctk.CTkLabel(body, text="Grupo de visitante", anchor="w").pack(
+        fill="x", pady=(10, 3))
+    original_group = str(record.get("group", "")).strip()
+    allowed_groups = list(dict.fromkeys(
+        str(g).strip() for g in getattr(app, "connected_groups", [])
+        if str(g).strip()))
+    group_var = tk.StringVar(value=original_group)
+    editor_groups = ttk.Combobox(
+        body, textvariable=group_var, state=(
+            "disabled" if readonly or not allowed_groups else "readonly"),
+        values=allowed_groups, style="Vale.TCombobox", font=("Segoe UI", 12))
+    editor_groups.pack(fill="x", ipady=5)
+    dialog._editor_group_selector = editor_groups
+    level_status = tk.StringVar()
+
+    def show_selected_level(*_):
+        group = group_var.get()
+        try:
+            level = selected_editor_access(
+                group, allowed_groups, app.settings)[0]
+            level_status.set(
+                "Nível a aplicar: " + level +
+                " • pontos de acesso consultados no HikCentral ao salvar")
+        except ValueError:
+            level_status.set(
+                "Grupo sem mapeamento Visitor autorizado — salvar indisponível")
+    group_var.trace_add("write", show_selected_level)
+    show_selected_level()
+    ctk.CTkLabel(body, textvariable=level_status,
+                 wraplength=505, justify="left").pack(pady=(4, 10))
+    if not readonly:
+        ctk.CTkLabel(
+            body, text=(
+                "O grupo selecionado define as permissões A APLICAR ao salvar. "
+                "O HikCentral pode omitir o nível anteriormente concedido; "
+                "a seleção não comprova permissões antigas."),
+            wraplength=505, justify="left", text_color="#64748B").pack(pady=(0, 5))
     ctk.CTkLabel(body,
         text="A imagem e a pulseira não ficam no histórico local. "
              "A edição exige as credenciais necessárias para não apagar "
@@ -245,32 +290,29 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 raise ValueError("Selecione a foto para preservar a credencial facial.")
             if record.get("expect_card") and not fields["card"].get().strip():
                 raise ValueError("Informe a pulseira para preservar a credencial NFC.")
+            new_group = group_var.get().strip()
+            requested_level = selected_editor_access(
+                new_group, allowed_groups, app.settings)
             obj = Visitor(fields["first"].get(), fields["last"].get(),
-                record["group"], chosen_photo["bytes"], fields["card"].get().strip(),
+                new_group, chosen_photo["bytes"], fields["card"].get().strip(),
                 parse_local(fields["entry"].get()), parse_local(fields["exit"].get()),
                 fields["reservation"].get())
             payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
             if not record.get("registration_record_id"):
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
-            if record.get("_requires_access_confirmation"):
-                message = (
-                    "O nível de acesso anterior NÃO foi confirmado na OpenAPI.\n\n"
-                    "Se continuar, o aplicativo atribuirá o nível Visitor HOMOLOGADO "
-                    + ", ".join(record.get("access_names", [])) + " para o grupo "
-                    + record.get("group", "") + " em "
-                    + str(len(record.get("door_ids", []))) + " pontos de acesso.\n\n"
-                    "Isso pode substituir permissões anteriores desconhecidas. "
-                    "Você conferiu e autoriza esta reaplicação?"
-                )
-                if not messagebox.askyesno(
-                        "Autorizar recuperação de nível", message,
-                        icon="warning", parent=dialog):
-                    return
-            if not messagebox.askyesno("Confirmar edição",
-                "Atualizar o MESMO Visitor ID e o registro de check-in confirmado "
-                "com as datas e credenciais informadas? "
-                "A operação não cria visitante nem reserva.",
-                parent=dialog):
+            if not messagebox.askyesno(
+                    "Confirmar atualização de visitante",
+                    "Visitante ID: " + str(record["visitor_id"]) +
+                    "\\nGrupo selecionado: " + new_group +
+                    "\\nNível Visitor a aplicar: " + requested_level[0] +
+                    "\\n\\n" +
+                    ("ATENÇÃO: o grupo será alterado de '" + original_group +
+                     "' para '" + new_group + "'. Isso altera as permissões.\\n\\n"
+                     if new_group != original_group else
+                     "Será reaplicado o nível configurado para esse grupo.\\n\\n") +
+                    "O registro de check-in será atualizado sem criar outra reserva. "
+                    "Confirma a aplicação do grupo e nível selecionados?",
+                    parent=dialog):
                 return
         except Exception as exc:
             messagebox.showerror("Dados", str(exc), parent=dialog)
@@ -283,14 +325,36 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 record["visitor_id"], record["entry_at"], record["exit_at"])
             if not old_id or old_id != record["registration_record_id"]:
                 raise ValueError("Check-in original não confirmado pela consulta.")
-            selected, doors = client.resolve_levels(record["access_names"])
-            if record.get("access_level_ids") and (
-                    [str(x["id"]) for x in selected] !=
-                    [str(x) for x in record["access_level_ids"]]):
-                raise ValueError("O nível original mudou. Edição bloqueada.")
-            verify_visitor_access_plan(selected, doors, record["access_names"])
-            if set(doors) != set(record["door_ids"]):
-                raise ValueError("Pontos alterados; edição bloqueada.")
+            # Revalidar grupo e acesso imediatamente antes da escrita.
+            live_groups = client.visitor_groups()
+            selected_group = selected_editor_access(
+                new_group, live_groups, app.settings)
+            if selected_group != requested_level:
+                raise ValueError("O mapeamento do grupo foi alterado; edição bloqueada.")
+            from remote_history import visitor_details
+            details = visitor_details(client, record["visitor_id"])
+            info = details.get("VisitorInfo") or details.get("visitorInfo") or details
+            if not isinstance(info, dict):
+                raise ValueError("O HikCentral não confirmou os dados atuais do visitante.")
+            identity = str(info.get("visitorId") or info.get("ID") or "")
+            actual_group = str(info.get("visitorGroupName") or
+                               info.get("visitorGroup") or "")
+            if identity != str(record["visitor_id"]) or (
+                    actual_group and actual_group != original_group):
+                raise ValueError(
+                    "A identidade ou grupo foi alterado em outra estação. "
+                    "Atualize a lista antes de editar.")
+            selected, doors = client.resolve_levels(requested_level)
+            verify_visitor_access_plan(selected, doors, requested_level)
+            if new_group == original_group:
+                if record.get("access_level_ids") and (
+                        [str(x["id"]) for x in selected] !=
+                        [str(x) for x in record["access_level_ids"]]):
+                    raise ValueError("O nível original mudou. Edição bloqueada.")
+                if record.get("door_ids") and set(doors) != set(record["door_ids"]):
+                    raise ValueError("Pontos originais alterados; edição bloqueada.")
+            # Ao trocar de grupo, a diferença de nível/catracas é intencional,
+            # mas somente no plano homologado validado nesta mesma consulta.
             journal = app_dir() / "visitor_edit_inflight.json"
             if journal.exists():
                 raise ValueError("Existe edição anterior com resultado incerto.")
@@ -300,6 +364,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             new_id = client.update_registered_visitor(
                 old_id, record["visitor_id"], payload, selected)
             save_registration({**record, "first": obj.first_name, "last": obj.last_name,
+                "group": new_group, "access_names": requested_level,
+                "access_level_ids": [str(selected[0]["id"])], "door_ids": list(doors),
                 "reservation": obj.reservation, "entry_at": payload["visitStartTime"],
                 "exit_at": payload["visitEndTime"], "registration_record_id": new_id,
                 "state": "reaplicação pendente", "checkin_state": "a confirmar"})
@@ -323,7 +389,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                         verified_record = {
                             **record,
                             "first": obj.first_name, "last": obj.last_name,
-                            "reservation": obj.reservation,
+                            "reservation": obj.reservation, "group": new_group,
                             "entry_at": payload["visitStartTime"],
                             "exit_at": payload["visitEndTime"],
                             "registration_record_id": str(actual_id),
