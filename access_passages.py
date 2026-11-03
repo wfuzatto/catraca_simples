@@ -77,10 +77,12 @@ def _periods(start, end):
 
 
 def fetch_visitor_passages(client, record, *, now=None):
-    """Retorna primeiríssima entrada e última saída da VISITA escolhida.
+    """Consulta Visitor Access Record via ACS; classifica apenas sentidos provados.
 
-    Filtra por personId, nunca por nome; pagina todos os registros com limite
-    explícito, não retorna extremos parciais de uma consulta truncada.
+    Primeiro filtra pelo Visitor ID. Para servidores em que esse filtro não
+    encontra eventos, tenta personName, aceitando somente identidade comprovada
+    por ID ou combinação exata de nome e cartão físico. Não usa nome isolado
+    para atribuir passagens (homônimos podem existir).
     """
     vid = str(record.get("visitor_id") or "").strip()
     if not vid or len(vid) > 32:
@@ -93,94 +95,126 @@ def fetch_visitor_passages(client, record, *, now=None):
     if current.tzinfo is None:
         current = current.replace(tzinfo=TZ)
     stop = min(current.astimezone(TZ), end)
+    summary = {
+        "events_returned": 0, "other_visitors": 0,
+        "successful_access": 0, "without_direction": 0,
+        "first_entry_count": 0, "last_exit_count": 0,
+        "unknown_event_type": 0, "queries": 0, "by_name_fallback": 0,
+    }
     if stop <= start:
         return {
             "first_entry_at": "", "last_exit_at": "",
             "first_access_at": "", "last_access_at": "",
-            "passage_diagnostics": {
-                "events_returned": 0, "other_visitors": 0,
-                "successful_access": 0, "without_direction": 0,
-                "first_entry_count": 0, "last_exit_count": 0,
-                "unknown_event_type": 0,
-            },
+            "passage_diagnostics": summary,
         }
+
     doors = [str(x) for x in record.get("door_ids", []) if str(x).strip()]
     if len(doors) > 10:
-        doors = []  # A API limita a 10; pessoa continua filtrada por ID.
-    entry_times = []
-    exit_times = []
-    all_auth_times = []
-    counts = {
-        "events_returned": 0, "other_visitors": 0,
-        "successful_access": 0, "without_direction": 0,
-        "first_entry_count": 0, "last_exit_count": 0,
-        "unknown_event_type": 0,
-    }
+        doors = []  # Até 10 índices, como exige a API.
+    name = str(record.get("full_name") or " ".join(
+        filter(None, (record.get("first"), record.get("last"))))).strip()
+    card = str(record.get("card_number") or "").strip()
+    filters = [("id", {"personId": vid})]
+    if name and len(name) <= 32:
+        filters.append(("name", {"personName": name}))
+    entry_times, exit_times, auth_times = [], [], []
     seen = set()
+
+    def verified_person(event):
+        # Nunca considerar somente o nome como identidade comprovada.
+        if str(event.get("personId") or "").strip() == vid:
+            return True
+        return bool(card and
+                    str(event.get("cardNo") or "").strip() == card and
+                    _simplify(event.get("personName")) == _simplify(name))
+
+    def process_event(event):
+        summary["events_returned"] += 1
+        if not isinstance(event, dict) or not verified_person(event):
+            summary["other_visitors"] += 1
+            return False
+        try:
+            event_type = int(event.get("eventType"))
+        except (ValueError, TypeError):
+            summary["unknown_event_type"] += 1
+            return True
+        if event_type not in GRANTED_TYPES:
+            summary["unknown_event_type"] += 1
+            return True
+        when = _parse_event_time(event.get("eventTime"))
+        if when is None or not start <= when <= stop:
+            return True
+        unique = (str(event.get("eventId") or ""), when.isoformat(),
+                  str(event.get("doorIndexCode") or ""))
+        if unique in seen:
+            return True
+        seen.add(unique)
+        summary["successful_access"] += 1
+        auth_times.append(when)
+        direction = _direction(event)
+        if direction == "entry":
+            entry_times.append(when)
+            summary["first_entry_count"] += 1
+        elif direction == "exit":
+            exit_times.append(when)
+            summary["last_exit_count"] += 1
+        else:
+            summary["without_direction"] += 1
+        return True
+
     for begin, finish in _periods(start, stop):
-        for page in range(1, MAX_PAGES_PER_PERIOD + 1):
-            # personId satisfaz a regra de seleção da API; eventType fica ausente
-            # para incluir FACE, CARD e QR, nunca apenas um tipo de credencial.
-            payload = {
-                "startTime": begin.isoformat(timespec="seconds"),
-                "endTime": finish.isoformat(timespec="seconds"),
-                "personId": vid, "personType": 1,
-                "doorIndexCodes": doors, "pageNo": page, "pageSize": PAGE_SIZE,
-                "sortField": "SwipeTime", "orderType": 0,
-            }
-            response = client.post(DOOR_EVENTS_PATH, payload)
-            data = response.get("data") or {}
-            if not isinstance(data, dict) or not isinstance(data.get("list"), list):
-                raise HikError("API de passagens retornou dados incompatíveis.")
-            items = data["list"]
+        previous_error = None
+        for mode, identity in filters:
+            matched = 0
             try:
-                total = int(data.get("total") or 0)
-            except (TypeError, ValueError) as exc:
-                raise HikError("Total inválido no histórico de passagens.") from exc
-            for event in items:
-                counts["events_returned"] += 1
-                if not isinstance(event, dict):
-                    continue
-                if str(event.get("personId") or "") != vid:
-                    counts["other_visitors"] += 1
-                    continue
-                try:
-                    event_type = int(event.get("eventType"))
-                except (ValueError, TypeError):
-                    counts["unknown_event_type"] += 1
-                    continue
-                if event_type not in GRANTED_TYPES:
-                    counts["unknown_event_type"] += 1
-                    continue
-                when = _parse_event_time(event.get("eventTime"))
-                if when is None or not start <= when <= stop:
-                    continue
-                direction = _direction(event)
-                unique = (str(event.get("eventId") or ""), when.isoformat(),
-                          str(event.get("doorIndexCode") or ""))
-                if unique in seen:
-                    continue
-                seen.add(unique)
-                counts["successful_access"] += 1
-                all_auth_times.append(when)
-                if direction == "entry":
-                    entry_times.append(when)
-                    counts["first_entry_count"] += 1
-                elif direction == "exit":
-                    exit_times.append(when)
-                    counts["last_exit_count"] += 1
+                for page in range(1, MAX_PAGES_PER_PERIOD + 1):
+                    payload = {
+                        "startTime": begin.isoformat(timespec="seconds"),
+                        "endTime": finish.isoformat(timespec="seconds"),
+                        **identity,
+                        "personType": 1,
+                        "doorIndexCodes": doors,
+                        "pageNo": page, "pageSize": PAGE_SIZE,
+                        "sortField": "SwipeTime", "orderType": 0,
+                    }
+                    summary["queries"] += 1
+                    response = client.post(DOOR_EVENTS_PATH, payload)
+                    data = response.get("data") or {}
+                    if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+                        raise HikError("API Visitor Access Record retornou dados incompatíveis.")
+                    items = data["list"]
+                    try:
+                        total = int(data.get("total") or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise HikError("Total inválido no histórico de passagens.") from exc
+                    for event in items:
+                        if process_event(event):
+                            matched += 1
+                    if len(items) < PAGE_SIZE or (total and page * PAGE_SIZE >= total):
+                        break
                 else:
-                    counts["without_direction"] += 1
-            if len(items) < PAGE_SIZE or (total and page * PAGE_SIZE >= total):
+                    raise HikError(
+                        "Histórico com mais páginas que o limite seguro; horários não estimados.")
+            except HikError as exc:
+                if mode == "id" and len(filters) > 1:
+                    previous_error = exc
+                    continue
+                raise
+            if mode == "name":
+                summary["by_name_fallback"] += 1
+            # Se o filtro por pessoa encontrou eventos, não pesquisar pelo nome.
+            if matched:
                 break
         else:
-            raise HikError("Histórico com mais páginas que o limite seguro; horários não serão estimados.")
+            if previous_error is not None and len(filters) == 1:
+                raise previous_error
+
     return {
         "first_entry_at": min(entry_times).isoformat(timespec="seconds") if entry_times else "",
         "last_exit_at": max(exit_times).isoformat(timespec="seconds") if exit_times else "",
-        # First/last authentication as displayed by Visitor Access Record,
-        # WITHOUT mislabeling an undirected authentication as exit.
-        "first_access_at": min(all_auth_times).isoformat(timespec="seconds") if all_auth_times else "",
-        "last_access_at": max(all_auth_times).isoformat(timespec="seconds") if all_auth_times else "",
-        "passage_diagnostics": counts,
+        # A tela Visitor Access Record pode mostrar autenticações sem sentido
+        # físico. Não reportar último acesso como SAÍDA se não for comprovado.
+        "first_access_at": min(auth_times).isoformat(timespec="seconds") if auth_times else "",
+        "last_access_at": max(auth_times).isoformat(timespec="seconds") if auth_times else "",
+        "passage_diagnostics": summary,
     }
