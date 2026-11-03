@@ -121,7 +121,7 @@ def open_visitor_editor(app, record):
                 record["group"], chosen_photo["bytes"], fields["card"].get().strip(),
                 parse_local(fields["entry"].get()), parse_local(fields["exit"].get()),
                 fields["reservation"].get())
-            payload = registration_payload(obj, app.settings.get("valid_times", 0))
+            payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
             if not record.get("registration_record_id"):
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
             if not messagebox.askyesno("Confirmar edição",
