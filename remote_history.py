@@ -80,48 +80,69 @@ def normalize_checkin(row: dict):
 
 def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
                    name: str = "", page_size: int = PAGE_SIZE):
+    """Paginate the selected batch using safe server requests of up to 100.
+
+    Selecting 200/500 in the UI must return 200/500 records even on older
+    HikCentral versions that reject pageSize >100. The logical page can be
+    multiple adjacent server pages sorted by visitingTime.
+    """
     if not 1 <= page <= MAX_PAGES or not 1 <= page_size <= 500:
         raise ValueError("Página inválida.")
     name = name.strip()
-    if len(name) > 64 or (name and not re.fullmatch(r"[\w À-ÿ.\-']+", name)):
+    if len(name) > 64 or (name and not re.fullmatch(r"[\\w À-ÿ.\\-']+", name)):
         raise ValueError("Pesquisa por nome inválida (máximo 64 caracteres).")
-    payload = {
-        "pageNo": page, "pageSize": page_size, "visitStartTime": start_iso,
-        "visitEndTime": end_iso, "sortField": "visitingTime", "orderType": "1",
+    server_size = min(page_size, PAGE_SIZE)
+    server_first_page = (page - 1) * page_size // server_size + 1
+    request_count = (page_size + server_size - 1) // server_size
+    rows, seen = [], set()
+    total = None
+    for part in range(request_count):
+        server_page = server_first_page + part
+        if total is not None and (server_page - 1) * server_size >= total:
+            break
+        payload = {
+            "pageNo": server_page, "pageSize": server_size,
+            "visitStartTime": start_iso, "visitEndTime": end_iso,
+            "sortField": "visitingTime", "orderType": "1",
+        }
+        if name:
+            payload["visitorName"] = name
+        response = client.post(CHECKINS_PATH, payload)
+        data = response.get("data") or {}
+        if not isinstance(data, dict) or "totalNum" not in data:
+            raise HikError("HikCentral não retornou lista paginada de check-ins.")
+        try:
+            current_total = int(data["totalNum"])
+        except (TypeError, ValueError) as exc:
+            raise HikError("Total inválido no resultado do HikCentral.") from exc
+        if current_total < 0:
+            raise HikError("Total inválido no resultado do HikCentral.")
+        if total is None:
+            total = current_total
+        # Total que muda entre duas páginas altera a ordenação/continuidade.
+        elif current_total != total:
+            raise HikError(
+                "O total de check-ins mudou durante a consulta paginada; "
+                "atualize a lista para evitar dados incompletos.")
+        items = data.get("list")
+        if items is None and current_total == 0:
+            items = []
+        if not isinstance(items, list):
+            raise HikError("HikCentral não retornou lista paginada de check-ins.")
+        for item in items:
+            record = normalize_checkin(item)
+            if record:
+                identity = (record["visitor_id"], record["registration_record_id"],
+                            record["entry_at"], record["exit_at"])
+                if identity not in seen:
+                    rows.append(record)
+                    seen.add(identity)
+    total = total if total is not None else 0
+    return {
+        "rows": rows, "total": total, "page": page,
+        "page_size": page_size,
+        "has_next": page < MAX_PAGES and (page * page_size < total),
     }
-    if name:
-        payload["visitorName"] = name
-    response = client.post(CHECKINS_PATH, payload)
-    data = response.get("data") or {}
-    if not isinstance(data, dict) or "totalNum" not in data:
-        raise HikError("HikCentral não retornou lista paginada de check-ins.")
-    try:
-        total = int(data["totalNum"])
-    except (TypeError, ValueError) as exc:
-        raise HikError("Total inválido no resultado do HikCentral.") from exc
-    # Apenas uma resposta explicitamente vazia pode omitir o campo list.
-    # Não mascarar falhas/alterações da OpenAPI como "0 visitantes".
-    items = data.get("list")
-    if items is None and total == 0:
-        items = []
-    if not isinstance(items, list):
-        raise HikError("HikCentral não retornou lista paginada de check-ins.")
-    if total < 0:
-        raise HikError("Total inválido no resultado do HikCentral.")
-    rows = []
-    seen = set()
-    for item in items:
-        record = normalize_checkin(item)
-        if record:
-            # Um visitante pode ter vários check-ins em períodos diferentes.
-            identity = (record["visitor_id"], record["registration_record_id"],
-                        record["entry_at"], record["exit_at"])
-            if identity not in seen:
-                rows.append(record)
-                seen.add(identity)
-    return {"rows": rows, "total": total, "page": page, "page_size": page_size,
-            "has_next": page < MAX_PAGES and (page*page_size < total if total else len(items) == page_size)}
-
 
 
 
