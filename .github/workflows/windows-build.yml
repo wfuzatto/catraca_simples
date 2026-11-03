@@ -32,22 +32,19 @@ jobs:
           # the same Windows Python process can invalidate Tcl's library context.
           python -m pytest -q tests --ignore=tests/test_ui_windows.py
           if ($LASTEXITCODE -ne 0) { throw "Testes de logica falharam" }
-          python -m pytest -q tests/test_ui_windows.py -k "not spinner and not preflight_task and not pending_recovery_button_and_readonly_editor and not editor_allows_replacement_photo_when_download_fails and not editor_group_select_uses_connected_group_list"
-          if ($LASTEXITCODE -ne 0) { throw "Testes de interface falharam" }
-          # Isolar a nova janela modal: múltiplos Tk roots por processo
-          # quebram o contexto tcl_findLibrary no Windows runner.
-          python -m pytest -q 'tests/test_ui_windows.py::test_pending_recovery_button_and_readonly_editor'
-          if ($LASTEXITCODE -ne 0) { throw "Teste da janela de recuperação falhou" }
-          python -m pytest -q 'tests/test_ui_windows.py::test_editor_allows_replacement_photo_when_download_fails'
-          if ($LASTEXITCODE -ne 0) { throw "Teste de edição com erro de foto falhou" }
-          python -m pytest -q 'tests/test_ui_windows.py::test_editor_group_select_uses_connected_group_list'
-          if ($LASTEXITCODE -ne 0) { throw "Teste de seletor de grupo na edição falhou" }
-          python -m pytest -q 'tests/test_ui_windows.py::test_registration_spinner_animates_only_during_confirmed_task_and_stops[False]'
-          if ($LASTEXITCODE -ne 0) { throw "Teste de spinner/sucesso falhou" }
-          python -m pytest -q 'tests/test_ui_windows.py::test_registration_spinner_animates_only_during_confirmed_task_and_stops[True]'
-          if ($LASTEXITCODE -ne 0) { throw "Teste de spinner/erro falhou" }
-          python -m pytest -q 'tests/test_ui_windows.py::test_preflight_task_has_no_registration_spinner'
-          if ($LASTEXITCODE -ne 0) { throw "Teste de preflight falhou" }
+          # Each UI test gets its own Python/Tcl interpreter. The GitHub
+          # Windows runner intermittently loses Tcl's library context after
+          # multiple CTk root windows are created/destroyed in one process.
+          $uiCases = @(python -m pytest --collect-only -q tests/test_ui_windows.py |
+            Where-Object { $_ -like 'tests/test_ui_windows.py::*' })
+          if ($LASTEXITCODE -ne 0 -or $uiCases.Count -lt 1) {
+            throw "Não foi possível coletar os testes de interface"
+          }
+          foreach ($uiCase in $uiCases) {
+            Write-Host "Teste Windows isolado: $uiCase"
+            python -m pytest -q "$uiCase"
+            if ($LASTEXITCODE -ne 0) { throw "Teste de interface falhou: $uiCase" }
+          }
           python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py face_capture_logic.py face_capture_ui.py remote_history.py access_passages.py pending_recovery.py access_receipt.py transaction_cleanup.py
           if ($LASTEXITCODE -ne 0) { throw "Compilacao dos modulos falhou" }
       - name: Empacotar EXE autocontido
