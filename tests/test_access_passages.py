@@ -171,3 +171,67 @@ def test_visitor_access_record_undirected_authentications_are_reported_not_guess
     assert result["last_exit_at"] == ""
     assert result["passage_diagnostics"]["successful_access"] == 2
     assert result["passage_diagnostics"]["without_direction"] == 2
+
+
+def test_visitor_access_record_fallback_by_name_and_card_requires_exact_identity():
+    """Servidor antigo ignora/falha filtro por ID; nome isolado não basta."""
+    class Legacy:
+        calls = []
+        def post(self, path, payload):
+            assert path == DOOR_EVENTS_PATH
+            self.calls.append(dict(payload))
+            if "personId" in payload:
+                return {"data": {"total": 0, "list": []}}
+            return {"data": {"total": 3, "list": [
+                {**ev(196893, 1, "2026-11-02T09:11:00-03:00", person="other"),
+                 "cardNo": "ABC1", "personName": "Maria Teste"},
+                {**ev(198914, 2, "2026-11-02T10:30:00-03:00", person="other"),
+                 "cardNo": "ABC1", "personName": "Outra Pessoa"},
+                {**ev(198914, 2, "2026-11-02T11:30:00-03:00", person="another"),
+                 "cardNo": "ABC1", "personName": "Maria Teste"},
+            ]}}
+    rec = visitor()
+    rec.update(first="Maria", last="Teste", card_number="ABC1")
+    client = Legacy()
+    result = fetch_visitor_passages(client, rec, now=now())
+    assert result["first_entry_at"] == "2026-11-02T09:11:00-03:00"
+    assert result["last_exit_at"] == "2026-11-02T11:30:00-03:00"
+    assert result["passage_diagnostics"]["by_name_fallback"] == 1
+    assert result["passage_diagnostics"]["successful_access"] == 2
+    assert len(client.calls) == 2
+    assert client.calls[0]["personId"] == "812"
+    assert client.calls[1]["personName"] == "Maria Teste"
+
+
+def test_homonym_without_card_or_id_cannot_be_assigned_to_visitor():
+    class Legacy:
+        def post(self, path, payload):
+            if "personId" in payload:
+                return {"data": {"total": 0, "list": []}}
+            return {"data": {"total": 1, "list": [
+                {**ev(196893, 1, "2026-11-02T10:00:00-03:00", person="not-812"),
+                 "personName": "Maria Teste"}
+            ]}}
+    rec = visitor()
+    rec.update(first="Maria", last="Teste", card_number="")
+    result = fetch_visitor_passages(Legacy(), rec, now=now())
+    assert result["first_entry_at"] == ""
+    assert result["last_exit_at"] == ""
+    assert result["passage_diagnostics"]["other_visitors"] == 1
+
+
+def test_incomplete_pages_never_fall_back_to_partial_results(monkeypatch):
+    import access_passages
+    monkeypatch.setattr(access_passages, "PAGE_SIZE", 1)
+    monkeypatch.setattr(access_passages, "MAX_PAGES_PER_PERIOD", 1)
+    class Legacy:
+        called = 0
+        def post(self, path, payload):
+            self.called += 1
+            return {"data": {"total": 3, "list": [
+                ev(196893, 1, "2026-11-02T10:00:00-03:00")
+            ]}}
+    client = Legacy()
+    with pytest.raises(HikError, match="mais páginas"):
+        fetch_visitor_passages(client, visitor(), now=now())
+    assert client.called == 1
