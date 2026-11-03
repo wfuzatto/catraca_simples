@@ -94,12 +94,28 @@ def fetch_visitor_passages(client, record, *, now=None):
         current = current.replace(tzinfo=TZ)
     stop = min(current.astimezone(TZ), end)
     if stop <= start:
-        return {"first_entry_at": "", "last_exit_at": ""}
+        return {
+            "first_entry_at": "", "last_exit_at": "",
+            "first_access_at": "", "last_access_at": "",
+            "passage_diagnostics": {
+                "events_returned": 0, "other_visitors": 0,
+                "successful_access": 0, "without_direction": 0,
+                "first_entry_count": 0, "last_exit_count": 0,
+                "unknown_event_type": 0,
+            },
+        }
     doors = [str(x) for x in record.get("door_ids", []) if str(x).strip()]
     if len(doors) > 10:
         doors = []  # A API limita a 10; pessoa continua filtrada por ID.
     entry_times = []
     exit_times = []
+    all_auth_times = []
+    counts = {
+        "events_returned": 0, "other_visitors": 0,
+        "successful_access": 0, "without_direction": 0,
+        "first_entry_count": 0, "last_exit_count": 0,
+        "unknown_event_type": 0,
+    }
     seen = set()
     for begin, finish in _periods(start, stop):
         for page in range(1, MAX_PAGES_PER_PERIOD + 1):
@@ -122,29 +138,39 @@ def fetch_visitor_passages(client, record, *, now=None):
             except (TypeError, ValueError) as exc:
                 raise HikError("Total inválido no histórico de passagens.") from exc
             for event in items:
-                if not isinstance(event, dict) or str(event.get("personId") or "") != vid:
+                counts["events_returned"] += 1
+                if not isinstance(event, dict):
+                    continue
+                if str(event.get("personId") or "") != vid:
+                    counts["other_visitors"] += 1
                     continue
                 try:
                     event_type = int(event.get("eventType"))
                 except (ValueError, TypeError):
+                    counts["unknown_event_type"] += 1
                     continue
                 if event_type not in GRANTED_TYPES:
+                    counts["unknown_event_type"] += 1
                     continue
                 when = _parse_event_time(event.get("eventTime"))
                 if when is None or not start <= when <= stop:
                     continue
                 direction = _direction(event)
-                if not direction:
-                    continue
                 unique = (str(event.get("eventId") or ""), when.isoformat(),
-                          str(event.get("doorIndexCode") or ""), direction)
+                          str(event.get("doorIndexCode") or ""))
                 if unique in seen:
                     continue
                 seen.add(unique)
+                counts["successful_access"] += 1
+                all_auth_times.append(when)
                 if direction == "entry":
                     entry_times.append(when)
-                else:
+                    counts["first_entry_count"] += 1
+                elif direction == "exit":
                     exit_times.append(when)
+                    counts["last_exit_count"] += 1
+                else:
+                    counts["without_direction"] += 1
             if len(items) < PAGE_SIZE or (total and page * PAGE_SIZE >= total):
                 break
         else:
@@ -152,4 +178,9 @@ def fetch_visitor_passages(client, record, *, now=None):
     return {
         "first_entry_at": min(entry_times).isoformat(timespec="seconds") if entry_times else "",
         "last_exit_at": max(exit_times).isoformat(timespec="seconds") if exit_times else "",
+        # First/last authentication as displayed by Visitor Access Record,
+        # WITHOUT mislabeling an undirected authentication as exit.
+        "first_access_at": min(all_auth_times).isoformat(timespec="seconds") if all_auth_times else "",
+        "last_access_at": max(all_auth_times).isoformat(timespec="seconds") if all_auth_times else "",
+        "passage_diagnostics": counts,
     }
