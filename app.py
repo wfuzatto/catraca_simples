@@ -213,7 +213,7 @@ class ValeApp(tk.Tk):
         self.s_key.set(self.key)
         self.s_secret.set(self.secret)
         self.s_cert_pin.set(s.get("cert_pin_sha256", ""))
-        self.s_valid_times.set(str(s.get("valid_times", 0)))
+        self.s_valid_times.set("0")
         self.s_face_enabled.set(bool(s.get("face_auto_capture", True)))
         self.s_face_stable.set(str(s.get("face_stability_ms", 900)))
         self.s_face_sensitivity.set(s.get("face_sensitivity", "Normal"))
@@ -297,7 +297,7 @@ class ValeApp(tk.Tk):
                 "face_sensitivity": self.s_face_sensitivity.get(),
                 "face_require_quality": bool(self.s_face_quality.get()),
                 "face_timeout_s": int(self.s_face_timeout.get()),
-                "valid_times": validate_valid_times(int(self.s_valid_times.get().strip())),
+                "valid_times": 0,  # Valor fixo: sem limitação de usos.
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
                 "group_access": parse_access_lines(self.access_text.get("1.0", tk.END)),
                 "access_mapping_revision": self.settings.get("access_mapping_revision", 1),
@@ -320,6 +320,7 @@ class ValeApp(tk.Tk):
             if conf["preferred_group"] != self.settings.get("preferred_group", ""):
                 self._force_preferred_on_sync = True
             self.settings, self.key, self.secret = conf, key, secret
+            self.s_valid_times.set("0")
             self.verified = False
             self.ticket_box["values"] = list(conf["tickets"])
             if self.ticket.get() not in conf["tickets"]:
@@ -635,7 +636,7 @@ class ValeApp(tk.Tk):
                 requested_levels, ticket, self.settings.get("schedule_windows", {}))
             obj = Visitor(self.first.get(), self.last.get(), group, self.photo_data,
                           self.card.get().strip(), start, end, self.reservation.get())
-            payload = registration_payload(obj, self.settings.get("valid_times", 0))
+            payload = registration_payload(obj, 0)
             expect_face, expect_card = bool(obj.photo_jpeg), bool(obj.card_number.strip())
         except Exception as exc:
             messagebox.showerror("Dados", str(exc))
