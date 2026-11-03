@@ -61,7 +61,11 @@ def test_first_entry_and_last_exit_only_from_granted_events():
     assert sent["personId"] == "812"
     assert sent["personType"] == 1
     assert sent["doorIndexCodes"] == []
-    assert "eventType" not in sent  # Permitir QR, NFC e face simultaneamente.
+    assert "eventType" not in sent  # personId permite buscar vários métodos.
+    assert result["passage_diagnostics"]["successful_access"] == 4
+    assert result["passage_diagnostics"]["without_direction"] == 0
+    assert result["first_access_at"] == "2026-11-02T09:35:00-03:00"
+    assert result["last_access_at"] == "2026-11-03T10:58:20-03:00"
 
 
 def test_last_exit_is_not_visitor_administrative_checkout():
@@ -93,9 +97,10 @@ def test_does_not_classify_access_denied_even_if_direction_known():
     client = MockACS({1: {"total": 1, "list": [
         ev(197151, 1, "2026-11-02T10:00:00-03:00")
     ]}})
-    assert fetch_visitor_passages(client, visitor(), now=now()) == {
-        "first_entry_at": "", "last_exit_at": "",
-    }
+    result = fetch_visitor_passages(client, visitor(), now=now())
+    assert result["first_entry_at"] == ""
+    assert result["last_exit_at"] == ""
+    assert result["passage_diagnostics"]["successful_access"] == 0
 
 
 def test_pagination_includes_last_exit_on_final_page(monkeypatch):
@@ -136,8 +141,10 @@ def test_no_future_events_and_excludes_other_visit_of_same_person():
     rec = visitor()
     rec["entry_at"] = "2026-11-03T12:00:00-03:00"
     client = MockACS({})
-    assert fetch_visitor_passages(client, rec, now=now()) == {
-        "first_entry_at": "", "last_exit_at": ""}
+    result = fetch_visitor_passages(client, rec, now=now())
+    assert result["first_entry_at"] == ""
+    assert result["last_exit_at"] == ""
+    assert result["passage_diagnostics"]["events_returned"] == 0
     assert client.calls == []
 
 
@@ -148,3 +155,19 @@ def test_duplicate_events_do_not_change_extremes():
     result = fetch_visitor_passages(client, visitor(), now=now())
     assert result["first_entry_at"] == "2026-11-02T10:05:00-03:00"
     assert result["last_exit_at"] == ""
+
+
+def test_visitor_access_record_undirected_authentications_are_reported_not_guessed():
+    """A página pode mostrar 1ª/última autenticação sem saber se era entrada/saída."""
+    client = MockACS({1: {"total": 2, "list": [
+        ev(196893, 0, "2026-11-02T09:34:07-03:00", reader="Catraca Vale"),
+        ev(198914, 0, "2026-11-03T10:01:08-03:00", reader="Catraca Vale"),
+    ]}})
+    result = fetch_visitor_passages(client, visitor(), now=now())
+    assert result["first_access_at"] == "2026-11-02T09:34:07-03:00"
+    assert result["last_access_at"] == "2026-11-03T10:01:08-03:00"
+    # Não chamar o último acesso de SAÍDA se o leitor não indica sentido.
+    assert result["first_entry_at"] == ""
+    assert result["last_exit_at"] == ""
+    assert result["passage_diagnostics"]["successful_access"] == 2
+    assert result["passage_diagnostics"]["without_direction"] == 2
