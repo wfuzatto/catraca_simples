@@ -23,7 +23,7 @@ def test_disallows_unknown_groups_and_unmapped_grants():
     groups = ["Hóspedes Vale", "Visitors"]
     with pytest.raises(ValueError, match="não confirmado"):
         selected_editor_access("Hóspedes Serra", groups, settings)
-    with pytest.raises(ValueError, match="homologado"):
+    with pytest.raises(ValueError, match="Configure exatamente um nível Visitor"):
         selected_editor_access("Visitors", groups, settings)
 
 
