@@ -311,41 +311,76 @@ def find_original_appointment(client, record, *, max_pages=10):
 
 
 def resolve_remote_edit_record(client, record):
-    """Apenas leitura: prova registro, grupo, reserva, nível e catracas atuais."""
+    """Somente leitura: valida IDs, estado de check-in e níveis reais.
+
+    Para um check-in ATIVO, a busca da reserva pode falhar porque o histórico
+    foi paginado/recadastrado. Como contingência, valida o nível atual vindo
+    diretamente da consulta Visitor Information, sem deduzir permissões pelo
+    grupo. Visitas encerradas exigem Registrar Novamente, nunca atualização
+    de um check-in já fechado.
+    """
     from core import verify_visitor_access_plan
     from hikcentral import normalize
+    if record.get("checkin_state") != "check-in efetuado":
+        raise HikError(
+            "Esta visita não está em check-in ativo. Para renovar após saída ou "
+            "check-out automático, use Visitor Information > Registrar novamente "
+            "no HikCentral. Atualizar o registro antigo não reativa as permissões.")
     if not record.get("registration_record_id"):
         raise HikError("O HikCentral não retornou o ID do check-in.")
     original_id = client.find_existing_registration(
         record["visitor_id"], record["entry_at"], record["exit_at"])
     if not original_id or original_id != record["registration_record_id"]:
         raise HikError("O check-in original mudou ou não é único; edição bloqueada.")
-    appointment = find_original_appointment(client, record)
-    levels = parse_access_levels(appointment)
-    if len(levels) != 1:
-        raise HikError("A reserva não informou exatamente um nível Visitor. Edição bloqueada.")
+    data = visitor_details(client, record["visitor_id"])
+    detail_info = data.get("VisitorInfo") or data.get("visitorInfo") or data
+    if not isinstance(detail_info, dict):
+        raise HikError("Detalhes do visitante não retornaram um objeto válido.")
+    details_id = str(detail_info.get("visitorId") or detail_info.get("ID") or "")
+    if details_id and details_id != record["visitor_id"]:
+        raise HikError("O Visitor ID do detalhe não corresponde ao selecionado.")
+    detail_group = str(detail_info.get("visitorGroupName") or
+                       detail_info.get("visitorGroup") or "")
+    if detail_group and normalize(detail_group) != normalize(str(record.get("group") or "")):
+        raise HikError("O grupo atual difere do registro de check-in; edição bloqueada.")
+
+    # Preferência: reserva única e correspondente. Fallback: nível explícito
+    # informado pela consulta do próprio visitante, não a configuração da loja.
+    source = "reserva"
+    try:
+        appointment = find_original_appointment(client, record)
+        levels = parse_access_levels(appointment)
+        if len(levels) != 1:
+            raise HikError("A reserva não retornou exatamente um nível Visitor.")
+        appt_group = str((appointment.get("visitorInfo") or {}).get("visitorGroupName") or "")
+        if appt_group and normalize(appt_group) != normalize(str(record.get("group") or "")):
+            raise HikError("Grupo da reserva diverge do check-in.")
+    except HikError as exc:
+        levels = parse_access_levels(data)
+        if len(levels) != 1 or details_id != record["visitor_id"]:
+            raise HikError(
+                "A reserva original não pôde ser associada e Visitor Information "
+                "não confirmou um único nível de acesso para este Visitor ID. "
+                "Por segurança, a edição permanece bloqueada. Motivo: " + str(exc)
+            ) from exc
+        source = "Visitor Information"
     requested = [levels[0]["name"]]
     selected, doors = client.resolve_levels(requested)
     verify_visitor_access_plan(selected, doors, requested)
     if str(selected[0]["id"]) != str(levels[0]["id"]):
-        raise HikError("O ID do nível retornado pela reserva não corresponde ao nível atual.")
+        raise HikError("O ID do nível retornado não corresponde ao nível ativo no HikCentral.")
     if record.get("access_names") and record["access_names"] != requested:
         raise HikError("Nível anterior diverge da consulta atual; edição bloqueada.")
+    if record.get("access_level_ids") and (
+            [str(x) for x in record["access_level_ids"]] != [str(levels[0]["id"])]):
+        raise HikError("ID de nível anterior diverge da consulta atual; edição bloqueada.")
     if record.get("door_ids") and set(record["door_ids"]) != set(doors):
         raise HikError("Pontos originais divergem da consulta atual; edição bloqueada.")
-    if normalize(str(record.get("group") or "")) != normalize(str(
-            (appointment.get("visitorInfo") or {}).get("visitorGroupName") or record.get("group") or "")):
-        raise HikError("Grupo da reserva diverge do check-in; edição bloqueada.")
-    data = visitor_details(client, record["visitor_id"])
-    details_id = str(data.get("visitorId") or data.get("VisitorInfo", {}).get("visitorId") or "")
-    if details_id and details_id != record["visitor_id"]:
-        raise HikError("Detalhe da pessoa não corresponde ao Visitor ID escolhido.")
     result = dict(record)
     result.update(access_names=requested, door_ids=doors,
                   access_level_ids=[levels[0]["id"]],
-                  _remote_verified=True)
+                  _remote_verified=True, _level_verified_from=source)
     return result, data
-
 
 
 def enrich_checkins_with_appointment_levels(client, rows, start_iso, end_iso, *,
