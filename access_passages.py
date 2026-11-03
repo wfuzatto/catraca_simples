@@ -220,6 +220,8 @@ def fetch_visitor_passages(client, record, *, now=None):
                 summary["unfiltered_errors"] += 1
                 unfiltered_error = exc
             if matched:
+                if mode == "name":
+                    summary["by_name_fallback"] += 1
                 break
             # Busca por nome sem cartão/ID pode devolver homônimos. Não
             # repetir os mesmos registros em cinco modalidades de evento.
