@@ -485,9 +485,6 @@ def _settings(app):
     app.settings_diagnostic_button = _secondary(
         actions, "Diagnóstico de rede", app.diagnose, width=164)
     app.settings_diagnostic_button.pack(side="right", padx=(9, 0), pady=13)
-    app.settings_cleanup_button = _secondary(
-        actions, "Limpar cache (transações)", app.clean_transaction_cache, width=190)
-    app.settings_cleanup_button.pack(side="right", padx=(9, 0), pady=13)
     app.settings_notice = _text(actions,
         "Alterações só são gravadas ao clicar em Salvar.", size=11, color=MUTED)
     app.settings_notice.pack(side="left", padx=18)
@@ -645,6 +642,20 @@ def _settings(app):
         "O aplicativo apenas consulta níveis e distribui credenciais nos pontos retornados; "
         "não altera agendas, níveis ou catracas.",
         size=11, color="#A05A14").pack(anchor="w", pady=(8, 0))
+
+    cleanup_section = _card(scroller)
+    _section(cleanup_section, "✦", "Manutenção da estação",
+             "Liberar transações locais pendentes após conferência", "◈")
+    _text(
+        cleanup_section,
+        "Limpa somente os apontamentos de envio pendente e última entrega. "
+        "Configurações, credenciais, histórico e cadastros ficam preservados. "
+        "Antes de liberar, confira no HikCentral se a operação já foi realizada.",
+        size=11, color=MUTED).pack(anchor="w", pady=(0, 10))
+    app.settings_cleanup_button = _secondary(
+        cleanup_section, "Limpar cache (transações)",
+        app.clean_transaction_cache, width=220)
+    app.settings_cleanup_button.pack(anchor="w", pady=(0, 5))
 
 
 def build(app):
