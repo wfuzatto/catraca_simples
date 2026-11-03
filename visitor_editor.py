@@ -80,18 +80,19 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         record.get("photo_url") or visitor.get("faces") or
         visitor_photo_metadata.get("haveVisitorPhoto"))
     has_remote_card = bool(raw_cards or card_number)
+    # A falta da foto pela API não deve tornar o formulário imutável.
+    # Nesse cenário exige-se captura/substituição explícita ANTES de enviar.
+    # Nunca faz update com foto vazia quando a imagem anterior pode existir.
+    must_replace_photo = bool(
+        record.get("origin") == "HikCentral" and
+        (has_remote_face or photo_error) and not initial_photo)
+    must_reenter_card = bool(
+        record.get("origin") == "HikCentral" and
+        has_remote_card and not card_number)
     if record.get("origin") == "HikCentral" and not readonly:
-        # Sem fotografia recuperada, a atualização poderia eliminar a
-        # credencial facial anterior no endpoint registerment/update.
-        if has_remote_face and not initial_photo:
+        if not has_remote_face and not has_remote_card and not photo_error:
             readonly = True
-            readonly_reason = "A foto facial original não pôde ser recuperada."
-        if has_remote_card and not card_number:
-            readonly = True
-            readonly_reason = "A pulseira original não foi retornada pela OpenAPI."
-        if not has_remote_face and not has_remote_card:
-            readonly = True
-            readonly_reason = "A OpenAPI não confirmou as credenciais originais."
+            readonly_reason = "A OpenAPI não confirmou nenhuma credencial original."
 
     ctk.CTkLabel(body, text="Foto atual no HikCentral", font=("Segoe UI", 14, "bold")).pack(pady=(0, 5))
     photo_panel = ctk.CTkLabel(
@@ -114,6 +115,21 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     if photo_error and not original_photo:
         ctk.CTkLabel(body, text="Foto não retornada: " + photo_error,
                      wraplength=530, justify="left").pack(pady=(0, 6))
+    if not readonly and must_replace_photo:
+        ctk.CTkLabel(body, text=(
+            "Para preservar o reconhecimento facial, selecione ou capture "
+            "uma NOVA foto antes de salvar. A original não foi recuperada. "
+            "Nada será substituído antes da confirmação do cadastro."),
+            text_color="#B45309", wraplength=530, justify="left").pack(pady=(0, 6))
+    if not readonly and record.get("_requires_access_confirmation"):
+        ctk.CTkLabel(body, text=(
+            "ACESSO EM RECUPERAÇÃO: o HikCentral não retornou o nível anterior. "
+            "O salvamento poderá reaplicar o nível homologado " +
+            ", ".join(record.get("access_names", [])) +
+            " e seus " + str(len(record.get("door_ids", []))) +
+            " pontos de acesso. Será exigida confirmação específica."),
+            text_color="#B45309", wraplength=530,
+            justify="left").pack(pady=(0, 6))
     if readonly:
         ctk.CTkLabel(body,
                      text="Somente consulta: " + (readonly_reason or
@@ -151,9 +167,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         text="Grupo: " + record.get("group", "") + " | Nível: " +
              ", ".join(record.get("access_names", [])), wraplength=505).pack(pady=10)
     ctk.CTkLabel(body,
-        text="A foto e a pulseira não são armazenadas no histórico. "
-             "Reinforme as credenciais usadas antes de editar. "
-             "O Visitor ID e os pontos autorizados serão preservados.",
+        text="A imagem e a pulseira não ficam no histórico local. "
+             "A edição exige as credenciais necessárias para não apagar "
+             "um rosto ou cartão ainda usado. O Visitor ID será preservado.",
         wraplength=505, justify="left").pack(pady=8)
     chosen_photo = {"bytes": original_photo}
     status = tk.StringVar(value=(
@@ -209,8 +225,14 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             messagebox.showwarning("Bloqueado", "Outra operação em andamento.", parent=dialog)
             return
         try:
+            if must_replace_photo and not chosen_photo["bytes"]:
+                raise ValueError(
+                    "A foto original não foi recuperada. Capture ou selecione "
+                    "uma nova foto antes de salvar; não vamos apagar a face antiga.")
+            if must_reenter_card and not fields["card"].get().strip():
+                raise ValueError("Reinforme a pulseira para preservar a credencial NFC.")
             if record.get("expect_face") and not chosen_photo["bytes"]:
-                raise ValueError("Selecione novamente a foto para preservar a credencial facial.")
+                raise ValueError("Selecione a foto para preservar a credencial facial.")
             if record.get("expect_card") and not fields["card"].get().strip():
                 raise ValueError("Informe a pulseira para preservar a credencial NFC.")
             obj = Visitor(fields["first"].get(), fields["last"].get(),
@@ -220,8 +242,24 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
             if not record.get("registration_record_id"):
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
+            if record.get("_requires_access_confirmation"):
+                message = (
+                    "O nível de acesso anterior NÃO foi confirmado na OpenAPI.\\n\\n"
+                    "Se continuar, o aplicativo atribuirá o nível Visitor HOMOLOGADO "
+                    + ", ".join(record.get("access_names", [])) + " para o grupo "
+                    + record.get("group", "") + " em "
+                    + str(len(record.get("door_ids", []))) + " pontos de acesso.\\n\\n"
+                    "Isso pode substituir permissões anteriores desconhecidas. "
+                    "Você conferiu e autoriza esta reaplicação?"
+                )
+                if not messagebox.askyesno(
+                        "Autorizar recuperação de nível", message,
+                        icon="warning", parent=dialog):
+                    return
             if not messagebox.askyesno("Confirmar edição",
-                "Atualizar o Visitor ID original e reaplicar a credencial às mesmas catracas?",
+                "Atualizar o MESMO Visitor ID e o registro de check-in confirmado "
+                "com as datas e credenciais informadas? "
+                "A operação não cria visitante nem reserva.",
                 parent=dialog):
                 return
         except Exception as exc:
