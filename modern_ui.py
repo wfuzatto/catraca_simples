@@ -485,6 +485,9 @@ def _settings(app):
     app.settings_diagnostic_button = _secondary(
         actions, "Diagnóstico de rede", app.diagnose, width=164)
     app.settings_diagnostic_button.pack(side="right", padx=(9, 0), pady=13)
+    app.settings_cleanup_button = _secondary(
+        actions, "Limpar cache (transações)", app.clean_transaction_cache, width=190)
+    app.settings_cleanup_button.pack(side="right", padx=(9, 0), pady=13)
     app.settings_notice = _text(actions,
         "Alterações só são gravadas ao clicar em Salvar.", size=11, color=MUTED)
     app.settings_notice.pack(side="left", padx=18)
@@ -726,13 +729,28 @@ def build(app):
 
     _registration(app)
     _settings(app)
-    _history(app)
+    # Cadastros efetuados é construído sob demanda: a tela principal
+    # não precisa criar grade/histórico/scrollbars ao inicializar.
+    app._history_ui_built = False
     responsive_ui.apply(app, width)
     app.bind("<Configure>", lambda event: responsive_ui.on_resize(app, event), add="+")
     app.book.bind("<<NotebookTabChanged>>", app._tab_changed)
     app.status.set("Sincronização automática ao iniciar..." if app.key and app.secret
                    else "Configure AppKey/AppSecret em Configurações.")
     app.first_entry.focus_set()
+
+
+def ensure_history_ui(app):
+    """Create the history widgets only once, on first navigation to the tab.
+
+    Does not query DPAPI or HikCentral; a refresh requires the operator to
+    click Atualizar lista/Buscar or to request the next page.
+    """
+    if getattr(app, "_history_ui_built", False):
+        return
+    _history(app)
+    app._history_ui_built = True
+    app.history_status.set("Clique em Atualizar lista para consultar o HikCentral.")
 
 
 def update_navigation(app):
