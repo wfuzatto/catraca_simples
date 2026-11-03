@@ -410,8 +410,11 @@ def _history(app):
     app._history_loading_phases = {}
     app._history_progress_running = False
     today = datetime.now(TZ)
-    app.history_start = tk.StringVar(value=(today-timedelta(days=30)).strftime("%d/%m/%Y"))
+    # Período padrão: exclusivamente o dia local corrente. Consultas mais
+    # amplas exigem seleção explícita do operador.
+    app.history_start = tk.StringVar(value=today.strftime("%d/%m/%Y"))
     app.history_end = tk.StringVar(value=today.strftime("%d/%m/%Y"))
+    app.history_page_size = tk.StringVar(value="10")
     app.history_name = tk.StringVar()
     filters = ctk.CTkFrame(inner, fg_color="transparent")
     app.history_filters_frame = filters
@@ -422,6 +425,14 @@ def _history(app):
     ctk.CTkEntry(filters, textvariable=app.history_end, width=100).pack(side="left", padx=(0, 8))
     ctk.CTkLabel(filters, text="Nome", text_color=INK).pack(side="left", padx=(0, 4))
     ctk.CTkEntry(filters, textvariable=app.history_name, width=160).pack(side="left", padx=(0, 8))
+    ctk.CTkLabel(filters, text="Por página", text_color=INK).pack(side="left", padx=(0, 4))
+    app.history_page_size_box = ttk.Combobox(
+        filters, textvariable=app.history_page_size, state="readonly",
+        values=("10", "50", "100", "200", "500"), width=5)
+    app.history_page_size_box.pack(side="left", padx=(0, 8))
+    app.history_page_size_box.bind(
+        "<<ComboboxSelected>>",
+        lambda event: app.history_page_size_changed())
     _secondary(filters, "Buscar", app.history_apply_filters, width=90).pack(side="left")
     table_area = ctk.CTkFrame(inner, fg_color="transparent")
     table_area.pack(fill="both", expand=True, padx=17)
