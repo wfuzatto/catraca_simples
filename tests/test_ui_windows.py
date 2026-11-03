@@ -623,3 +623,51 @@ def test_general_visitor_without_checkin_opens_photo_readonly(monkeypatch):
         windows[0].destroy()
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Teste da janela de pendências exige Windows")
+def test_pending_recovery_button_and_readonly_editor(monkeypatch):
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    marker = {"stage": "appointment_inflight"}
+    monkeypatch.setattr(app, "load_pending", lambda: marker)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: marker)
+    pending = {
+        "stage": "appointment_inflight",
+        "description": "Reserva com resposta incerta. Não reenviar automaticamente.",
+        "visitor_id": "", "appointment_id": "", "registration_record_id": "",
+        "registered": False, "entry_at": "", "exit_at": "", "access_names": [],
+        "door_count": 0, "assigned_count": 0,
+        "modified_at": "03/11/2026 15:00:00",
+        "can_resume": False, "sha256": "a" * 64,
+    }
+    monkeypatch.setattr(app, "read_pending_diagnostics", lambda: pending)
+    root = app.ValeApp()
+    try:
+        root.update()
+        assert root.delivery_button.cget("text") == "Resolver pendência"
+        root.show_pending_recovery()
+        root.update_idletasks()
+        dialogs = [x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel)]
+        assert len(dialogs) == 1
+        dialogs[0].destroy()
+        record = {
+            "visitor_id": "visitor-test", "first": "Maria", "last": "Teste",
+            "group": "Hóspedes Vale", "entry_at": "2099-11-02T09:00:00-03:00",
+            "exit_at": "2099-11-02T17:00:00-03:00", "origin": "HikCentral",
+            "access_names": [],
+        }
+        visitor_editor.open_visitor_editor(root, record, readonly=False)
+        root.update_idletasks()
+        dialogs = [x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel)]
+        assert len(dialogs) == 1
+        assert dialogs[0]._save_edit_button.cget("state") == "disabled"
+        assert dialogs[0].title().startswith("Visualizar cadastro")
+        dialogs[0].destroy()
+    finally:
+        root.destroy()
