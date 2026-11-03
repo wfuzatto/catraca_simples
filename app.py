@@ -1385,7 +1385,7 @@ class ValeApp(tk.Tk):
             "Níveis registrados: " + (", ".join(pending["access_names"]) or "não informados"),
             f"Catracas registradas: {pending['door_count']}; níveis já associados: {pending['assigned_count']}",
         ]
-        ctk.CTkLabel(frame, text="\\n".join(data_lines),
+        ctk.CTkLabel(frame, text="\n".join(data_lines),
                      font=("Consolas", 12), wraplength=580,
                      justify="left", anchor="w").pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(
@@ -1443,7 +1443,7 @@ class ValeApp(tk.Tk):
                 return
             warning = (
                 "Você confirma que consultou Visitor Reservation e Visitor Check-In/Out "
-                "no HikCentral e avaliou a possibilidade de cadastro duplicado?\\n\\n"
+                "no HikCentral e avaliou a possibilidade de cadastro duplicado?\n\n"
                 "A pendência será ARQUIVADA neste Windows para auditoria. "
                 "Isto não faz reenvio nem modifica o HikCentral. "
                 "Somente a trava local será removida."
@@ -1463,8 +1463,8 @@ class ValeApp(tk.Tk):
                             "Nenhuma reserva foi criada ou reenviada.")
             messagebox.showinfo(
                 "Auditoria preservada",
-                "A estação foi liberada após confirmação.\\n"
-                f"Registro de auditoria: {archived.name}\\n"
+                "A estação foi liberada após confirmação.\n"
+                f"Registro de auditoria: {archived.name}\n"
                 "Não repita um cadastro já existente no HikCentral.",
                 parent=self)
 
