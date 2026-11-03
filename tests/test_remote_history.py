@@ -112,3 +112,94 @@ def test_remote_history_has_no_automatic_write_endpoints():
     assert "registerment/update" not in source
     assert "auth/reapplication" not in source
     assert "single/addPersons" not in source
+
+def test_remote_register_time_is_not_the_visit_validity_time():
+    row = example_record()
+    row["registerTime"] = "2026-11-02T13:19:42-03:00"
+    result = normalize_checkin(row)
+    assert result["registered_at"] == "2026-11-02T13:19:42-03:00"
+    assert result["entry_at"] == "2026-11-02T12:57:00-03:00"
+    from remote_history import history_time
+    assert history_time(result["registered_at"]) == "02/11/2026 13:19:42"
+    assert history_time(result["entry_at"]) == "02/11/2026 12:57:00"
+    assert history_time("") == "—"
+
+
+def test_real_access_level_is_recovered_from_unique_matching_reservation():
+    from remote_history import parse_access_levels, enrich_checkins_with_appointment_levels
+    from remote_history import APPOINTMENTS_PATH
+    record = normalize_checkin(example_record())
+    appointment = {
+        "appointID": "appt-9",
+        "appointStartTime": record["entry_at"],
+        "appointEndTime": record["exit_at"],
+        "visitorInfo": {
+            "visitorId": "812", "visitorGroupName": "Hóspedes Vale",
+            "accessInfo": {"accessLevelList": [
+                {"accessLevel": {"id": "level-3", "baseInfo": {"name": "VISITANTE_VALE"}}}
+            ]},
+        },
+    }
+    assert parse_access_levels(appointment) == [{"id": "level-3", "name": "VISITANTE_VALE"}]
+    fake = FakeClient({"data": {"total": 1, "list": [appointment]}})
+    output = enrich_checkins_with_appointment_levels(
+        fake, [record], "2026-11-01T00:00:00-03:00", "2026-11-04T00:00:00-03:00")
+    assert output[0]["access_names"] == ["VISITANTE_VALE"]
+    assert output[0]["access_level_ids"] == ["level-3"]
+    assert fake.calls[0][0] == APPOINTMENTS_PATH
+
+
+def test_never_infer_level_from_group_on_ambiguous_or_unmatched_appointments():
+    from remote_history import enrich_checkins_with_appointment_levels
+    record = normalize_checkin(example_record())
+    same_person_wrong_day = {
+        "appointStartTime": "2026-11-01T12:57:00-03:00",
+        "appointEndTime": record["exit_at"],
+        "visitorInfo": {"visitorId": "812", "accessInfo": {"accessLevelList": [
+            {"accessLevel": {"id": "3", "baseInfo": {"name": "VISITANTE_VALE"}}}]}},
+    }
+    fake = FakeClient({"data": {"total": 1, "list": [same_person_wrong_day]}})
+    result = enrich_checkins_with_appointment_levels(
+        fake, [record], "2026-11-01T00:00:00-03:00", "2026-11-04T00:00:00-03:00")
+    assert result[0]["access_names"] == []
+    assert "access_level_ids" not in result[0]
+
+
+def test_remote_edit_requires_original_checkin_id_and_level_id():
+    from remote_history import resolve_remote_edit_record
+    record = normalize_checkin(example_record())
+    appointment = {
+        "appointID": "9", "appointStartTime": record["entry_at"],
+        "appointEndTime": record["exit_at"],
+        "visitorInfo": {"visitorId": "812", "visitorGroupName": "Hóspedes Vale",
+                        "accessInfo": {"accessLevelList": [
+                            {"accessLevel": {"id": "10", "baseInfo": {"name": "VISITANTE_VALE"}}}]}},
+    }
+    class Client:
+        def __init__(self, registered="40", level_id="10"):
+            self.registered = registered
+            self.level_id = level_id
+            self.writes = []
+        def find_existing_registration(self, *args):
+            return self.registered
+        def post(self, path, body, **kw):
+            if path.endswith("appointmentlist"):
+                return {"data": {"list": [appointment], "total": 1}}
+            if path.endswith("single/visitorinfo"):
+                return {"data": {"visitorId": "812"}}
+            self.writes.append(path)
+            raise AssertionError("O teste não pode alterar um visitante real.")
+        def resolve_levels(self, names):
+            return ([{"id": self.level_id, "name": "VISITANTE_VALE",
+                      "elements": [{"Element": {"ID": str(i)}} for i in range(3)]}],
+                    [str(i) for i in range(3)])
+
+    verified, details = resolve_remote_edit_record(Client(), record)
+    assert verified["_remote_verified"] is True
+    assert verified["access_names"] == ["VISITANTE_VALE"]
+    assert verified["door_ids"] == ["0", "1", "2"]
+    assert details["visitorId"] == "812"
+    with pytest.raises(HikError, match="check-in original mudou"):
+        resolve_remote_edit_record(Client(registered="different"), record)
+    with pytest.raises(HikError, match="ID do nível"):
+        resolve_remote_edit_record(Client(level_id="different"), record)
