@@ -17,6 +17,7 @@ from hikcentral import HikError
 CHECKINS_PATH = "/artemis/api/visitor/v1/register/getVistorRegisterRecord"
 PHOTO_PATH = "/artemis/api/visitor/v1/appointment/downloadpicture"
 DETAIL_PATH = "/artemis/api/visitor/v1/visitor/single/visitorinfo"
+APPOINTMENTS_PATH = "/artemis/api/visitor/v1/appointment/appointmentlist"
 PAGE_SIZE = 100
 MAX_PAGES = 100
 STATUSES = {
@@ -60,6 +61,8 @@ def normalize_checkin(row: dict):
         "group": str(base.get("visitorGroup") or ""),
         "reservation": str(base.get("remark") or ""),
         "entry_at": start, "exit_at": end,
+        # registerTime é a data real do check-in, diferente da validade.
+        "registered_at": str(row.get("registerTime") or ""),
         "checkin_state": STATUSES.get(str(row.get("visitorStatus")), "não informado"),
         "state": "consultar na catraca",
         "photo_url": str(base.get("smallPhotoUrl") or ""),
@@ -112,6 +115,129 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
                 seen.add(identity)
     return {"rows": rows, "total": total, "page": page, "page_size": page_size,
             "has_next": page < MAX_PAGES and (page*page_size < total if total else len(items) == page_size)}
+
+
+
+def parse_access_levels(data):
+    """Extrai somente níveis explicitamente retornados pela OpenAPI.
+
+    A listagem de check-ins não inclui níveis; nas reservas eles ficam em
+    visitorInfo.accessInfo.accessLevelList / accessInfo.accessLevelList.
+    """
+    if not isinstance(data, dict):
+        return []
+    info = data.get("visitorInfo") or data.get("VisitorInfo") or {}
+    access = (info.get("accessInfo") if isinstance(info, dict) else None) or data.get("accessInfo") or {}
+    if not isinstance(access, dict):
+        return []
+    rows = access.get("accessLevelList")
+    if not isinstance(rows, list):
+        return []
+    items = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        level = item.get("accessLevel") or item.get("AccessLevel") or item
+        if not isinstance(level, dict):
+            continue
+        base = level.get("baseInfo") or {}
+        name = str(base.get("name") or level.get("name") or "").strip()
+        level_id = str(level.get("id") or "").strip()
+        if name and level_id and not any(p["id"] == level_id for p in items):
+            items.append({"id": level_id, "name": name})
+    return items
+
+
+def _same_visit(appointment, record):
+    if not isinstance(appointment, dict):
+        return False
+    info = appointment.get("visitorInfo") or {}
+    if not isinstance(info, dict) or str(info.get("visitorId") or "") != record["visitor_id"]:
+        return False
+    try:
+        start = datetime.fromisoformat(str(appointment.get("appointStartTime") or ""))
+        end = datetime.fromisoformat(str(appointment.get("appointEndTime") or ""))
+        actual_start = datetime.fromisoformat(record["entry_at"])
+        actual_end = datetime.fromisoformat(record["exit_at"])
+        return (start.tzinfo is not None and end.tzinfo is not None and
+                start == actual_start and end == actual_end)
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
+def find_original_appointment(client, record, *, max_pages=10):
+    """Localiza a reserva do MESMO visitante e intervalo; ambiguidades bloqueiam edição."""
+    if not record.get("visitor_id") or not record.get("entry_at") or not record.get("exit_at"):
+        raise HikError("Visitante e período são necessários para localizar a reserva original.")
+    try:
+        start = datetime.fromisoformat(record["entry_at"])
+        end = datetime.fromisoformat(record["exit_at"])
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            raise ValueError("intervalo")
+    except ValueError as exc:
+        raise HikError("Datas do registro são inválidas; nenhuma edição autorizada.") from exc
+    matches = []
+    for page in range(1, max_pages + 1):
+        payload = {
+            "pageNo": page, "pageSize": 100,
+            "appointStartTime": (start - timedelta(days=1)).isoformat(timespec="seconds"),
+            "appointEndTime": (end + timedelta(days=1)).isoformat(timespec="seconds"),
+            "appointState": -1, "sortField": "VisitingTime", "orderType": 1,
+        }
+        data = client.post(APPOINTMENTS_PATH, payload).get("data") or {}
+        if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+            raise HikError("A consulta de reservas não retornou lista válida.")
+        rows = data["list"]
+        for entry in rows:
+            if _same_visit(entry, record):
+                matches.append(entry)
+        total = int(data.get("total") or 0)
+        if len(rows) < 100 or (total and page * 100 >= total):
+            break
+    else:
+        raise HikError("Há reservas demais para validar a edição com segurança.")
+    if len(matches) != 1:
+        raise HikError(
+            "Não foi possível associar a visita a uma reserva única no HikCentral. "
+            "Edição bloqueada sem alterar o visitante.")
+    return matches[0]
+
+
+def resolve_remote_edit_record(client, record):
+    """Apenas leitura: prova registro, grupo, reserva, nível e catracas atuais."""
+    from core import verify_visitor_access_plan
+    from hikcentral import normalize
+    if not record.get("registration_record_id"):
+        raise HikError("O HikCentral não retornou o ID do check-in.")
+    original_id = client.find_existing_registration(
+        record["visitor_id"], record["entry_at"], record["exit_at"])
+    if not original_id or original_id != record["registration_record_id"]:
+        raise HikError("O check-in original mudou ou não é único; edição bloqueada.")
+    appointment = find_original_appointment(client, record)
+    levels = parse_access_levels(appointment)
+    if len(levels) != 1:
+        raise HikError("A reserva não informou exatamente um nível Visitor. Edição bloqueada.")
+    requested = [levels[0]["name"]]
+    selected, doors = client.resolve_levels(requested)
+    verify_visitor_access_plan(selected, doors, requested)
+    if str(selected[0]["id"]) != str(levels[0]["id"]):
+        raise HikError("O ID do nível retornado pela reserva não corresponde ao nível atual.")
+    if record.get("access_names") and record["access_names"] != requested:
+        raise HikError("Nível anterior diverge da consulta atual; edição bloqueada.")
+    if record.get("door_ids") and set(record["door_ids"]) != set(doors):
+        raise HikError("Pontos originais divergem da consulta atual; edição bloqueada.")
+    if normalize(str(record.get("group") or "")) != normalize(str(
+            (appointment.get("visitorInfo") or {}).get("visitorGroupName") or record.get("group") or "")):
+        raise HikError("Grupo da reserva diverge do check-in; edição bloqueada.")
+    data = visitor_details(client, record["visitor_id"])
+    details_id = str(data.get("visitorId") or data.get("VisitorInfo", {}).get("visitorId") or "")
+    if details_id and details_id != record["visitor_id"]:
+        raise HikError("Detalhe da pessoa não corresponde ao Visitor ID escolhido.")
+    result = dict(record)
+    result.update(access_names=requested, door_ids=doors,
+                  access_level_ids=[levels[0]["id"]],
+                  _remote_verified=True)
+    return result, data
 
 
 def visitor_details(client, visitor_id: str):
