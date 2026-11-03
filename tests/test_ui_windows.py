@@ -760,6 +760,10 @@ def test_editor_group_select_uses_connected_group_list(monkeypatch):
         combo.set("Hóspedes Serra")
         assert combo.get() == "Hóspedes Serra"
         assert popup._save_edit_button.cget("state") == "normal"
+        visitor_editor.open_visitor_editor(
+            root, record, remote_details={"visitorId": "1009"})
+        assert len([x for x in root.winfo_children()
+                    if isinstance(x, ctk.CTkToplevel) and x.winfo_exists()]) == 1
         popup.destroy()
     finally:
         root.destroy()
