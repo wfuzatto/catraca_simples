@@ -1331,7 +1331,8 @@ class ValeApp(tk.Tk):
         """O rodapé mostra a ação correta: entrega ou recuperação pendente."""
         if not hasattr(self, "delivery_button"):
             return
-        if load_pending():
+        from core import app_dir
+        if (app_dir() / "pending.json").is_file():
             self.delivery_button.configure(
                 text="Resolver pendência", command=self.show_pending_recovery)
         else:
