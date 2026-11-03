@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.29"
+APP_VERSION = "1.0.0-preview.30"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -30,6 +30,8 @@ VALE_VISITOR_POINT_COUNTS = {
 }
 VALE_VISITOR_SCHEDULE = "09:00-17:00"
 VALE_MAPPING_REVISION = 1
+# Não limitar reutilizações via qrCodeValidNum em novos visitantes.
+VALE_VALID_TIMES = 0
 
 DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkin": "09:00", "checkout": "17:00"},
                    "2 dias": {"days": 2, "checkin": "09:00", "checkout": "17:00"},
@@ -47,7 +49,7 @@ def default_settings() -> dict:
         "host": "127.0.0.1", "port": 443, "ca_file": "",
         "cert_pin_sha256": "",
         "preferred_group": "",  # Sugestão local, nunca substitui consulta da OpenAPI.
-        "valid_times": 0,  # 0 = sem limite de autenticações via qrCodeValidNum; 1..100 = limite.
+        "valid_times": VALE_VALID_TIMES,  # Travado em zero para não limitar a utilização.
         "tickets": json.loads(json.dumps(DEFAULT_TICKETS)),
         # Agenda ACQUAVALE confirmada pelo hotel para estes três níveis.
         # O app nunca altera o template efetivo no HikCentral.
@@ -190,8 +192,26 @@ def load_settings(base: Path | None = None) -> dict:
                 schedule.setdefault(level, VALE_VISITOR_SCHEDULE)
             conf["schedule_windows"] = schedule
             conf["access_mapping_revision"] = VALE_MAPPING_REVISION
+        # Um operador podia salvar 1..100 nas versões anteriores.
+        # Corrigir APENAS a chave de VALID TIMES, mantendo todas as demais
+        # preferências, e preservar cópia do arquivo anterior uma única vez.
+        # Faz a migração também ao reabrir o EXE, sem depender de Salvar.
+        if saved.get("valid_times", VALE_VALID_TIMES) != VALE_VALID_TIMES:
+            backup = path.with_name("settings.backup-pre-valid-times-zero.json")
+            if not backup.exists():
+                shutil.copy2(path, backup)
+            migrated = dict(saved)
+            migrated["valid_times"] = VALE_VALID_TIMES
+            temp = path.with_name("settings.valid-times.tmp")
+            try:
+                temp.write_text(
+                    json.dumps(migrated, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(temp, path)
+            finally:
+                temp.unlink(missing_ok=True)
         # Arquivos atualizados podem ser personalizados livremente sem
         # remapeamento automático em reinicializações futuras.
+    conf["valid_times"] = VALE_VALID_TIMES
     return conf
 
 
@@ -199,6 +219,8 @@ def save_settings(settings: dict, base: Path | None = None) -> None:
     dest = base or app_dir()
     dest.mkdir(parents=True, exist_ok=True)
     safe = {k: settings[k] for k in default_settings() if k in settings}
+    # Não permitir que configuracões antigas/telas desatualizadas gravem 1..100.
+    safe["valid_times"] = VALE_VALID_TIMES
     original = dest / "settings.json"
     backup = dest / "settings.backup-pre-visitor-levels.json"
     # Preserve a recoverable copy of the old local group mappings on first save.
@@ -431,7 +453,8 @@ def validate_valid_times(value: int) -> int:
 
 def registration_payload(v: Visitor, valid_times: int = 0) -> dict:
     validate_visitor(v)
-    valid_times = validate_valid_times(valid_times)
+    validate_valid_times(valid_times)  # Contrato legado; nenhuma limitação é aplicada.
+    valid_times = VALE_VALID_TIMES  # Regra obrigatória independentemente do perfil local.
     visitor_info = {
         "visitorGivenName": v.first_name.strip(),
         "visitorFamilyName": v.last_name.strip(),
