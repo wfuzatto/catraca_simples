@@ -48,7 +48,7 @@ def test_editor_builds_payload_with_selected_group_without_affecting_valid_times
     settings = default_settings()
     chosen = "Hóspedes Serra"
     assert selected_editor_access(chosen, ["Hóspedes Vale", chosen], settings) == ["VISITANTE_SERRA"]
-    start = datetime(2026, 11, 3, 9, tzinfo=TZ)
+    start = datetime(2099, 11, 3, 9, tzinfo=TZ)
     visitor = Visitor("Teste", "Visitante", chosen, b"", "123123123",
                       start, start + timedelta(hours=8), "")
     payload = registration_payload(visitor, 0)
