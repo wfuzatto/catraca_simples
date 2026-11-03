@@ -423,6 +423,11 @@ def resolve_remote_edit_record(client, record):
         requires_consent = True
         source = "nível homologado do grupo — exige confirmação"
         expected = None
+    approved_name = VALE_VISITOR_LEVELS.get(group)
+    if approved_name and normalize(name) != normalize(approved_name):
+        raise HikError(
+            "O nível existente difere do nível Visitor homologado para este grupo. "
+            "Não é seguro alterar o acesso sem revisão no HikCentral.")
     try:
         selected, doors = client.resolve_levels([name])
         verify_visitor_access_plan(selected, doors, [name])
