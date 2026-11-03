@@ -563,3 +563,29 @@ def test_history_loading_indicator_for_list_and_editor(monkeypatch):
         assert not root._history_progress_running
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Teste de layout exige interface Tk no Windows")
+def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monkeypatch):
+    """Retirar apenas a linha de ações, mantendo busca, paginação e duplo clique."""
+    import app
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    root = app.ValeApp()
+    try:
+        root.update()
+        assert "view_history_selection" in root.history_table.bind("<Double-1>")
+        assert "Duplo" not in root.history_double_click_hint.cget("text") or (
+            "dois cliques" in root.history_double_click_hint.cget("text"))
+        for old_button in (
+            "history_verify_button", "history_resend_button",
+            "history_details_button", "history_photo_button"):
+            assert not hasattr(root, old_button)
+        assert root.history_table.winfo_exists()
+        assert root.history_previous_button.winfo_exists()
+        assert root.history_next_button.winfo_exists()
+        assert root.history_loading_frame.winfo_exists()
+    finally:
+        root.destroy()
