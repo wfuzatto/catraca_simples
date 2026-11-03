@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.35` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.36` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -369,3 +369,13 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Um check-in encerrado (`check-out`, saída no terminal ou saída automática) **não deve ser reaberto pela API de edição de check-in**: a documentação do HikCentral explica que o checkout revoga as permissões. Para uma nova estadia, o operador usa **Visitor Information → Registrar novamente** no Web Client, reutilizando dados e credenciais do mesmo visitante. Automatizar esse novo registro exige validar o fluxo próprio da versão instalada no servidor.
 - Nenhum novo cadastro nem reserva é criado automaticamente ao pesquisar ou visualizar. As alterações da Preview.35 não mexem em NFC, câmera, grupos, validade, agenda, parâmetros de integração ou níveis existentes.
 - Testes cobrem busca por nome na base geral, proteção contra misturar pessoas, visitante sem datas e atualização de check-in ativo com nível real validado, sem operações remotas de escrita nos testes.
+
+## Preview.36 — Resolver pendência, sem bloquear consulta dos visitantes
+
+- Quando existe `%LOCALAPPDATA%\\ValeCatracaSimples\\pending.json`, o botão do rodapé muda de **Verificar última entrega** para **Resolver pendência**. Clicar em **Cadastrar visitante** enquanto há uma operação interrompida também abre essa janela, em vez de apenas avisar e repetir tentativas silenciosas.
+- A tela informa **etapa (`stage`)**, horário da última alteração, Visitor ID, reserva, registro de check-in, validade, nível e número de catracas disponíveis no journal. Não grava nem inventa nome, foto, NFC ou credenciais; o journal pode não ter Visitor ID caso o envio da reserva tenha sido interrompido antes da resposta.
+- Quando a reserva retornou IDs e níveis verificáveis, **Conferir check-in e retomar credencial** usa a recuperação já existente: consulta o check-in original antes de continuar o envio de níveis/credenciais. **Nunca repete a criação da reserva**. Mostra o resultado ao operador.
+- Quando a resposta original é incerta ou os dados não permitem conciliar, a tela explica a revisão humana necessária em **Visitor Reservation** e **Visitor Check-In/Out**. A opção **Arquivar pendência conferida e liberar** exige digitar `CONFERIDO` e confirmar novamente. Ela **não executa escrita no HikCentral**: apenas move o journal local para `pending_reviewed_*.json`, mantendo auditoria, e libera a estação. É preciso antes verificar que não se duplicará um cadastro remoto.
+- A **visualização de visitantes, fotos e dados** continua possível mesmo com pendência. O editor abre em modo somente leitura e bloqueia salvamento até resolver a operação. Cadastros novos e atualizações não podem ignorar a trava de segurança.
+- Os testes automatizados cobrem resumo da pendência sem IDs, retomada possível com IDs, recusa de confirmação ausente, arquivamento auditável, proteção contra journal modificado e interface Windows sem gravação durante pendência.
+- Preservadas as regras de validade, NFC, câmera, fotografias, grupos, níveis e acesso; nenhuma alteração em servidores ou catracas ocorre ao abrir a janela.
