@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.38` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.39` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -398,3 +398,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - O comprovante não guarda foto, cartão NFC, chave OpenAPI nem senha. Ele é descartado quando o registro local muda. Se a entrega for `queued`, falhar, ou não houver releitura confiável, o comprovante não é salvo; o aviso reaparece para não sugerir uma confirmação inexistente.
 - A consulta da OpenAPI `privilege/group/single/personList` com `type=2` é indicada como não suportada para visitantes em algumas versões; **nenhuma solução trata a lista de grupos locais como prova remota**. A verificação de permissões de outros computadores requer API compatível ou serviço compartilhado de auditoria.
 - Nenhuma regra de NFC, foto, validade, agenda, câmeras, endpoints de escrita ou grupos é alterada.
+
+## Preview.39 — Grupo selecionável diretamente na edição
+
+- O editor de um check-in existente agora mostra o **mesmo seletor de grupo da tela Cadastro**, com grupos sincronizados pela OpenAPI. A seleção preenche o nível definido em `Configurações > Níveis`. O mesmo bloqueio de grupo preferencial da estação continua aplicável.
+- A mensagem laranja `ACESSO EM RECUPERAÇÃO` e o modal redundante de recuperação de nível foram removidos da tela. Há **uma única confirmação antes da gravação**, com Visitor ID, grupo escolhido e nível a aplicar; trocar de grupo é destacado porque pode aumentar ou diminuir acesso.
+- O nível selecionado vem do mapeamento homologado, e o aplicativo revalida **grupo existente no HikCentral, nível Visitor `type=2`, contagem e IDs das portas** imediatamente antes da atualização. O programa não considera o grupo configurado como comprovação do acesso antigo.
+- Mesmo trocando de grupo, a edição exige o MESMO Visitor ID e o MESMO recordId de check-in, e verifica que o grupo remoto original não mudou após a abertura da janela. Só permite trocar o plano para outro grupo cuja configuração local seja homologada e esteja disponível no servidor; nunca usa nível de funcionários.
+- Sem troca de grupo, o aplicativo mantém a comparação de níveis e catracas existentes com a última leitura. A mudança deliberada de grupo aplica o novo conjunto de portas; os novos dados são persistidos no histórico local sem criar novo visitante nem reserva.
+- A foto, o NFC, as regras de validade (`qrCodeValidNum=0`), recuperação de pendências e todos os outros parâmetros permanecem inalterados. A homologação da atualização real de grupo depende da configuração OpenAPI do servidor do hotel.
