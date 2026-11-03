@@ -389,7 +389,7 @@ def test_valid_times_survives_both_visitor_appointment_and_checkin_payloads(vali
     ])
     info = registration_payload(Visitor(
         "Visitante", "Teste", "Day use", b"", "123456",
-        parse_local("02/11/2026 09:00"), parse_local("02/11/2026 17:00")), valid_times)
+        parse_local("02/11/2099 09:00"), parse_local("02/11/2099 17:00")), valid_times)
     levels = [{"id": "10", "name": "VISITANTE"}]
     appointment, visitor = api.create_appointment(info, levels)
     api.register_visitor(info, levels, appointment, visitor)
@@ -402,8 +402,8 @@ def test_valid_times_survives_both_visitor_appointment_and_checkin_payloads(vali
         assert sent["accessInfo"]["qrCodeValidNum"] == 0  # Sem limite no HikCentral
         assert sent["accessInfo"]["electrostaticDetectionType"] == 0
         assert sent["cards"][0]["cardNo"] == "123456"
-    assert json.loads(session.calls[0][1]["data"])["appointStartTime"] == "2026-11-02T09:00:00-03:00"
-    assert json.loads(session.calls[1][1]["data"])["visitEndTime"] == "2026-11-02T17:00:00-03:00"
+    assert json.loads(session.calls[0][1]["data"])["appointStartTime"] == "2099-11-02T09:00:00-03:00"
+    assert json.loads(session.calls[1][1]["data"])["visitEndTime"] == "2099-11-02T17:00:00-03:00"
 
 
 def test_edit_existing_visitor_uses_update_endpoint_and_original_id():
