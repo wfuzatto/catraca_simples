@@ -52,6 +52,9 @@ def normalize_checkin(row: dict):
         return None
     full_name = str(base.get("fullName") or "").strip()
     first, _, last = full_name.partition(" ")
+    # Check-in pode trazer o nível explicitamente, mesmo quando a reserva
+    # omite accessInfo. Nunca inferir nível a partir do nome do grupo.
+    levels = parse_access_levels(row)
     start = str(base.get("visitStartTime") or "")
     end = str(base.get("visitEndTime") or "")
     # Nunca inventar período e chaves de reenvio se o serviço os omitir.
@@ -69,7 +72,8 @@ def normalize_checkin(row: dict):
         "photo_url": str(base.get("smallPhotoUrl") or ""),
         "card_number": str((row.get("visitorCardInfo") or {}).get("cardNumber") or ""),
         "origin": "HikCentral",
-        "door_ids": [], "access_names": [],
+        "door_ids": [], "access_names": [x["name"] for x in levels],
+        "access_level_ids": [x["id"] for x in levels],
         "expect_face": None, "expect_card": None,
     }
 
@@ -226,33 +230,46 @@ def search_visitor_directory(client, name, *, page=1, page_size=100):
 
 
 def parse_access_levels(data):
-    """Extrai somente níveis explicitamente retornados pela OpenAPI.
+    """Extrai níveis IDENTIFICADOS por ID e nome em campos documentados.
 
-    A listagem de check-ins não inclui níveis; nas reservas eles ficam em
-    visitorInfo.accessInfo.accessLevelList / accessInfo.accessLevelList.
+    HikCentral retorna accessInfo tanto no objeto de reserva quanto no
+    visitorInfo, e algumas versões retornam accessLevelList em formatos
+    encapsulados. Não tenta adivinhar grupo nem usa mapeamento local.
     """
     if not isinstance(data, dict):
         return []
-    info = data.get("visitorInfo") or data.get("VisitorInfo") or {}
-    access = (info.get("accessInfo") if isinstance(info, dict) else None) or data.get("accessInfo") or {}
-    if not isinstance(access, dict):
-        return []
-    rows = access.get("accessLevelList")
-    if not isinstance(rows, list):
-        return []
-    items = []
-    for item in rows:
-        if not isinstance(item, dict):
+    candidates = [data]
+    for key in ("visitorInfo", "VisitorInfo", "visitorBaseInfo", "VisitorBaseInfo"):
+        child = data.get(key)
+        if isinstance(child, dict):
+            candidates.append(child)
+    unique = {}
+    for container in candidates:
+        access = container.get("accessInfo") or container.get("AccessInfo")
+        if not isinstance(access, dict):
             continue
-        level = item.get("accessLevel") or item.get("AccessLevel") or item
-        if not isinstance(level, dict):
+        rows = access.get("accessLevelList") or access.get("AccessLevelList") or []
+        if isinstance(rows, dict):
+            rows = rows.get("list") or rows.get("AccessLevel") or []
+        if not isinstance(rows, list):
             continue
-        base = level.get("baseInfo") or {}
-        name = str(base.get("name") or level.get("name") or "").strip()
-        level_id = str(level.get("id") or "").strip()
-        if name and level_id and not any(p["id"] == level_id for p in items):
-            items.append({"id": level_id, "name": name})
-    return items
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            level = item.get("accessLevel") or item.get("AccessLevel") or item
+            if not isinstance(level, dict):
+                continue
+            base = level.get("baseInfo") or level.get("BaseInfo") or {}
+            if not isinstance(base, dict):
+                base = {}
+            name = str(base.get("name") or level.get("name") or "").strip()
+            level_id = str(level.get("id") or level.get("ID") or "").strip()
+            if name and level_id:
+                if level_id in unique and unique[level_id] != name:
+                    raise HikError("OpenAPI retornou nomes conflitantes para o mesmo nível de acesso.")
+                unique[level_id] = name
+    return [{"id": i, "name": n} for i, n in unique.items()]
+
 
 
 def _same_visit(appointment, record):
