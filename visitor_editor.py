@@ -112,6 +112,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     except Exception:
         original_photo = b""
         photo_panel.configure(text="Foto indisponível")
+    if (has_remote_face or photo_error) and not original_photo and not readonly:
+        must_replace_photo = True
     if photo_error and not original_photo:
         ctk.CTkLabel(body, text="Foto não retornada: " + photo_error,
                      wraplength=530, justify="left").pack(pady=(0, 6))
@@ -244,11 +246,11 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
             if record.get("_requires_access_confirmation"):
                 message = (
-                    "O nível de acesso anterior NÃO foi confirmado na OpenAPI.\\n\\n"
+                    "O nível de acesso anterior NÃO foi confirmado na OpenAPI.\n\n"
                     "Se continuar, o aplicativo atribuirá o nível Visitor HOMOLOGADO "
                     + ", ".join(record.get("access_names", [])) + " para o grupo "
                     + record.get("group", "") + " em "
-                    + str(len(record.get("door_ids", []))) + " pontos de acesso.\\n\\n"
+                    + str(len(record.get("door_ids", []))) + " pontos de acesso.\n\n"
                     "Isso pode substituir permissões anteriores desconhecidas. "
                     "Você conferiu e autoriza esta reaplicação?"
                 )
