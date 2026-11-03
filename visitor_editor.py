@@ -65,9 +65,12 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     card_values = [str(x.get("cardNo") or "") for x in raw_cards if isinstance(x, dict)] \
         if isinstance(raw_cards, list) else []
     card_number = next((x for x in card_values if x), "") or record.get("card_number", "")
+    visitor_photo_metadata = visitor.get("visitorPhoto") or visitor.get("VisitorPhoto") or {}
+    if not isinstance(visitor_photo_metadata, dict):
+        visitor_photo_metadata = {}
     has_remote_face = bool(
         record.get("photo_url") or visitor.get("faces") or
-        (visitor.get("visitorPhoto") or {}).get("haveVisitorPhoto"))
+        visitor_photo_metadata.get("haveVisitorPhoto"))
     has_remote_card = bool(raw_cards or card_number)
     if record.get("origin") == "HikCentral" and not readonly:
         # Sem fotografia recuperada, a atualização poderia eliminar a
