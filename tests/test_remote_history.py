@@ -162,7 +162,7 @@ def test_never_infer_level_from_group_on_ambiguous_or_unmatched_appointments():
     result = enrich_checkins_with_appointment_levels(
         fake, [record], "2026-11-01T00:00:00-03:00", "2026-11-04T00:00:00-03:00")
     assert result[0]["access_names"] == []
-    assert "access_level_ids" not in result[0]
+    assert result[0]["access_level_ids"] == []  # campo presente, mas sem nível inventado
 
 
 def test_remote_edit_requires_original_checkin_id_and_level_id():
