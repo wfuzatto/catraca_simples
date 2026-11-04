@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.43"
+APP_VERSION = "1.0.0-preview.44"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -280,6 +280,23 @@ def ticket_hours(ticket: dict) -> tuple[str, str]:
     if opening >= closing:
         raise ValueError("Hora de entrada deve ser anterior à hora de saída, no mesmo dia.")
     return opening, closing
+
+
+def default_ticket_start(now: datetime, ticket: dict) -> datetime:
+    """Pré-preenche a ENTRADA na abertura do ingresso, não na hora do caixa.
+
+    Antes do fechamento: início às HH:MM de abertura no dia corrente.
+    A partir do fechamento: próximo dia às HH:MM de abertura.
+    Um valor escolhido manualmente NÃO passa por esta função no cadastro.
+    """
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("Relógio local precisa conter fuso horário.")
+    opening, closing = ticket_hours(ticket)
+    local = now.astimezone(TZ)
+    day = local.date()
+    if local.strftime("%H:%M") >= closing:
+        day += timedelta(days=1)
+    return datetime.combine(day, time.fromisoformat(opening), tzinfo=TZ)
 
 
 def normalize_ticket_start(start: datetime, ticket: dict) -> datetime:
