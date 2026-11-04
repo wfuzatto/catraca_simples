@@ -58,8 +58,10 @@ def _named_direction(value):
     Ambiguous names (e.g. 'ENTRADA E SAIDA') never count as passages.
     """
     name = _simplify(value)
-    entering = bool(re.search(r"(?<![A-Z0-9])(?:ENTRADA|ENT)(?![A-Z0-9])", name))
-    leaving = bool(re.search(r"(?<![A-Z0-9])(?:SAIDA|SAI)(?![A-Z0-9])", name))
+    entering = bool(re.search(
+        r"(?<![A-Z0-9])(?:ENTRADA|ENT|ENTRANCE|ENTRY)(?![A-Z0-9])", name))
+    leaving = bool(re.search(
+        r"(?<![A-Z0-9])(?:SAIDA|SAI|EXIT)(?![A-Z0-9])", name))
     if entering == leaving:
         return None
     return "entry" if entering else "exit"
