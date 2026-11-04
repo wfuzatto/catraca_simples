@@ -30,7 +30,7 @@ from remote_history import (search_window, fetch_checkins, visitor_details,
                             fetch_visitor_photo, history_time,
                             enrich_checkins_with_appointment_levels,
                             resolve_remote_edit_record, search_visitor_directory)
-from access_passages import fetch_visitor_passages
+from access_passages import fetch_visitor_passages, load_reader_directions
 from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
@@ -878,6 +878,7 @@ class ValeApp(tk.Tk):
                 f"{aggregate['successful_access']} acessos concedidos, "
                 f"{aggregate['without_direction']} sem direção, "
                 f"{aggregate['events_returned']} eventos recebidos, "
+                f"{aggregate['direction_from_reader_id']} classificados pelo leitor, "
                 f"{aggregate['typed_fallback']} buscas por tipo")
             if failures:
                 # Exibir um erro concreto; nunca deixar somente “—” sem explicar.
@@ -885,10 +886,14 @@ class ValeApp(tk.Tk):
                     status_base + f" | Passagens: {checks}; "
                     f"{failures} falha(s) na OpenAPI. Primeiro erro: {first_error}")
             elif aggregate["successful_access"] and aggregate["without_direction"]:
+                detail = (
+                    " Consulta de leitores também falhou: " +
+                    reader_metadata_errors[0][:160] if reader_metadata_errors else "")
                 self.history_status.set(
                     status_base + f" | Passagens: {checks}. "
-                    "Há autenticações sem direção: configure os leitores "
-                    "ENTRADA/SAÍDA ou confira checkInAndOutType no HikCentral.")
+                    "Há autenticações sem direção: identifique os leitores "
+                    "ENTRADA/SAÍDA no HikCentral ou verifique "
+                    "checkInAndOutType." + detail)
             elif not aggregate["successful_access"] and aggregate["other_visitors"]:
                 self.history_status.set(
                     status_base + f" | Passagens: {checks}. "
@@ -911,22 +916,27 @@ class ValeApp(tk.Tk):
                     status_base + f" | Passagens: {checks}. "
                     "Traço (—) = nenhum evento de entrada/saída comprovado.")
 
-        def fetch_one(item, group_doors):
+        def fetch_one(item, group_doors, group_readers):
             key, record = item
             rec = dict(record)
             # Alguns registros de visitantes não retornam door_ids no
             # check-in. Os níveis Visitor configurados são usados apenas
             # para filtrar EVENTOS consultivos, não para atribuir acessos.
+            group = rec.get("group")
             if not rec.get("door_ids"):
-                rec["door_ids"] = group_doors.get(rec.get("group"), [])
+                rec["door_ids"] = group_doors.get(group, [])
             # Uma sessão separada por worker; requests.Session não é
             # compartilhada por múltiplas threads.
-            return key, fetch_visitor_passages(self.client(), rec)
+            return key, fetch_visitor_passages(
+                self.client(), rec,
+                reader_directions=group_readers.get(group, {}))
 
         def background():
             # No máximo uma consulta das portas por grupo desta página,
             # não uma consulta de grupos por visitante.
             group_doors = {}
+            group_readers = {}
+            reader_metadata_errors = []
             approved_access = self.settings.get("group_access", {})
             for group in {rec.get("group") for _, rec in records}:
                 level_name = VALE_VISITOR_LEVELS.get(group)
@@ -936,10 +946,20 @@ class ValeApp(tk.Tk):
                     selected, doors = self.client().resolve_levels([level_name])
                     verify_visitor_access_plan(selected, doors, [level_name])
                     group_doors[group] = list(doors)
+                    try:
+                        # Documentado: /resource/v1/reader/search.
+                        # Fazemos apenas uma consulta por porta/grupo,
+                        # nunca uma consulta de leitor por visitante.
+                        group_readers[group] = load_reader_directions(
+                            self.client(), doors)
+                    except Exception as exc:
+                        group_readers[group] = {}
+                        reader_metadata_errors.append(str(exc))
                 except Exception:
                     # A falta de permissão para consultar grupos não implica
                     # que não existam eventos. Tentar pelo ID da pessoa.
                     group_doors[group] = []
+                    group_readers[group] = {}
             successes = 0
             failures = 0
             first_error = ""
@@ -947,10 +967,12 @@ class ValeApp(tk.Tk):
                 "successful_access": 0, "without_direction": 0,
                 "events_returned": 0, "other_visitors": 0,
                 "typed_fallback": 0, "unfiltered_errors": 0,
+                "direction_from_reader_id": 0,
             }
             with ThreadPoolExecutor(max_workers=4) as executor:
                 futures = {
-                    executor.submit(fetch_one, item, group_doors): item[0]
+                    executor.submit(
+                        fetch_one, item, group_doors, group_readers): item[0]
                     for item in records
                 }
                 for future in as_completed(futures):
