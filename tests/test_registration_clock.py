@@ -59,15 +59,15 @@ def test_default_uses_ticket_opening_when_customized():
 def test_manual_entry_1644_is_preserved_but_never_generated_by_default():
     form = Form()
     form._set_current_ticket_period(moment(16, 44))
-    form.start.set("04/11/2026 16:44")
+    form.start.set("04/11/2099 16:44")
     form.calculate()
-    assert form.start.get() == "04/11/2026 16:44"
-    assert form.end.get() == "04/11/2026 17:00"
+    assert form.start.get() == "04/11/2099 16:44"
+    assert form.end.get() == "04/11/2099 17:00"
     dt = parse_local(form.start.get())
     end = parse_local(form.end.get())
     payload = registration_payload(
         Visitor("Teste", "Local", "Day use", b"", "12345", dt, end))
-    assert payload["visitStartTime"] == "2026-11-04T16:44:00-03:00"
+    assert payload["visitStartTime"] == "2099-11-04T16:44:00-03:00"
 
 
 def test_manual_outside_schedule_is_not_silently_rewritten():
