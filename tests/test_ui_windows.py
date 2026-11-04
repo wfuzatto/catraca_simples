@@ -31,9 +31,9 @@ def test_register_button_visible_and_form_is_simplified(monkeypatch):
         root.ticket.set("2 dias")
         root.start.set("31/10/2099 20:45")
         root.update_idletasks()
-        # Outside operating hours: move to 09:00 next day and close at 17:00
-        # on the second day of the ticket (not 23:59 as in older versions).
-        assert root.start.get() == "01/11/2099 09:00"
+        # Texto digitado pelo operador nunca deve ser silenciosamente
+        # modificado. O cadastro rejeitará o horário fora da janela.
+        assert root.start.get() == "31/10/2099 20:45"
         assert root.end.get() == "02/11/2099 17:00"
         root.book.select(root.settings_tab)
         root.update()
