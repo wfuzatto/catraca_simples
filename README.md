@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.41` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.42` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -426,3 +426,11 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - O rodapé diferencia: **sem eventos**, **eventos com pessoa/ID divergente**, **autenticações sem sentido ENTRADA/SAÍDA**, **falha de permissão da OpenAPI** e **busca parcial por modalidade**. O Web Client pode ter dados não retornados pela OpenAPI dessa instalação; nunca inventar horários.
 - A listagem não busca previamente centenas de reservas para conferir níveis que nem são exibidos: a verificação de acesso permanece sob demanda no editor. Câmera, NFC, arquivos de configuração, limpeza de transações e políticas de acesso não foram modificados.
 - Testes automatizados usam dados simulados e não verificam o servidor HikCentral do hotel. Os valores reais de Primeira Entrada / Última Saída devem ser homologados comparando a tela com **Visitor Access Record** do Web Client.
+
+## Preview.42 — Primeira entrada por direção comprovada do leitor
+
+- A consulta ACS já retornava algumas saídas, porém parte dos eventos de entrada vinha com `checkInAndOutType=0` ou sem o nome/direção do leitor. Esses eventos apareciam no diagnóstico como **sem direção** e a coluna **Primeira entrada** continuava vazia.
+- Para cada nível Visitor homologado da página, consulta **uma vez por porta** `POST /artemis/api/resource/v1/reader/search` (somente leitura) e relaciona `readerIndexCode`/nome do leitor retornado pelo HikCentral. Leitores com nomes explícitos **ENTRADA/ENT, SAÍDA/SAI, ENTRANCE/ENTRY, EXIT** podem classificar eventos antes sem sentido; também reconhece nomes como **CATRACA ENTRADA 1** e **LEITOR SAÍDA 1**, não apenas nomes que começam pela direção.
+- Se a API retornar `checkInAndOutType=1/2`, essa direção documentada continua prioritária. Quando o nome contradiz o mapeamento, o sistema não inventa passagem. Nomes genéricos (**Cardreader 01**) e ambíguos (**ENTRADA E SAIDA**) permanecem sem direção até a nomenclatura ser corrigida no HikCentral.
+- Ao selecionar uma linha na lista, o rodapé mostra quantidade de eventos concedidos, eventos sem sentido e até 5 **IDs de leitores sem mapeamento** (sem expor número de cartão, CPF, foto, credenciais ou dados biométricos). Isso ajuda a ajustar leitores pela identificação real do servidor.
+- A consulta é apenas de leitura, não altera níveis, visitantes, câmera, NFC ou catracas. Testes simulados verificam os dois sentidos, conflitos e rejeição de nome ambíguo. A validação final depende de eventos reais da instalação HikCentral.
