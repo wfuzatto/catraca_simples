@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.43` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.44` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -443,3 +443,14 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Quando a API retorna sucesso sem o ID opcional do check-in, também faz consulta de leitura para obter confirmação. Sem confirmação única, mantém `pending.json` e impede novo cadastro automático.
 - A mensagem de confirmação diferencia ID recebido ou localizado por consulta. Testes simulados abrangem payload, erro 131 sem check-in, 131 reconciliado e sucesso sem ID.
 - **Limite:** a causa precisa do código 131 depende dos registros protegidos da instalação; esta versão ainda requer teste operacional de check-in, associação de nível e entrega facial/NFC no HikCentral real. Não foram criados visitantes reais durante os testes automatizados.
+
+
+## Preview.44 — respeitar a data/hora escolhida de Entrada
+
+**Motivo:** registros com início válido no minuto do caixa (ex.: 16:44). A Preview.29 introduziu atualização do formulário pelo relógio do Windows na abertura, ao cadastrar e após concluir uma venda. Era possível transmitir a hora do atendimento como início da validade quando o operador não digitava outra hora.
+
+- Na abertura, a sugestão de Entrada passa a ser **o horário de abertura do ingresso configurado** (por padrão 09:00), e não a hora atual. Antes do encerramento do ingresso usa a data de hoje; a partir do encerramento usa o dia seguinte.
+- As caixas **Entrada** e **Saída** são campos editáveis `DD/MM/AAAA HH:MM`, não um controle de calendário. Depois de inicializar, o aplicativo não substitui seu conteúdo automaticamente pelo relógio ao clicar em CADASTRAR nem depois de um cadastro concluído. Isso permite registrar vários visitantes para o mesmo período selecionado, sem mudar a validade por acidente.
+- Alterar Entrada recalcula somente a Saída conforme dias/horário final do tipo de ingresso. Se a hora manual for inválida para o expediente, o texto original permanece no campo e a validação do cadastro impede o envio; não arredonda silenciosamente a entrada para outro dia.
+- O botão de confirmação continua mostrando a data e hora completas que serão enviadas. `registration_payload` usa `parse_local(self.start.get())` e `parse_local(self.end.get())`, propagando os valores para `appointStartTime`/`appointEndTime` da reserva e `visitStartTime`/`visitEndTime` do check-in. O timestamp `registered_at` / `registerTime` permanece separado e representa o instante real do cadastramento.
+- As agendas e os níveis aprovados no HikCentral **não mudam**. Os testes cobrem 16:44, entrada manual, horário padrão, horário customizado, mudança de data, confirmação do payload e UI Windows. A correção não altera cadastros já existentes: revisar esses registros por edição autorizada, sem recriar reservas.
