@@ -1155,11 +1155,23 @@ class ValeApp(tk.Tk):
         if chosen:
             record = self._history_records.get(chosen[0])
             if record:
+                diag = record.get("passage_diagnostics") or {}
+                missing_reader_ids = ", ".join(
+                    str(x) for x in diag.get("unknown_reader_codes", [])[:5])
+                note = (
+                    f" | Acessos: {diag.get('successful_access', 0)}, "
+                    f"sem direção: {diag.get('without_direction', 0)}"
+                    + (f" | Leitores sem sentido: {missing_reader_ids}" if
+                       missing_reader_ids else "")
+                    if diag else
+                    (" | Passagens: " + str(record["_passage_error"])
+                     if record.get("_passage_error") else
+                     " | Passagens ainda não consultadas"))
                 self.history_status.set(
                     f"Visitor ID: {record['visitor_id']} | "
                     f"Fonte: {record.get('origin', 'histórico local')} | "
-                    f"Check-in: {record.get('checkin_state', 'não verificado')} | "
-                    f"Catracas: {record.get('state', 'não verificada')}")
+                    f"Check-in: {record.get('checkin_state', 'não verificado')}"
+                    + note)
 
     def _selected_history(self):
         chosen = self.history_table.selection()
