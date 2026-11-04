@@ -75,15 +75,21 @@ def load_reader_directions(client, door_ids):
     response must never be interpreted as an entry or an exit.
     """
     result, conflicts = {}, set()
+    unsuccessful = 0
     for door_id in dict.fromkeys(str(x) for x in door_ids if str(x).strip()):
         if len(door_id) > 64:
             continue
-        response = client.post(READER_SEARCH_PATH, {"doorIndexCode": door_id})
-        data = response.get("data") or {}
-        rows = data.get("list") if isinstance(data, dict) else None
-        if not isinstance(rows, list):
-            raise HikError(
-                "HikCentral não retornou a lista de leitores por ponto de acesso.")
+        try:
+            response = client.post(
+                READER_SEARCH_PATH, {"doorIndexCode": door_id})
+            data = response.get("data") or {}
+            rows = data.get("list") if isinstance(data, dict) else None
+            if not isinstance(rows, list):
+                raise HikError(
+                    "HikCentral não retornou a lista de leitores por ponto de acesso.")
+        except HikError:
+            unsuccessful += 1
+            continue
         for reader in rows:
             if not isinstance(reader, dict):
                 continue
@@ -99,6 +105,11 @@ def load_reader_directions(client, door_ids):
                 result[rid] = direction
     for rid in conflicts:
         result.pop(rid, None)
+    if unsuccessful and not result:
+        raise HikError(
+            "A OpenAPI não retornou metadados de leitores identificáveis; "
+            "revise /artemis/api/resource/v1/reader/search e os nomes "
+            "ENTRADA/SAÍDA no HikCentral.")
     return result
 
 
