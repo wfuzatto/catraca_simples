@@ -356,22 +356,59 @@ class HikCentral:
         return appointment, visitor
 
     def register_visitor(self, info: dict, levels: list[dict], appointment: str, visitor: str) -> str:
-        """Check-in após reserva; retorna ID registro, distinto de visitorId."""
+        """Check-in reservado, sem reenvio automático em caso de resposta incerta.
+
+        A OpenAPI 3.0.1 exige watchListInfo no VisitorInfo do registerment;
+        o exemplo oficial usa a entrada neutra ID=0/Type=1. Uma resposta 131
+        pode ser conciliada SOMENTE por consulta de registro existente.
+        """
+        if not appointment or not visitor:
+            raise HikError("IDs da reserva e do visitante são obrigatórios para check-in.")
         entries = json.loads(json.dumps(info["visitorInfoList"]))
+        if len(entries) != 1 or not isinstance(entries[0], dict) or not isinstance(
+                entries[0].get("VisitorInfo"), dict):
+            raise HikError("Check-in exige exatamente um VisitorInfo válido.")
         for item in entries:
             item["VisitorInfo"]["visitorId"] = visitor
-        response = self.post("/artemis/api/visitor/v1/registerment", {
-            "appointId": appointment,
-            "visitorId": visitor,
-            "visitStartTime": info["visitStartTime"],
-            "visitEndTime": info["visitEndTime"],
-            "visitPurposeType": 4,
-            "visitPurpose": "Ingresso diario",
-            "accessInfo": self.access_info(levels),
-            "visitorInfoList": entries
-        })
+            # Campo obrigatório na referência OpenAPI. Mantido dentro de
+            # VisitorInfo, como no exemplo oficial; não é uma nova reserva.
+            item["VisitorInfo"].setdefault("watchListInfo", [
+                {"enableRegister": 1, "ID": "0", "Type": "1"}
+            ])
+        try:
+            response = self.post("/artemis/api/visitor/v1/registerment", {
+                "appointId": appointment,
+                "visitorId": visitor,
+                "visitStartTime": info["visitStartTime"],
+                "visitEndTime": info["visitEndTime"],
+                "visitPurposeType": 4,
+                "visitPurpose": "Ingresso diario",
+                "accessInfo": self.access_info(levels),
+                "visitorInfoList": entries
+            })
+        except HikError as exc:
+            # Não interpretar HTTP 200 como sucesso. Código 131 é erro de
+            # aplicação, mas a escrita pode ter sido persistida parcialmente.
+            # NUNCA repetir o POST: consultar o check-in pelo ID e período.
+            if "código 131" in str(exc):
+                try:
+                    found = self.find_existing_registration(
+                        visitor, info["visitStartTime"], info["visitEndTime"])
+                except HikError:
+                    found = None
+                if found:
+                    return found
+            raise
         data = response.get("data") or {}
         record = str(data.get("appointRecordId") or data.get("recordId") or "").strip()
+        if not record:
+            # O ID é opcional na resposta documentada. Consulta somente
+            # leitura antes de sinalizar falha, sem uma segunda escrita.
+            try:
+                record = self.find_existing_registration(
+                    visitor, info["visitStartTime"], info["visitEndTime"]) or ""
+            except HikError:
+                record = ""
         if not record:
             raise HikError("Check-in enviado, mas registro não confirmado. "
                            "Confira o HikCentral antes de tentar novamente.")
