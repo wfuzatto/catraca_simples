@@ -287,3 +287,105 @@ def test_known_approved_door_ids_are_sent_to_acs_query():
     result = fetch_visitor_passages(fake, rec, now=now())
     assert fake.calls[0]["doorIndexCodes"] == ["door-in", "door-out"]
     assert result["first_entry_at"] == "2026-11-02T10:05:00-03:00"
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("CATRACA ENTRADA 1", "entry"),
+    ("Recepção / Entrada Principal", "entry"),
+    ("PORTARIA SAÍDA 2", "exit"),
+    ("LEITOR SAI 1", "exit"),
+    ("ENTRADA E SAÍDA", None),
+    ("Cardreader 01", None),
+    ("PONTO DE ACESSO", None),
+])
+def test_reader_direction_matches_explicit_words_anywhere_not_just_prefix(
+        label, expected):
+    from access_passages import _direction
+    assert _direction({"readerName": label, "checkInAndOutType": 0}) == expected
+
+
+def test_reader_index_lookup_when_event_name_missing():
+    from access_passages import _direction
+    assert _direction(
+        {"readerIndexCode": "reader-entrance", "checkInAndOutType": 0},
+        {"reader-entrance": "entry"}) == "entry"
+    assert _direction(
+        {"readerIndexCode": "reader-exit"},
+        {"reader-exit": "exit"}) == "exit"
+    assert _direction({"readerIndexCode": "unknown"}, {}) is None
+    # Explicitly contradictory name and mapping is not safe to infer.
+    assert _direction(
+        {"readerIndexCode": "reader-entrance", "readerName": "SAIDA"},
+        {"reader-entrance": "entry"}) is None
+    # Documented checkInAndOutType overrides missing/ambiguous reader names.
+    assert _direction({"checkInAndOutType": 1, "readerName": "Cardreader"}) == "entry"
+
+
+def test_load_reader_directions_queries_metadata_once_per_door():
+    from access_passages import load_reader_directions, READER_SEARCH_PATH
+    class MockReaders:
+        def __init__(self):
+            self.calls = []
+        def post(self, path, payload):
+            assert path == READER_SEARCH_PATH
+            self.calls.append(payload["doorIndexCode"])
+            if payload["doorIndexCode"] == "door1":
+                return {"data": {"total": 2, "list": [
+                    {"indexCode": "readerA", "name": "Catraca ENTRADA 1"},
+                    {"indexCode": "readerG", "name": "Cardreader 02"},
+                ]}}
+            return {"data": {"total": 1, "list": [
+                {"indexCode": "readerB", "name": "CATRACA SAIDA 1"},
+            ]}}
+    fake = MockReaders()
+    resolved = load_reader_directions(fake, ["door1", "door2", "door1"])
+    assert fake.calls == ["door1", "door2"]
+    assert resolved == {"readerA": "entry", "readerB": "exit"}
+
+
+def test_reader_metadata_recovers_first_entry_without_attendance_direction():
+    from access_passages import load_reader_directions, READER_SEARCH_PATH
+    class ReaderACS:
+        def post(self, path, payload):
+            if path == READER_SEARCH_PATH:
+                return {"data": {"list": [
+                    {"indexCode": "reader-in-01",
+                     "name": "CATRACA RECEPÇÃO ENTRADA"},
+                    {"indexCode": "reader-out-01", "name": "CATRACA SAIDA 1"},
+                ]}}
+            assert path == DOOR_EVENTS_PATH
+            return {"data": {"total": 2, "list": [
+                {**ev(196893, 0, "2026-11-02T09:17:20-03:00"),
+                 "readerIndexCode": "reader-in-01"},
+                {**ev(196893, 0, "2026-11-03T10:17:20-03:00"),
+                 "readerIndexCode": "reader-out-01"},
+            ]}}
+    api = ReaderACS()
+    readers = load_reader_directions(api, ["door1"])
+    result = fetch_visitor_passages(
+        api, visitor(), now=now(), reader_directions=readers)
+    assert result["first_entry_at"] == "2026-11-02T09:17:20-03:00"
+    assert result["last_exit_at"] == "2026-11-03T10:17:20-03:00"
+    assert result["passage_diagnostics"]["without_direction"] == 0
+    assert result["passage_diagnostics"]["direction_from_reader_id"] == 2
+
+
+def test_generic_reader_names_never_fabricate_first_entry():
+    from access_passages import load_reader_directions, READER_SEARCH_PATH
+    class Generic:
+        def post(self, path, payload):
+            if path == READER_SEARCH_PATH:
+                return {"data": {"list": [
+                    {"indexCode": "reader-01", "name": "Cardreader 01"},
+                ]}}
+            return {"data": {"total": 1, "list": [
+                {**ev(196893, 0, "2026-11-02T09:11:00-03:00"),
+                 "readerIndexCode": "reader-01"},
+            ]}}
+    api = Generic()
+    result = fetch_visitor_passages(
+        api, visitor(), now=now(),
+        reader_directions=load_reader_directions(api, ["door1"]))
+    assert not result["first_entry_at"]
+    assert result["passage_diagnostics"]["without_direction"] == 1
+    assert result["passage_diagnostics"]["unknown_reader_codes"] == ["reader-01"]
