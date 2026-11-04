@@ -16,7 +16,7 @@ from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_se
                   visitor_levels_for_group, verify_visitor_access_plan,
                   mark_appointment_inflight,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
-                  prepare_face_jpeg, face_cover_preview, normalize_ticket_start,
+                  prepare_face_jpeg, face_cover_preview, normalize_ticket_start, default_ticket_start,
                   validate_ticket_period, require_confirmed_daily_schedule,
                   parse_ticket_lines, parse_access_lines, parse_schedule_lines, load_pending, save_pending,
                   mark_assigned, mark_registered, clear_pending,
@@ -245,31 +245,21 @@ class ValeApp(tk.Tk):
         self._set_current_ticket_period()
 
     def _set_current_ticket_period(self, now=None):
-        """Atualiza a validade padrão do PRÓXIMO cadastro, sem editar visitantes."""
-        self.start.set((now or datetime.now(TZ)).strftime("%d/%m/%Y %H:%M"))
+        """Sugere abertura do ingresso apenas na inicialização do formulário."""
+        ticket = self.settings["tickets"][self.ticket.get()]
+        start = default_ticket_start(now or datetime.now(TZ), ticket)
+        self.start.set(start.strftime("%d/%m/%Y %H:%M"))
         self.calculate()
-        # A referência permite detectar se o operador alterou datas manualmente.
-        self._auto_ticket_start = self.start.get()
-        self._auto_ticket_end = self.end.get()
-
-    def _refresh_ticket_period_if_automatic(self):
-        """Evita horário velho se o formulário ficar aberto sem atendimento."""
-        if (self.start.get() == getattr(self, "_auto_ticket_start", None)
-                and self.end.get() == getattr(self, "_auto_ticket_end", None)):
-            self._set_current_ticket_period()
 
     def calculate(self):
         """Respeita início/fim do expediente do ingresso e calcula último dia."""
         try:
             ticket = self.settings["tickets"][self.ticket.get()]
             requested = parse_local(self.start.get())
+            # O cálculo da saída jamais pode reescrever o input Entrada.
+            # Se o horário estiver fora da janela, manter o texto digitado e
+            # deixar validate_ticket_period() rejeitar ao enviar.
             aligned = normalize_ticket_start(requested, ticket)
-            if aligned != requested:
-                formatted_start = aligned.strftime("%d/%m/%Y %H:%M")
-                if self.start.get() != formatted_start:
-                    self.start.set(formatted_start)
-                    # Um callback trace do Tk não reentra automaticamente.
-                    # O fim precisa ser recalculado nesta mesma execução.
             result = end_for_ticket(aligned, ticket)
         except (KeyError, ValueError):
             return
@@ -615,9 +605,6 @@ class ValeApp(tk.Tk):
         self.task(work, finish)
 
     def register(self):
-        # Renovar o relógio SOMENTE quando as datas ainda são as automáticas.
-        # Datas editadas manualmente pelo atendente permanecem intactas.
-        self._refresh_ticket_period_if_automatic()
         if load_pending():
             self.show_pending_recovery()
             return
@@ -805,9 +792,8 @@ class ValeApp(tk.Tk):
                     else (self.connected_groups[0] if not preferred and self.connected_groups else ""))
                 self.photo_data, self.preview = b"", None
                 self.photo_widget.configure(image="", text="SEM FOTO")
-                # Antes se mantinha a hora da primeira pessoa para todos os demais.
-                # Após sucesso, preparar nova janela a partir do relógio atual.
-                self._set_current_ticket_period()
+                # Preservar o período escolhido para o próximo visitante.
+                # Nunca substituir entrada/saída pelo relógio após cadastro.
 
             # Spinner visible only after the operator answered SIM to the preview.
             self.task(work, finish, registration_loading=True)
