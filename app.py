@@ -778,7 +778,7 @@ class ValeApp(tk.Tk):
                     detail = "\n".join(f"• {d['name']}: face {d['faceState']}; pulseira {d['credentialState']}"
                                         for d in report["doors"])
                     text = (f"Visitor ID: {result['visitor_id']}\nReserva: {result['appointment_id']}\n"
-                            f"Registro de check-in (ID devolvido pela API): {result['registration_record_id']}\n"
+                            f"Registro de check-in (confirmado pela API ou consulta): {result['registration_record_id']}\n"
                             "Para comprovar o registro na base Visitor, use Verificar última entrega.\n\n"
                             f"{report['message']}\n{detail}")
                     if report["state"] == "confirmed":

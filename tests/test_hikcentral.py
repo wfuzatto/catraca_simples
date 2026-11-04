@@ -436,3 +436,76 @@ def test_edit_visitor_rejects_missing_credential_before_network():
     with pytest.raises(Exception, match="credencial"):
         api.update_registered_visitor("record", "visitor", info, [{"id":"1","name":"DAY_USE"}])
     assert not session.calls
+
+
+def _visitor_checkin_fixture():
+    return {
+        "visitStartTime": "2099-11-04T09:00:00-03:00",
+        "visitEndTime": "2099-11-04T17:00:00-03:00",
+        "visitorInfoList": [{"VisitorInfo": {
+            "visitorGivenName": "Teste", "visitorFamilyName": "Offline",
+            "visitorGroupName": "Day use", "cards": [{"cardNo": "1234"}],
+        }}],
+    }
+
+
+def test_registerment_includes_documented_watchlist_without_mutating_reservation():
+    import json
+    api, session = client({"code": "0", "data": {"appointRecordId": "checkin-1"}})
+    info = _visitor_checkin_fixture()
+    api.register_visitor(info, [{"id": "23", "name": "DAY_USE"}], "appt-1", "visitor-1")
+    payload = json.loads(session.calls[0][1]["data"])
+    assert payload["appointId"] == "appt-1"
+    assert payload["visitorId"] == "visitor-1"
+    assert payload["visitorInfoList"][0]["VisitorInfo"]["watchListInfo"] == [
+        {"enableRegister": 1, "ID": "0", "Type": "1"}]
+    assert "watchListInfo" not in info["visitorInfoList"][0]["VisitorInfo"]
+
+
+def test_registerment_131_reconciles_existing_checkin_without_duplicate_post():
+    api, session = client([
+        {"code": "131", "msg": "operation rejected"},
+        {"code": "0", "data": {"list": [{
+            "recordId": "checkin-confirmed", "visitorBaseInfo": {
+                "visitorId": "visitor-1",
+                "visitStartTime": "2099-11-04T09:00:00-03:00",
+                "visitEndTime": "2099-11-04T17:00:00-03:00",
+            },
+        }], "totalNum": 1}},
+    ])
+    info = _visitor_checkin_fixture()
+    result = api.register_visitor(info, [{"id": "23", "name": "DAY_USE"}], "appt-1", "visitor-1")
+    assert result == "checkin-confirmed"
+    assert len(session.calls) == 2
+    assert session.calls[0][0].endswith("/visitor/v1/registerment")
+    assert session.calls[1][0].endswith("/visitor/v1/register/getVistorRegisterRecord")
+
+
+def test_registerment_131_without_confirmed_checkin_remains_blocked():
+    api, session = client([
+        {"code": "131", "msg": "validation rejected"},
+        {"code": "0", "data": {"list": [], "totalNum": 0}},
+    ])
+    with pytest.raises(HikError, match="código 131"):
+        api.register_visitor(
+            _visitor_checkin_fixture(), [{"id": "23", "name": "DAY_USE"}],
+            "appt-1", "visitor-1")
+    assert len(session.calls) == 2
+    assert all("appointment" not in url for url, _ in session.calls)
+
+
+def test_registerment_success_without_optional_record_id_uses_readback():
+    api, session = client([
+        {"code": "0", "data": {"visitorId": "visitor-1"}},
+        {"code": "0", "data": {"list": [{
+            "recordId": "checkin-readback", "visitorBaseInfo": {
+                "visitorId": "visitor-1",
+                "visitStartTime": "2099-11-04T09:00:00-03:00",
+                "visitEndTime": "2099-11-04T17:00:00-03:00",
+            },
+        }], "totalNum": 1}},
+    ])
+    assert api.register_visitor(
+        _visitor_checkin_fixture(), [{"id": "23", "name": "DAY_USE"}],
+        "appt-1", "visitor-1") == "checkin-readback"
+    assert len(session.calls) == 2
