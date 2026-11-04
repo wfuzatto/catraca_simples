@@ -869,7 +869,7 @@ class ValeApp(tk.Tk):
             values[-1] = history_time(record.get("last_exit_at"))
             self.history_table.item(key, values=values)
 
-        def complete(scanned, failures, aggregate, first_error):
+        def complete(scanned, failures, aggregate, first_error, reader_metadata_error=""):
             if generation != self._history_access_generation or not self.winfo_exists():
                 return
             modern_ui.stop_history_loading(self, phase="passages")
@@ -888,7 +888,7 @@ class ValeApp(tk.Tk):
             elif aggregate["successful_access"] and aggregate["without_direction"]:
                 detail = (
                     " Consulta de leitores também falhou: " +
-                    reader_metadata_errors[0][:160] if reader_metadata_errors else "")
+                    reader_metadata_error[:160] if reader_metadata_error else "")
                 self.history_status.set(
                     status_base + f" | Passagens: {checks}. "
                     "Há autenticações sem direção: identifique os leitores "
@@ -1003,7 +1003,9 @@ class ValeApp(tk.Tk):
                         break
             try:
                 self.after(0, lambda a=successes+failures, b=failures,
-                           c=dict(aggregate), d=first_error: complete(a, b, c, d))
+                           c=dict(aggregate), d=first_error,
+                           e=reader_metadata_errors[0] if reader_metadata_errors else "":
+                           complete(a, b, c, d, e))
             except (RuntimeError, tk.TclError):
                 pass
 
