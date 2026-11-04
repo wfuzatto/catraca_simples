@@ -48,24 +48,84 @@ def _simplify(value):
     return "".join(x for x in value if not unicodedata.combining(x)).upper()
 
 
-def _direction(event):
-    """Os códigos 1/2 são do campo documentado checkInAndOutType.
+READER_SEARCH_PATH = "/artemis/api/resource/v1/reader/search"
 
-    Fallback somente para leitor/porta com identificador explícito
-    ENTRADA/ENT e SAIDA/SAI. Outros nomes não são direção verificável.
+def _named_direction(value):
+    """Return direction only from explicit, unambiguous reader/door labels.
+
+    HikCentral may name a reader 'CATRACA ENTRADA 1', not just 'ENTRADA 1'.
+    Whole-token matching avoids interpreting ordinary names such as 'ENTRE'.
+    Ambiguous names (e.g. 'ENTRADA E SAIDA') never count as passages.
     """
-    mode = str(event.get("checkInAndOutType") or "")
+    name = _simplify(value)
+    entering = bool(re.search(r"(?<![A-Z0-9])(?:ENTRADA|ENT)(?![A-Z0-9])", name))
+    leaving = bool(re.search(r"(?<![A-Z0-9])(?:SAIDA|SAI)(?![A-Z0-9])", name))
+    if entering == leaving:
+        return None
+    return "entry" if entering else "exit"
+
+
+def load_reader_directions(client, door_ids):
+    """Read Card Reader metadata once per group, never per visitor.
+
+    /resource/v1/reader/search returns 'indexCode' and 'name'. Map only
+    readers with explicit one-way names. Missing permissions or a partial
+    response must never be interpreted as an entry or an exit.
+    """
+    result, conflicts = {}, set()
+    for door_id in dict.fromkeys(str(x) for x in door_ids if str(x).strip()):
+        if len(door_id) > 64:
+            continue
+        response = client.post(READER_SEARCH_PATH, {"doorIndexCode": door_id})
+        data = response.get("data") or {}
+        rows = data.get("list") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise HikError(
+                "HikCentral não retornou a lista de leitores por ponto de acesso.")
+        for reader in rows:
+            if not isinstance(reader, dict):
+                continue
+            rid = str(reader.get("indexCode") or reader.get("readerIndexCode") or "").strip()
+            if not rid or len(rid) > 64:
+                continue
+            direction = _named_direction(reader.get("name") or reader.get("readerName"))
+            if not direction:
+                continue
+            if rid in result and result[rid] != direction:
+                conflicts.add(rid)
+            else:
+                result[rid] = direction
+    for rid in conflicts:
+        result.pop(rid, None)
+    return result
+
+
+def _direction(event, reader_directions=None):
+    """Classify direction by documented attendance mode or verified names.
+
+    Metadata reader IDs fetched from the HikCentral resource API are used
+    only when the event omits a usable checkInAndOutType. Conflicting names
+    are not silently forced to a direction.
+    """
+    mode = str(event.get("checkInAndOutType") if
+               event.get("checkInAndOutType") is not None else "")
     if mode in ("1", "4", "5"):
         return "entry"
     if mode in ("2", "3", "6"):
         return "exit"
-    for field in ("readerName", "doorName"):
-        name = _simplify(event.get(field))
-        in_name = bool(re.match(r"^\s*(ENTRADA|ENT(?:\b|[\s_-]*\d))", name))
-        out_name = bool(re.match(r"^\s*(SAIDA|SAI(?:\b|[\s_-]*\d))", name))
-        if in_name != out_name:
-            return "entry" if in_name else "exit"
-    return None
+    # A reader ID is specific to the terminal, unlike a door that may
+    # have both an entrance and an exit reader.
+    rid = str(event.get("readerIndexCode") or "").strip()
+    mapped = (reader_directions or {}).get(rid)
+    labels = [
+        event.get(key) for key in (
+            "readerName", "doorName", "elementName", "accessPointName")
+    ]
+    explicit = {_named_direction(label) for label in labels}
+    explicit.discard(None)
+    if mapped:
+        return mapped if not explicit or explicit == {mapped} else None
+    return next(iter(explicit)) if len(explicit) == 1 else None
 
 
 def _periods(start, end):
@@ -83,7 +143,7 @@ def _periods(start, end):
     return windows
 
 
-def fetch_visitor_passages(client, record, *, now=None):
+def fetch_visitor_passages(client, record, *, now=None, reader_directions=None):
     """Consulta Visitor Access Record via ACS; classifica apenas sentidos provados.
 
     Primeiro filtra pelo Visitor ID. Para servidores em que esse filtro não
@@ -108,6 +168,7 @@ def fetch_visitor_passages(client, record, *, now=None):
         "first_entry_count": 0, "last_exit_count": 0,
         "unknown_event_type": 0, "queries": 0, "by_name_fallback": 0,
         "typed_fallback": 0, "filtered_search": 0, "unfiltered_errors": 0,
+        "direction_from_reader_id": 0, "unknown_reader_codes": [],
     }
     if stop <= start:
         return {
@@ -159,7 +220,10 @@ def fetch_visitor_passages(client, record, *, now=None):
         seen.add(unique)
         summary["successful_access"] += 1
         auth_times.append(when)
-        direction = _direction(event)
+        direction = _direction(event, reader_directions)
+        rid = str(event.get("readerIndexCode") or "").strip()
+        if direction and rid and (reader_directions or {}).get(rid) == direction:
+            summary["direction_from_reader_id"] += 1
         if direction == "entry":
             entry_times.append(when)
             summary["first_entry_count"] += 1
@@ -168,6 +232,11 @@ def fetch_visitor_passages(client, record, *, now=None):
             summary["last_exit_count"] += 1
         else:
             summary["without_direction"] += 1
+            # These are equipment IDs, never visitor/card/photo data. The
+            # short list helps map still-unnamed readers in HikCentral.
+            if rid and rid not in summary["unknown_reader_codes"] and (
+                    len(summary["unknown_reader_codes"]) < 5):
+                summary["unknown_reader_codes"].append(rid)
         return True
 
     def query_pages(begin, finish, identity, event_type=None):
