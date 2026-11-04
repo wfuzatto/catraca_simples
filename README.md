@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.42` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.43` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -434,3 +434,12 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Se a API retornar `checkInAndOutType=1/2`, essa direção documentada continua prioritária. Quando o nome contradiz o mapeamento, o sistema não inventa passagem. Nomes genéricos (**Cardreader 01**) e ambíguos (**ENTRADA E SAIDA**) permanecem sem direção até a nomenclatura ser corrigida no HikCentral.
 - Ao selecionar uma linha na lista, o rodapé mostra quantidade de eventos concedidos, eventos sem sentido e até 5 **IDs de leitores sem mapeamento** (sem expor número de cartão, CPF, foto, credenciais ou dados biométricos). Isso ajuda a ajustar leitores pela identificação real do servidor.
 - A consulta é apenas de leitura, não altera níveis, visitantes, câmera, NFC ou catracas. Testes simulados verificam os dois sentidos, conflitos e rejeição de nome ambíguo. A validação final depende de eventos reais da instalação HikCentral.
+
+
+## Preview.43 — check-in Visitor: resposta 131 e reconciliação sem duplicatas
+
+- No POST `/artemis/api/visitor/v1/registerment`, a estrutura `VisitorInfo` inclui `watchListInfo` neutro (`enableRegister=1, ID=0, Type=1`) conforme exemplo da referência OpenAPI consultada. A reserva anterior e os IDs originais são preservados.
+- Em respostas internas **código 131**, o programa não considera HTTP 200 um sucesso e não envia um segundo check-in. Consulta o histórico de check-in por `visitorId` e pelo período exato: prossegue apenas com **um** registro remoto confirmado.
+- Quando a API retorna sucesso sem o ID opcional do check-in, também faz consulta de leitura para obter confirmação. Sem confirmação única, mantém `pending.json` e impede novo cadastro automático.
+- A mensagem de confirmação diferencia ID recebido ou localizado por consulta. Testes simulados abrangem payload, erro 131 sem check-in, 131 reconciliado e sucesso sem ID.
+- **Limite:** a causa precisa do código 131 depende dos registros protegidos da instalação; esta versão ainda requer teste operacional de check-in, associação de nível e entrega facial/NFC no HikCentral real. Não foram criados visitantes reais durante os testes automatizados.
