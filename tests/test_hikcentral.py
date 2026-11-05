@@ -509,3 +509,29 @@ def test_registerment_success_without_optional_record_id_uses_readback():
         _visitor_checkin_fixture(), [{"id": "23", "name": "DAY_USE"}],
         "appt-1", "visitor-1") == "checkin-readback"
     assert len(session.calls) == 2
+
+
+def test_full_day_calendar_period_is_identical_in_appointment_and_checkin():
+    """Payload de validade independente do template ACS, nunca do relógio."""
+    import json
+    from core import default_settings, visitor_period_from_dates, Visitor, registration_payload
+    cfg = default_settings()
+    start, finish = visitor_period_from_dates(
+        "05/11/2099", "06/11/2099", cfg, cfg["tickets"]["2 dias"])
+    visitor_info = registration_payload(
+        Visitor("Teste", "Visitante", "Hóspedes Vale", b"", "12345", start, finish))
+    levels = [{"id": "28", "name": "VISITANTE_VALE", "elements": []}]
+    api, session = client([
+        {"code": "0", "data": {"appointRecordId": "appt-date", "visitorId": "visitor-date"}},
+        {"code": "0", "data": {"recordId": "checkin-date"}},
+    ])
+    appt, vid = api.create_appointment(visitor_info, levels)
+    assert api.register_visitor(visitor_info, levels, appt, vid) == "checkin-date"
+    appointment = json.loads(session.calls[0][1]["data"])
+    checkin = json.loads(session.calls[1][1]["data"])
+    assert appointment["appointStartTime"] == "2099-11-05T00:00:00-03:00"
+    assert checkin["visitStartTime"] == appointment["appointStartTime"]
+    assert appointment["appointEndTime"] == "2099-11-06T23:59:59-03:00"
+    assert checkin["visitEndTime"] == appointment["appointEndTime"]
+    assert "09:00" not in appointment["appointStartTime"]
+    assert "17:00" not in checkin["visitEndTime"]
