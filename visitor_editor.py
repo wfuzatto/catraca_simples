@@ -325,10 +325,10 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                      if new_group != original_group else
                      "Será reaplicado o nível configurado para esse grupo.\n\n") +
                     f"Validade a gravar: {visit_start:%d/%m/%Y %H:%M:%S} a "
-                    f"{visit_end:%d/%m/%Y %H:%M:%S}.\\n"
+                    f"{visit_end:%d/%m/%Y %H:%M:%S}.\n"
                     + ("ATENÇÃO: a validade anterior possui horários/período diferentes. "
                        "Ao salvar, eles serão substituídos pelos horários configurados "
-                       "(padrão dia inteiro).\\n\\n" if validity_changed else "\\n")
+                       "(padrão dia inteiro).\n\n" if validity_changed else "\n")
                     + "O registro de check-in será atualizado sem criar outra reserva. "
                     "Confirma a aplicação do grupo e nível selecionados?",
                     parent=dialog):
