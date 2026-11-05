@@ -29,12 +29,13 @@ def test_register_button_visible_and_form_is_simplified(monkeypatch):
         assert "Sincronizar grupos e níveis" not in buttons
         assert "Concluir pendente" not in buttons
         root.ticket.set("2 dias")
-        root.start.set("31/10/2099 20:45")
+        root.start.set("31/10/2099")
         root.update_idletasks()
-        # Texto digitado pelo operador nunca deve ser silenciosamente
-        # modificado. O cadastro rejeitará o horário fora da janela.
-        assert root.start.get() == "31/10/2099 20:45"
-        assert root.end.get() == "02/11/2099 17:00"
+        # O caixa recebe somente datas; horas ficam na área protegida.
+        assert root.start.get() == "31/10/2099"
+        assert root.end.get() == "01/11/2099"
+        assert root.s_validity_start.get() == "00:00:00"
+        assert root.s_validity_end.get() == "23:59:59"
         root.book.select(root.settings_tab)
         root.update()
         assert root.register_button.winfo_manager() == ""
@@ -829,5 +830,35 @@ def test_history_today_default_and_page_size_selection_do_not_autofetch(monkeypa
             root.history_page_size_changed()
             assert root._history_page == 1
             assert "Atualizar lista" in root.history_status.get()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Tk e validação visual exigem Windows.")
+def test_new_registration_date_fields_do_not_include_or_autofill_clock(monkeypatch):
+    import app
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    root = app.ValeApp()
+    try:
+        root.update()
+        assert len(root.start.get()) == 10
+        assert len(root.end.get()) == 10
+        assert ":" not in root.start.get()
+        root.ticket.set("3 dias")
+        root.start.set("05/11/2099")
+        root.update_idletasks()
+        assert root.start.get() == "05/11/2099"
+        assert root.end.get() == "07/11/2099"
+        # Clicar no formulário de configuração não modifica as datas.
+        root.book.select(root.settings_tab)
+        root.update_idletasks()
+        assert root.s_validity_start.get() == "00:00:00"
+        assert root.s_validity_end.get() == "23:59:59"
+        root.book.select(root.registration_tab)
+        root.update_idletasks()
+        assert root.start.get() == "05/11/2099"
+        assert root.end.get() == "07/11/2099"
     finally:
         root.destroy()

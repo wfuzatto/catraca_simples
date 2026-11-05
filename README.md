@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.44` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.45` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -454,3 +454,18 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Alterar Entrada recalcula somente a Saída conforme dias/horário final do tipo de ingresso. Se a hora manual for inválida para o expediente, o texto original permanece no campo e a validação do cadastro impede o envio; não arredonda silenciosamente a entrada para outro dia.
 - O botão de confirmação continua mostrando a data e hora completas que serão enviadas. `registration_payload` usa `parse_local(self.start.get())` e `parse_local(self.end.get())`, propagando os valores para `appointStartTime`/`appointEndTime` da reserva e `visitStartTime`/`visitEndTime` do check-in. O timestamp `registered_at` / `registerTime` permanece separado e representa o instante real do cadastramento.
 - As agendas e os níveis aprovados no HikCentral **não mudam**. Os testes cobrem 16:44, entrada manual, horário padrão, horário customizado, mudança de data, confirmação do payload e UI Windows. A correção não altera cadastros já existentes: revisar esses registros por edição autorizada, sem recriar reservas.
+
+
+## Preview.45 — campos de data apenas e horários de validade protegidos
+
+- O cadastro mostra somente **Entrada (DD/MM/AAAA)** e **Saída (DD/MM/AAAA)**. Horas não são editáveis nem preenchidas automaticamente pelo relógio do atendimento. O período escolhido permanece entre atendimentos consecutivos.
+- O aplicativo converte essas datas para timestamps ISO 8601 no fuso `America/Sao_Paulo`. Por padrão, início `00:00:00` no primeiro dia e término `23:59:59` no último dia, tanto na reserva `/visitor/v2/appointment` quanto no check-in `/visitor/v1/registerment`.
+- **Configurações (protegidas por senha)**: novos campos `validity_start_time` e `validity_end_time`, com padrões `00:00:00` e `23:59:59`. A recepção não consegue alterar a hora; configuração inválida é recusada antes de gravar.
+- A seleção de ingresso determina a quantidade de dias; uma saída incompatível é bloqueada com erro antes de qualquer requisição remota. O usuário pode escolher a data, mas não adulterar a hora através dos campos de texto. Os horários não são recalculados durante a criação ou após um sucesso.
+- **Não confundir validade com agenda ACS:** os níveis `DAY_USE`, `VISITANTE_SERRA` e `VISITANTE_VALE` continuam vinculados ao template `ACQUAVALE` (horário informado: 09:00–17:00); essa programação restringe as passagens independentemente da validade de dia inteiro. O aplicativo mantém a checagem da confirmação administrativa dos níveis/horários, mas NÃO comprova sozinho se a agenda foi aplicada aos dispositivos.
+- Edição de visitantes: mostra datas sem horários e, se a validade antiga diferir, exibe **aviso explícito** antes do `registerment/update`. Não reenvia nem migra visitantes já existentes automaticamente.
+- Checkpoint de recuperação, horários locais de registro, histórico de eventos, leitor NFC, rosto e níveis de acesso permanecem independentes.
+- Atenção operacional: é necessário verificar na instalação real do HikCentral se `appointStartTime`/`visitStartTime` à meia-noite do dia corrente são aceitos quando o check-in acontece mais tarde. Testes simulados não podem garantir isso; se a versão instalada recusar um início anterior à hora atual, o sistema deve indicar a falha sem duplicar reservas e requer ajuste homologado com a documentação/fornecedor.
+- Antes de liberar em produção, confirme **agenda ACQUAVALE**, **feriados**, **aplicação efetiva de permissões às catracas** e negativas fora da janela. Uma credencial não aplicada, outro nível All-Day ou configuração `Always Open` pode alterar o comportamento observado.
+
+Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinfo.hikvision.com/hkwsen/unzip/20230830144955_12918_doc/GUID-847FBB20-C785-4B29-A776-F2C552DBA340.html), [Visitor Reservation](https://enpinfo.hikvision.com/hkwsen/unzip/20230830144955_12918_doc/GUID-B8A0D0E8-3771-4B7F-B710-A48E5B729FD1.html).

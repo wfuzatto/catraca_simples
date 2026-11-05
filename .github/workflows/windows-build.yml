@@ -2,6 +2,8 @@ name: Compilar EXE Windows
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 concurrency:
   group: vale-catraca-build-${{ github.ref }}

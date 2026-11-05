@@ -398,14 +398,14 @@ def test_appointment_inflight_marker_blocks_retries_and_upgrades(tmp_path):
 
 def test_visitor_timezone_and_daily_window():
     from core import parse_local, registration_payload, validate_ticket_period
-    start = parse_local("02/11/2026 09:00")
-    end = parse_local("04/11/2026 17:00")
+    start = parse_local("02/11/2099 09:00")
+    end = parse_local("04/11/2099 17:00")
     ticket = {"days": 3, "checkin": "09:00", "checkout": "17:00"}
     validate_ticket_period(start, end, ticket)
     payload = registration_payload(
         Visitor("Teste", "Local", "Hóspedes Serra", b"", "123456789", start, end, "123"))
-    assert payload["visitStartTime"] == "2026-11-02T09:00:00-03:00"
-    assert payload["visitEndTime"] == "2026-11-04T17:00:00-03:00"
+    assert payload["visitStartTime"] == "2099-11-02T09:00:00-03:00"
+    assert payload["visitEndTime"] == "2099-11-04T17:00:00-03:00"
     info = payload["visitorInfoList"][0]["VisitorInfo"]
     assert info["remark"] == "123"
     assert info["cards"][0]["cardNo"] == "123456789"
@@ -499,3 +499,62 @@ def test_valid_times_zero_is_applied_to_all_visitor_groups(group):
         info = registration_payload(visit, old_value)["visitorInfoList"][0]["VisitorInfo"]
         assert info["visitorGroupName"] == group
         assert info["accessInfo"]["qrCodeValidNum"] == 0
+
+
+def test_calendar_validity_full_day_and_schedule_independent():
+    from core import visitor_period_from_dates, require_confirmed_daily_schedule
+    settings = default_settings()
+    ticket = settings["tickets"]["2 dias"]
+    start, end = visitor_period_from_dates("05/11/2099", "06/11/2099", settings, ticket)
+    assert start.isoformat(timespec="seconds") == "2099-11-05T00:00:00-03:00"
+    assert end.isoformat(timespec="seconds") == "2099-11-06T23:59:59-03:00"
+    # A validade cheia não abre as catracas: a agenda 09–17 continua
+    # obrigatória e atrelada ao nível Visitor aprovado.
+    require_confirmed_daily_schedule(["DAY_USE"], ticket, settings["schedule_windows"])
+    payload = registration_payload(
+        Visitor("Teste", "Hospede", "Day use", b"", "1234", start, end))
+    assert payload["visitStartTime"] == "2099-11-05T00:00:00-03:00"
+    assert payload["visitEndTime"] == "2099-11-06T23:59:59-03:00"
+
+
+@pytest.mark.parametrize("entry,exit_", [
+    ("05/11/2099 16:44", "05/11/2099"),
+    ("05/11/2099", "05/11/2099 17:00"),
+    ("2026-11-05", "05/11/2099"),
+    ("32/11/2099", "05/11/2099"),
+    ("05/11/2099", "04/11/2099"),
+    ("05/11/2099", "07/11/2099"),
+])
+def test_date_only_rejects_hours_bad_dates_and_wrong_duration(entry, exit_):
+    from core import visitor_period_from_dates
+    with pytest.raises(ValueError):
+        visitor_period_from_dates(
+            entry, exit_, default_settings(), default_settings()["tickets"]["1 dia"])
+
+
+def test_technical_validity_hours_only_from_admin_settings(tmp_path):
+    from core import visitor_period_from_dates, visitor_validity_hours
+    settings = default_settings()
+    assert tuple(str(x) for x in visitor_validity_hours(settings)) == (
+        "00:00:00", "23:59:59")
+    settings["validity_start_time"] = "00:15:00"
+    settings["validity_end_time"] = "23:00:59"
+    save_settings(settings, tmp_path)
+    restored = load_settings(tmp_path)
+    start, end = visitor_period_from_dates("05/11/2099", "05/11/2099", restored)
+    assert start.strftime("%H:%M:%S") == "00:15:00"
+    assert end.strftime("%H:%M:%S") == "23:00:59"
+    assert restored["schedule_windows"]["DAY_USE"] == "09:00-17:00"
+    settings["validity_start_time"] = "12:00:00"
+    settings["validity_end_time"] = "11:59:59"
+    with pytest.raises(ValueError, match="anterior"):
+        save_settings(settings, tmp_path)
+    assert load_settings(tmp_path) == restored
+
+
+def test_date_only_editor_period_rejects_expired_during_payload_validation():
+    from core import visitor_period_from_dates
+    start, end = visitor_period_from_dates("01/01/2020", "01/01/2020", default_settings())
+    with pytest.raises(ValueError, match="expirou"):
+        registration_payload(
+            Visitor("Teste", "Local", "Hóspedes Vale", b"", "1234", start, end))

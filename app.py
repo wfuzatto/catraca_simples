@@ -7,7 +7,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from PIL import Image, ImageTk
 
@@ -18,6 +18,7 @@ from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_se
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   prepare_face_jpeg, face_cover_preview, normalize_ticket_start, default_ticket_start,
                   validate_ticket_period, require_confirmed_daily_schedule,
+                  parse_visit_date, visitor_period_from_dates, visitor_validity_hours,
                   parse_ticket_lines, parse_access_lines, parse_schedule_lines, load_pending, save_pending,
                   mark_assigned, mark_registered, clear_pending,
                   save_last_delivery, load_last_delivery)
@@ -220,6 +221,8 @@ class ValeApp(tk.Tk):
         self.s_secret.set(self.secret)
         self.s_cert_pin.set(s.get("cert_pin_sha256", ""))
         self.s_valid_times.set("0")
+        self.s_validity_start.set(s.get("validity_start_time", "00:00:00"))
+        self.s_validity_end.set(s.get("validity_end_time", "23:59:59"))
         self.s_face_enabled.set(bool(s.get("face_auto_capture", True)))
         self.s_face_stable.set(str(s.get("face_stability_ms", 900)))
         self.s_face_sensitivity.set(s.get("face_sensitivity", "Normal"))
@@ -245,25 +248,22 @@ class ValeApp(tk.Tk):
         self._set_current_ticket_period()
 
     def _set_current_ticket_period(self, now=None):
-        """Sugere abertura do ingresso apenas na inicialização do formulário."""
-        ticket = self.settings["tickets"][self.ticket.get()]
-        start = default_ticket_start(now or datetime.now(TZ), ticket)
-        self.start.set(start.strftime("%d/%m/%Y %H:%M"))
+        """Sugere somente a data local. A hora é protegida em Configurações."""
+        self.start.set((now or datetime.now(TZ)).astimezone(TZ).strftime("%d/%m/%Y"))
         self.calculate()
 
     def calculate(self):
-        """Respeita início/fim do expediente do ingresso e calcula último dia."""
+        """Atualiza apenas a DATA de saída; jamais reescreve Entrada."""
         try:
             ticket = self.settings["tickets"][self.ticket.get()]
-            requested = parse_local(self.start.get())
-            # O cálculo da saída jamais pode reescrever o input Entrada.
-            # Se o horário estiver fora da janela, manter o texto digitado e
-            # deixar validate_ticket_period() rejeitar ao enviar.
-            aligned = normalize_ticket_start(requested, ticket)
-            result = end_for_ticket(aligned, ticket)
-        except (KeyError, ValueError):
+            first = parse_visit_date(self.start.get())
+            days = int(ticket["days"])
+            if not 1 <= days <= 365:
+                raise ValueError("Duração inválida")
+            result = first + timedelta(days=days - 1)
+        except (KeyError, ValueError, TypeError, OverflowError):
             return
-        formatted = result.strftime("%d/%m/%Y %H:%M")
+        formatted = result.strftime("%d/%m/%Y")
         if self.end.get() != formatted:
             self.end.set(formatted)
 
@@ -294,12 +294,15 @@ class ValeApp(tk.Tk):
                 "face_require_quality": bool(self.s_face_quality.get()),
                 "face_timeout_s": int(self.s_face_timeout.get()),
                 "valid_times": 0,  # Valor fixo: sem limitação de usos.
+                "validity_start_time": self.s_validity_start.get().strip(),
+                "validity_end_time": self.s_validity_end.get().strip(),
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
                 "group_access": parse_access_lines(self.access_text.get("1.0", tk.END)),
                 "access_mapping_revision": self.settings.get("access_mapping_revision", 1),
                 "schedule_windows": parse_schedule_lines(
                     self.schedule_text.get("1.0", tk.END))
             }
+            visitor_validity_hours(conf)
             from face_capture_logic import FaceGuideConfig
             FaceGuideConfig.from_settings(conf)
             if not conf["host"] or not 1 <= conf["port"] <= 65535:
@@ -621,9 +624,9 @@ class ValeApp(tk.Tk):
                 group, self.connected_groups, self.settings["group_access"],
                 self.settings.get("preferred_group", ""))
             ticket = self.settings["tickets"][self.ticket.get()]
-            start = parse_local(self.start.get())
-            end = parse_local(self.end.get())
-            validate_ticket_period(start, end, ticket)
+            # O usuário informa APENAS datas; horário de validade é protegido.
+            start, end = visitor_period_from_dates(
+                self.start.get(), self.end.get(), self.settings, ticket)
             require_confirmed_daily_schedule(
                 requested_levels, ticket, self.settings.get("schedule_windows", {}))
             obj = Visitor(self.first.get(), self.last.get(), group, self.photo_data,
@@ -666,8 +669,9 @@ class ValeApp(tk.Tk):
                 f"Grupo: {group}\n"
                 f"Entrada: {obj.arrival.strftime('%d/%m/%Y %H:%M %Z')}\n"
                 f"Sa\u00edda: {obj.departure.strftime('%d/%m/%Y %H:%M %Z')}\n"
-                f"Janela diária autorizada: {ticket.get('checkin', '09:00')}-"
-                f"{ticket['checkout']} (validada pela administração nos níveis)\n\n"
+                f"Validade do ingresso: {start:%H:%M:%S}–{end:%H:%M:%S} nas datas escolhidas.\n"
+                f"Agenda do nível Visitor: {ticket.get('checkin', '09:00')}-"
+                f"{ticket['checkout']} (conferir aplicação nas catracas).\n\n"
                 "N\u00edveis Visitor que ser\u00e3o associados:\n" + "\n".join(level_lines) +
                 "\n\nCatracas alcan\u00e7adas por esses n\u00edveis:\n" + "\n".join(door_lines) +
                 f"\n\nCredencial(is) a enviar: {credentials}. " +

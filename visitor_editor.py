@@ -6,7 +6,7 @@ from io import BytesIO
 from PIL import Image, ImageTk
 from datetime import datetime
 import customtkinter as ctk
-from core import (Visitor, TZ, parse_local, registration_payload,
+from core import (Visitor, TZ, visitor_period_from_dates, registration_payload,
                   prepare_face_jpeg, load_pending, app_dir, _write_json_atomic,
                   verify_visitor_access_plan, visitor_levels_for_group,
                   VALE_VISITOR_LEVELS)
@@ -169,7 +169,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         # Não fabricar datas nem falhar ao abrir a foto.
         try:
             value = record.get(field) or ""
-            return datetime.fromisoformat(value).astimezone(TZ).strftime("%d/%m/%Y %H:%M")
+            return datetime.fromisoformat(value).astimezone(TZ).strftime("%d/%m/%Y")
         except (ValueError, TypeError):
             return ""
 
@@ -183,8 +183,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     fields = {}
     for field, label in [("first", "Nome"), ("last", "Sobrenome"),
                          ("reservation", "Reserva / apartamento"),
-                         ("entry", "Entrada (DD/MM/AAAA HH:MM)"),
-                         ("exit", "Saída (DD/MM/AAAA HH:MM)"),
+                         ("entry", "Entrada (DD/MM/AAAA)"),
+                         ("exit", "Saída (DD/MM/AAAA)"),
                          ("card", "Pulseira/NFC (informar novamente)")]:
         ctk.CTkLabel(body, text=label, anchor="w").pack(fill="x", pady=(8, 2))
         var = tk.StringVar(value=initial[field])
@@ -300,10 +300,17 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             new_group = group_var.get().strip()
             requested_level = selected_editor_access(
                 new_group, allowed_groups, app.settings)
+            visit_start, visit_end = visitor_period_from_dates(
+                fields["entry"].get(), fields["exit"].get(), app.settings)
             obj = Visitor(fields["first"].get(), fields["last"].get(),
                 new_group, chosen_photo["bytes"], fields["card"].get().strip(),
-                parse_local(fields["entry"].get()), parse_local(fields["exit"].get()),
-                fields["reservation"].get())
+                visit_start, visit_end, fields["reservation"].get())
+            try:
+                original_start = datetime.fromisoformat(record.get("entry_at") or "").astimezone(TZ)
+                original_end = datetime.fromisoformat(record.get("exit_at") or "").astimezone(TZ)
+                validity_changed = original_start != visit_start or original_end != visit_end
+            except (ValueError, TypeError):
+                validity_changed = True
             payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
             if not record.get("registration_record_id"):
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
@@ -317,7 +324,12 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                      "' para '" + new_group + "'. Isso altera as permissões.\n\n"
                      if new_group != original_group else
                      "Será reaplicado o nível configurado para esse grupo.\n\n") +
-                    "O registro de check-in será atualizado sem criar outra reserva. "
+                    f"Validade a gravar: {visit_start:%d/%m/%Y %H:%M:%S} a "
+                    f"{visit_end:%d/%m/%Y %H:%M:%S}.\n"
+                    + ("ATENÇÃO: a validade anterior possui horários/período diferentes. "
+                       "Ao salvar, eles serão substituídos pelos horários configurados "
+                       "(padrão dia inteiro).\n\n" if validity_changed else "\n")
+                    + "O registro de check-in será atualizado sem criar outra reserva. "
                     "Confirma a aplicação do grupo e nível selecionados?",
                     parent=dialog):
                 return
