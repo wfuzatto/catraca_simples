@@ -279,8 +279,8 @@ def visitor_validity_hours(settings: dict) -> tuple[time, time]:
     start = str(settings.get("validity_start_time", "00:00:00")).strip()
     end = str(settings.get("validity_end_time", "23:59:59")).strip()
     try:
-        if (not re.fullmatch(r"\\d{2}:\\d{2}:\\d{2}", start)
-                or not re.fullmatch(r"\\d{2}:\\d{2}:\\d{2}", end)):
+        if (not re.fullmatch(r"\d{2}:\d{2}:\d{2}", start)
+                or not re.fullmatch(r"\d{2}:\d{2}:\d{2}", end)):
             raise ValueError("Formato inválido")
         beginning, finish = time.fromisoformat(start), time.fromisoformat(end)
     except (TypeError, ValueError) as exc:
@@ -292,7 +292,7 @@ def visitor_validity_hours(settings: dict) -> tuple[time, time]:
 
 def parse_visit_date(value: str):
     """Recebe somente DD/MM/AAAA; nunca aceita horas no campo do caixa."""
-    if not isinstance(value, str) or not re.fullmatch(r"\\d{2}/\\d{2}/\\d{4}", value.strip()):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{2}/\d{2}/\d{4}", value.strip()):
         raise ValueError("Entrada e Saída devem conter apenas a data DD/MM/AAAA.")
     try:
         return datetime.strptime(value.strip(), "%d/%m/%Y").date()
