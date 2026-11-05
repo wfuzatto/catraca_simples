@@ -398,14 +398,14 @@ def test_appointment_inflight_marker_blocks_retries_and_upgrades(tmp_path):
 
 def test_visitor_timezone_and_daily_window():
     from core import parse_local, registration_payload, validate_ticket_period
-    start = parse_local("02/11/2026 09:00")
-    end = parse_local("04/11/2026 17:00")
+    start = parse_local("02/11/2099 09:00")
+    end = parse_local("04/11/2099 17:00")
     ticket = {"days": 3, "checkin": "09:00", "checkout": "17:00"}
     validate_ticket_period(start, end, ticket)
     payload = registration_payload(
         Visitor("Teste", "Local", "Hóspedes Serra", b"", "123456789", start, end, "123"))
-    assert payload["visitStartTime"] == "2026-11-02T09:00:00-03:00"
-    assert payload["visitEndTime"] == "2026-11-04T17:00:00-03:00"
+    assert payload["visitStartTime"] == "2099-11-02T09:00:00-03:00"
+    assert payload["visitEndTime"] == "2099-11-04T17:00:00-03:00"
     info = payload["visitorInfoList"][0]["VisitorInfo"]
     assert info["remark"] == "123"
     assert info["cards"][0]["cardNo"] == "123456789"
