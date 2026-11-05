@@ -323,13 +323,15 @@ def _registration(app):
     app.ticket_box.bind("<<ComboboxSelected>>", lambda _: app.calculate())
     start_area = ctk.CTkFrame(ticket_row, fg_color="transparent")
     start_area.grid(row=0, column=1, sticky="ew", padx=9)
-    _field(start_area, "Entrada", app.start, required=True)
+    _field(start_area, "Entrada (DD/MM/AAAA)", app.start, required=True)
     end_area = ctk.CTkFrame(ticket_row, fg_color="transparent")
     end_area.grid(row=0, column=2, sticky="ew", padx=(9, 0))
-    _field(end_area, "Saída", app.end, required=True)
+    _field(end_area, "Saída (DD/MM/AAAA)", app.end, required=True)
     app.ticket_cells = [ticket_area, start_area, end_area]
     app.start.trace_add("write", lambda *_: app.calculate())
-    _text(period, "Horários diários do ingresso; bloqueios noturnos dependem da agenda dos níveis Visitor no HikCentral.",
+    _text(period,
+          "Datas apenas. A validade usa horas protegidas em Configurações (padrão 00:00:00–23:59:59); "
+          "o acesso nas catracas segue a agenda ACQUAVALE aplicada no HikCentral.",
           color=MUTED, size=11).pack(anchor="w", pady=(10, 0))
 
 
@@ -511,6 +513,8 @@ def _settings(app):
     app.s_format, app.s_camera = tk.StringVar(), tk.StringVar()
     app.s_preferred_group = tk.StringVar()
     app.s_valid_times = tk.StringVar(value="0")
+    app.s_validity_start = tk.StringVar(value="00:00:00")
+    app.s_validity_end = tk.StringVar(value="23:59:59")
     app.s_face_enabled = tk.BooleanVar(value=True)
     app.s_face_stable = tk.StringVar(value="900")
     app.s_face_sensitivity = tk.StringVar(value="Normal")
@@ -576,6 +580,24 @@ def _settings(app):
           "Datas e agendas dos níveis continuam obrigatórias.",
           size=11, color=MUTED).pack(anchor="w", pady=(7, 0))
 
+    validity_area = ctk.CTkFrame(local, fg_color="transparent")
+    validity_area.pack(fill="x", pady=(14, 0))
+    _text(validity_area, "Horários de validade do ingresso (somente administrador)",
+          size=12, bold=True).pack(anchor="w", pady=(0, 6))
+    validity_row = ctk.CTkFrame(validity_area, fg_color="transparent")
+    validity_row.pack(fill="x")
+    _text(validity_row, "Entrada (HH:MM:SS)", size=11, color=MUTED).pack(side="left")
+    ttk.Entry(validity_row, textvariable=app.s_validity_start, width=11,
+              font=("Segoe UI", 12)).pack(side="left", padx=(8, 24), ipady=6)
+    _text(validity_row, "Saída (HH:MM:SS)", size=11, color=MUTED).pack(side="left")
+    ttk.Entry(validity_row, textvariable=app.s_validity_end, width=11,
+              font=("Segoe UI", 12)).pack(side="left", padx=(8, 0), ipady=6)
+    _text(validity_area,
+          "Padrão: 00:00:00–23:59:59. Estes horários definem a validade do visitante; "
+          "NÃO substituem o template ACQUAVALE 09:00–17:00. "
+          "Altere apenas após conferir o efeito operacional.",
+          size=11, color=MUTED).pack(anchor="w", pady=(7, 0))
+
     # Isolated offline face capture preferences; original Visitor and NFC settings unchanged.
     face_settings = _card(scroller)
     _section(face_settings, "✦", "Captura facial inteligente",
@@ -616,7 +638,7 @@ def _settings(app):
     app.editors_grid = editors
     ticket_edit = ctk.CTkFrame(editors, fg_color="transparent")
     ticket_edit.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-    _text(ticket_edit, "Ingressos · Nome;Dias;Entrada;Saída", size=12, bold=True).pack(anchor="w", pady=(0, 6))
+    _text(ticket_edit, "Ingressos · Nome;Dias;Abertura agenda;Fechamento agenda", size=12, bold=True).pack(anchor="w", pady=(0, 6))
     app.tickets_text = tk.Text(
         ticket_edit, height=7, bg="#FAFCFF", fg=INK, insertbackground=INK,
         relief="flat", highlightthickness=1, highlightbackground="#D5DFEB",
