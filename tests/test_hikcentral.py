@@ -328,8 +328,8 @@ def test_real_visitor_api_paths_include_only_visitor_level_and_local_validity():
                  "elements": [{"Element": {"ID": f"point-{n}"}} for n in range(10)]}]
     doors = [f"point-{n}" for n in range(10)]
     verify_visitor_access_plan(selected, doors, ["VISITANTE"])
-    start = parse_local("02/11/2026 09:00")
-    end = parse_local("04/11/2026 17:00")
+    start = parse_local("02/11/2099 09:00")
+    end = parse_local("04/11/2099 17:00")
     info = registration_payload(
         Visitor("Visitante", "Teste", "Hóspedes Serra", b"", "1234", start, end, "A123"))
     appointment, visitor_id = api.create_appointment(info, selected)
@@ -352,8 +352,8 @@ def test_real_visitor_api_paths_include_only_visitor_level_and_local_validity():
         (reserve, "appointStartTime", "appointEndTime"),
         (checkin, "visitStartTime", "visitEndTime")
     ]:
-        assert request[start_key] == "2026-11-02T09:00:00-03:00"
-        assert request[end_key] == "2026-11-04T17:00:00-03:00"
+        assert request[start_key] == "2099-11-02T09:00:00-03:00"
+        assert request[end_key] == "2099-11-04T17:00:00-03:00"
         level = request["accessInfo"]["accessLevelList"]
         assert len(level) == 1
         assert level[0]["accessLevel"]["id"] == 17
