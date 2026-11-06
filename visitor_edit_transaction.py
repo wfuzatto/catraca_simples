@@ -1,15 +1,66 @@
-"""Atualização segura de visita existente: reserva e check-in confirmados por leitura.
+"""Edição do check-in ativo e seus dados, confirmados por leitura.
 
 NUNCA cria outra reserva/pessoa, nem reenvia um update de resultado incerto.
 Se a resposta de escrita não puder ser conciliada, deixa um journal auditável
 e NÃO substitui datas ou IDs do histórico local.
 """
 from pathlib import Path
-from core import app_dir, _write_json_atomic, VALE_VISITOR_LEVELS
-from remote_history import find_original_appointment, original_appointment_identifier
+import hashlib
+import json
+import time
+from core import _write_json_atomic, VALE_VISITOR_LEVELS
+from remote_history import visitor_details
+from edit_journal import select_edit_journal
 from visitor_history import save_registration, set_history_status
 from access_receipt import make_access_receipt
 from hikcentral import HikError
+
+
+def _confirmed_edit(client, vid, payload, visitor, group, returned_id):
+    """Confere os campos gravados, sem escrever ou criar outra reserva."""
+    row = client.find_registration_record(
+        vid, payload["visitStartTime"], payload["visitEndTime"], active_only=True)
+    if not row:
+        raise ValueError("O HikCentral NÃO confirmou o check-in nas novas datas.")
+    actual = str(row.get("recordId") or "")
+    if returned_id and actual != returned_id:
+        raise ValueError("O ID devolvido pela edição difere do check-in consultado.")
+    base = row.get("visitorBaseInfo") or {}
+    from hikcentral import normalize
+    if normalize(str(base.get("visitorGroup") or "")) != normalize(group):
+        raise ValueError("Grupo do visitante no HikCentral difere do grupo original.")
+    details = visitor_details(client, vid)
+    info = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    if not isinstance(info, dict) or str(info.get("visitorId") or "") != vid:
+        raise ValueError("O HikCentral não confirmou a identidade do visitante editado.")
+    # Esta instalação retorna o grupo no check-in, não em VisitorInfo.
+    detail_group = str(info.get("visitorGroupName") or info.get("visitorGroup") or "")
+    if detail_group and normalize(detail_group) != normalize(group):
+        raise ValueError("Grupo do visitante no HikCentral difere do grupo original.")
+    expected = {"visitorGivenName": visitor.first_name,
+                "visitorFamilyName": visitor.last_name, "remark": visitor.reservation}
+    for key, value in expected.items():
+        if key not in info or str(info[key] or "").strip() != str(value).strip():
+            raise ValueError("O HikCentral não confirmou nome, sobrenome e reserva/apartamento gravados.")
+    expected_name = " ".join((visitor.first_name.strip(), visitor.last_name.strip()))
+    if base.get("fullName") and " ".join(str(base["fullName"]).split()) != " ".join(expected_name.split()):
+        raise ValueError("O nome no histórico de check-in ainda não reflete a edição.")
+    if visitor.card_number:
+        card = (row.get("visitorCardInfo") or {}).get("cardNumber")
+        if str(card or "").strip() != str(visitor.card_number).strip():
+            raise ValueError("O HikCentral não confirmou a pulseira gravada.")
+    return actual
+
+
+def _readback(client, vid, payload, visitor, group, returned_id):
+    for attempt in range(3):
+        if attempt:
+            time.sleep(attempt)
+        try:
+            return _confirmed_edit(client, vid, payload, visitor, group, returned_id)
+        except (ValueError, HikError) as exc:
+            last_error = exc
+    raise ValueError(str(last_error) + " Histórico local preservado; não reenvie a alteração.") from last_error
 
 
 def update_existing_visit(client, record: dict, payload: dict,
@@ -41,114 +92,66 @@ def update_existing_visit(client, record: dict, payload: dict,
     if str(requested_group).strip() != original_group:
         raise ValueError("O payload altera o grupo original; edição bloqueada.")
 
-    old_id = client.find_existing_registration(
-        vid, record["entry_at"], record["exit_at"])
-    if str(old_id or "") != original_checkin:
-        raise ValueError("Check-in original divergiu. Atualize a lista; não foi enviado update.")
-
-    # A API usa appointRecordId da RESERVA no body de registerment/update.
-    # O recordId da consulta de check-ins não deve ser usado nesse campo.
-    original_appointment = find_original_appointment(client, record)
-    appointment_id = original_appointment_identifier(original_appointment)
-    if not appointment_id:
-        raise ValueError(
-            "A reserva original não retornou appointRecordId. "
-            "Edição bloqueada para não romper o vínculo com o check-in.")
-    observed = str(record.get("_original_appointment_id") or "").strip()
-    if observed and appointment_id != observed:
-        raise ValueError("ID da reserva mudou desde a abertura do editor. Atualize a lista.")
-
-    journal = journal_path or (app_dir() / "visitor_edit_inflight.json")
-    if journal.exists():
-        raise ValueError(
-            "Existe edição com resultado incerto. Confira reserva e check-in no "
-            "HikCentral antes de liberar nova alteração.")
-    new_start = payload["visitStartTime"]
-    new_end = payload["visitEndTime"]
+    # O ID retornado pelo registerment é o recordId da consulta de check-ins.
+    # A reserva feita ANTES do check-in tem outro ID e pode sair da listagem.
+    journal = journal_path or select_edit_journal(vid)
+    new_start, new_end = payload["visitStartTime"], payload["visitEndTime"]
+    requested_hash = hashlib.sha256(json.dumps({
+        "payload": payload, "group": group,
+    }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     summary = {
-        "visitor_id": vid,
-        "original_checkin_id": original_checkin,
-        "original_appointment_id": appointment_id,
+        "visitor_id": vid, "original_checkin_id": original_checkin,
         "old_entry_at": record["entry_at"], "old_exit_at": record["exit_at"],
         "requested_entry_at": new_start, "requested_exit_at": new_end,
+        "requested_fields_sha256": requested_hash,
     }
-    _write_json_atomic(journal, {**summary, "status": "update_inflight"})
-    # Exatamente um POST de escrita. Timeout/erro não autoriza reenviar.
-    # Após recusa da OpenAPI, duas consultas somente leitura ajudam a separar
-    # uma resposta recusada de uma operação possivelmente persistida, sem
-    # jamais concluir automaticamente que é seguro repetir o POST.
-    try:
-        returned_appointment_id = client.update_registered_visitor(
-            appointment_id, vid, payload, selected)
-    except HikError as exc:
-        observed_old = "consulta indisponível"
-        observed_new = "consulta indisponível"
+    if journal.exists():
+        pending = json.loads(journal.read_text(encoding="utf-8"))
+        if (pending.get("visitor_id") != vid or
+                pending.get("requested_fields_sha256") != requested_hash or
+                pending.get("status") not in ("update_acknowledged", "link_verified")):
+            raise ValueError(
+                "Existe edição com resultado incerto para este visitante. "
+                "Confira os dados no HikCentral antes de outra alteração.")
+        # Repetir Salvar após uma leitura atrasada retoma SOMENTE consultas.
+        returned_record_id = str(pending.get("returned_record_id") or "")
+    else:
+        old = client.find_registration_record(
+            vid, record["entry_at"], record["exit_at"], active_only=True)
+        if not old or str(old.get("recordId") or "") != original_checkin:
+            raise ValueError("Check-in original divergiu ou foi encerrado. Pesquise novamente.")
+        from hikcentral import normalize
+        if normalize(str((old.get("visitorBaseInfo") or {}).get("visitorGroup") or "")) != normalize(group):
+            raise ValueError("Grupo original divergiu. Pesquise novamente antes de editar.")
+        _write_json_atomic(journal, {**summary, "status": "update_inflight"})
         try:
-            observed_old = str(bool(client.find_existing_registration(
-                vid, record["entry_at"], record["exit_at"]))).lower()
-        except Exception:
-            pass
-        try:
-            observed_new = str(bool(client.find_existing_registration(
-                vid, new_start, new_end))).lower()
-        except Exception:
-            pass
+            returned_record_id = client.update_registered_visitor(
+                original_checkin, vid, payload, selected)
+        except HikError as exc:
+            observed = {}
+            for label, start, end in (("old", record["entry_at"], record["exit_at"]),
+                                      ("requested", new_start, new_end)):
+                try:
+                    observed[label] = str(bool(client.find_existing_registration(vid, start, end))).lower()
+                except Exception:
+                    observed[label] = "consulta indisponível"
+            _write_json_atomic(journal, {
+                **summary, "status": "update_refused_or_uncertain",
+                "old_checkin_visible": observed["old"],
+                "requested_checkin_visible": observed["requested"],
+            })
+            raise HikError(
+                str(exc) + "\nConsulta posterior (sem gravar): check-in nas datas antigas = "
+                + observed["old"] + "; nas datas novas = " + observed["requested"]
+                + ". Nenhum segundo envio foi realizado.") from exc
         _write_json_atomic(journal, {
-            **summary, "status": "update_refused_or_uncertain",
-            "old_checkin_visible": observed_old,
-            "requested_checkin_visible": observed_new,
-        })
-        raise HikError(
-            str(exc)
-            + "\nConsulta posterior (sem gravar): check-in nas datas antigas = "
-            + observed_old + "; nas datas novas = " + observed_new
-            + ". O código da API não identifica sozinho a causa da recusa. "
-              "Confira o estado da visita e o log protegido do HikCentral. "
-              "Não repita o envio antes de conciliar a pendência.") from exc
-    _write_json_atomic(journal, {
-        **summary, "status": "update_acknowledged",
-        "returned_appointment_id": returned_appointment_id})
+            **summary, "status": "update_acknowledged",
+            "returned_record_id": returned_record_id})
 
-    # Leitura remota OBRIGATÓRIA antes de gravar o histórico local, reaplicar
-    # níveis ou declarar êxito. Requer check-in e reserva da mesma identidade
-    # e da mesma validade. Nenhuma busca por nome ou código de reserva.
-    actual_checkin = client.find_existing_registration(
-        vid, new_start, new_end)
-    if not actual_checkin:
-        raise ValueError(
-            "O HikCentral respondeu ao update, mas NÃO confirmou o check-in "
-            "nas novas datas. Histórico local preservado. Não repita o envio.")
-    new_identity = {
-        "visitor_id": vid, "entry_at": new_start, "exit_at": new_end,
-    }
-    updated_appointment = find_original_appointment(client, new_identity)
-    actual_appointment = original_appointment_identifier(updated_appointment)
-    if not actual_appointment:
-        raise ValueError(
-            "O check-in existe, mas não foi possível confirmar sua reserva "
-            "nas novas datas. Histórico local preservado. Não repita o envio.")
-    if returned_appointment_id and returned_appointment_id != actual_appointment:
-        raise ValueError(
-            "O ID da reserva devolvido pelo update difere da reserva consultada. "
-            "Não repita a operação; concilie pelo HikCentral.")
-
-    # A confirmação da DATA não basta: conferir também o grupo remoto.
-    # Sem evidência do grupo original, não informar sucesso nem reaplicar
-    # acesso, para não deixar Vale e Serra incoerentes.
-    from remote_history import visitor_details
-    from hikcentral import normalize
-    details = visitor_details(client, vid)
-    info = details.get("VisitorInfo") or details.get("visitorInfo") or details
-    if not isinstance(info, dict):
-        raise ValueError("O HikCentral não confirmou o grupo do visitante editado.")
-    remote_vid = str(info.get("visitorId") or info.get("ID") or "").strip()
-    remote_group = str(
-        info.get("visitorGroupName") or info.get("visitorGroup") or "").strip()
-    if (remote_vid and remote_vid != vid) or not remote_group or (
-            normalize(remote_group) != normalize(original_group)):
-        raise ValueError(
-            "Grupo do visitante no HikCentral não corresponde ao grupo original. "
-            "Histórico preservado; verifique o registro antes de nova alteração.")
+    actual_checkin = _readback(client, vid, payload, visitor, group, returned_record_id)
+    # O booking ID anterior continua separado do ID de check-in editado.
+    actual_appointment = str(record.get("appointment_id") or
+                             record.get("_original_appointment_id") or "")
 
     # Repete a etapa de associação usada no cadastro original, mas SOMENTE
     # para o MESMO nível homologado. Não cria permissões de outro grupo.
@@ -160,10 +163,11 @@ def update_existing_visit(client, record: dict, payload: dict,
         "group": group, "reservation": visitor.reservation,
         "entry_at": new_start, "exit_at": new_end,
         "registration_record_id": str(actual_checkin),
-        "appointment_id": actual_appointment,
         "access_names": list(requested_level),
         "access_level_ids": [str(selected[0]["id"])],
         "door_ids": list(doors),
+        "expect_face": bool(visitor.photo_jpeg),
+        "expect_card": bool(visitor.card_number),
         "state": "reaplicação pendente",
         "checkin_state": "confirmado",
     }
@@ -171,7 +175,7 @@ def update_existing_visit(client, record: dict, payload: dict,
     save_registration(verified)
     _write_json_atomic(journal, {
         **summary, "status": "link_verified",
-        "confirmed_appointment_id": actual_appointment,
+        "returned_record_id": returned_record_id,
         "confirmed_checkin_id": str(actual_checkin)})
 
     client.apply(vid, doors)

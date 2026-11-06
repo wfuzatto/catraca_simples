@@ -11,9 +11,11 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 import os
+import re
 import stat
 
 from core import TZ, app_dir
+from edit_journal import _plain_directory
 
 TRANSACTION_FILES = (
     "pending.json",
@@ -25,7 +27,15 @@ TRANSACTION_FILES = (
 def inspect_transaction_files(base: Path | None = None) -> list[dict]:
     base = base if base is not None else app_dir()
     result = []
-    for filename in TRANSACTION_FILES:
+    filenames = list(TRANSACTION_FILES)
+    edits = base / "visitor_edits"
+    _plain_directory(edits)
+    if edits.exists():
+        filenames.extend(
+            "visitor_edits/" + path.name
+            for path in sorted(edits.iterdir())
+            if re.fullmatch(r"[0-9a-f]{64}\.json", path.name))
+    for filename in filenames:
         path = base / filename
         try:
             metadata = path.lstat()
@@ -62,13 +72,13 @@ def archive_transaction_files(snapshot: list[dict], confirmation: str,
     if not current:
         return []
     audit = base / "transaction_audit"
+    _plain_directory(audit)
     audit.mkdir(parents=True, exist_ok=True)
-    if audit.is_symlink():
-        raise RuntimeError("Pasta de auditoria inválida.")
+    _plain_directory(audit)
     prefix = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
     transaction_id = uuid4().hex[:10]
     destinations = [
-        audit / f"{prefix}_{transaction_id}_{item['name']}"
+        audit / f"{prefix}_{transaction_id}_{item['name'].replace('/', '_')}"
         for item in current
     ]
     if any(path.exists() for path in destinations):
@@ -76,6 +86,8 @@ def archive_transaction_files(snapshot: list[dict], confirmation: str,
     archived = []
     for item, destination in zip(current, destinations):
         path = base / item["name"]
+        if item["name"].startswith("visitor_edits/"):
+            _plain_directory(base / "visitor_edits")
         # A later writer could change the file after inspection. Check again
         # immediately before each move; never follow symlinks.
         if path.is_symlink() or sha256(path.read_bytes()).hexdigest() != item["sha256"]:

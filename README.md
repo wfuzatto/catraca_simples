@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.52` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.53` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -539,3 +539,12 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - O modo de edição não pode ultrapassar check-out, grupo divergente, check-in inexistente, ID de reserva não encontrado ou outra operação incerta. Nestes casos, permitir preparar datas não significa autorizar gravação insegura.
 - Foram acrescentados testes de UI Windows para preparação de datas futuras e loading persistente, e regressões transacionais com erros 128 e recuperação segura de vínculo.
 - **Limitação de homologação:** não há acesso ao banco/log protegido do HikCentral da instalação. É necessário confirmar por testes reais a aceitação de updates na versão instalada. Não foram executadas operações remotas.
+
+## Preview.53 — edição do registro ativo validada no HikCentral
+
+- Corrigida a interpretação dos IDs da Preview.48: `registerment` devolve o ID do check-in como `appointRecordId`, e `getVistorRegisterRecord` o expõe como `recordId`. Esse é o ID usado por `registerment/update`. O `appointID` da reserva anterior é separado e pode não aparecer em `appointmentlist` após o check-in.
+- A edição de uma visita ativa deixa de exigir sua presença em `appointmentlist`. Confere o check-in ativo antes da gravação, envia exatamente um update e relê o novo registro, cujo ID pode mudar.
+- Inclui `VisitorInfo.watchListInfo`, também exigido pelo contrato de atualização. Nome, sobrenome, reserva/apartamento, pulseira e validade precisam corresponder ao retorno remoto antes de declarar sucesso. O grupo é conferido no check-in, inclusive quando `VisitorInfo` não o retorna.
+- Leituras atrasadas são repetidas sem repetir o update. Após confirmação de recebimento, um novo clique em Salvar com os mesmos dados retoma apenas a conferência. Uma falha de resultado incerto continua registrada para conciliação.
+- Pendências de edição passam a ser isoladas por visitante, preservando os arquivos antigos. Uma pendência de outro visitante não bloqueia todos os cadastros.
+- Validação autorizada no servidor real alterou nome, sobrenome, reserva/apartamento, foto sintética, pulseira e datas de uma visita ativa, preservando o Visitor ID. A releitura confirmou os novos dados, o ID atualizado de check-in e a entrega facial/cartão nos três dispositivos do nível original. Isso comprova a edição e o estado reportado pelo HikCentral; a passagem física futura nas catracas não foi executada.

@@ -85,3 +85,68 @@ def test_cleanup_always_preserves_previous_audit_snapshots(tmp_path):
     assert first[0] != second[0]
     assert first[0].read_text(encoding="utf-8") == "first"
     assert second[0].read_text(encoding="utf-8") == "second"
+
+
+def test_cleanup_includes_only_recognized_per_visitor_journals(tmp_path):
+    from edit_journal import select_edit_journal
+    first = select_edit_journal("1738", tmp_path)
+    second = select_edit_journal("1649", tmp_path)
+    first.write_bytes(b'{"visitor_id":"1738","status":"uncertain"}')
+    second.write_bytes(b'{"visitor_id":"1649","status":"uncertain"}')
+    unrelated = first.parent / "notes.json"
+    unrelated.write_bytes(b"do not touch")
+    malformed_name = first.parent / ("a" * 63 + ".json")
+    malformed_name.write_bytes(b"also keep")
+    originals = {path.name: path.read_bytes() for path in (first, second)}
+    snapshot = inspect_transaction_files(tmp_path)
+    assert {row["name"] for row in snapshot} == {
+        "visitor_edits/" + first.name, "visitor_edits/" + second.name}
+    archived = archive_transaction_files(snapshot, "CONFERIDO", tmp_path)
+    assert len(archived) == 2
+    for path in archived:
+        name = next(name for name in originals if path.name.endswith("_" + name))
+        assert path.parent == tmp_path / "transaction_audit"
+        assert path.read_bytes() == originals[name]
+    assert not first.exists() and not second.exists()
+    assert unrelated.read_bytes() == b"do not touch"
+    assert malformed_name.read_bytes() == b"also keep"
+
+
+def test_new_per_visitor_journal_invalidates_cleanup_snapshot(tmp_path):
+    from edit_journal import select_edit_journal
+    first = select_edit_journal("1738", tmp_path)
+    first.write_bytes(b"first")
+    snapshot = inspect_transaction_files(tmp_path)
+    second = select_edit_journal("1649", tmp_path)
+    second.write_bytes(b"second")
+    with pytest.raises(RuntimeError, match="mudaram"):
+        archive_transaction_files(snapshot, "CONFERIDO", tmp_path)
+    assert first.read_bytes() == b"first"
+    assert second.read_bytes() == b"second"
+    assert not (tmp_path / "transaction_audit").exists()
+
+
+def test_cleanup_rejects_symlink_in_recognized_visitor_journal(tmp_path):
+    directory = tmp_path / "visitor_edits"
+    directory.mkdir()
+    actual = tmp_path / "settings.json"
+    actual.write_bytes(b"settings")
+    try:
+        (directory / ("a" * 64 + ".json")).symlink_to(actual)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks unavailable")
+    with pytest.raises(RuntimeError, match="arquivo regular"):
+        inspect_transaction_files(tmp_path)
+    assert actual.read_bytes() == b"settings"
+
+
+def test_cleanup_rejects_linked_visitor_journal_directory(tmp_path):
+    actual = tmp_path / "keep"
+    actual.mkdir()
+    try:
+        (tmp_path / "visitor_edits").symlink_to(actual, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks unavailable")
+    with pytest.raises(RuntimeError, match="Pasta de transações inválida"):
+        inspect_transaction_files(tmp_path)
+    assert list(actual.iterdir()) == []

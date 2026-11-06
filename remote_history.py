@@ -551,6 +551,7 @@ def resolve_remote_edit_record(client, record):
         _access_assurance_type=("local_acknowledged" if receipt else (
             "remote_level" if expected is not None else "needs_consent")))
     result["_original_checkin_id"] = checkin_id
+    result["_update_record_id"] = checkin_id
     result["_original_appointment_id"] = appointment_id
     result["_appointment_lookup_error"] = appointment_error
     return result, data
