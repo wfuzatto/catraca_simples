@@ -134,3 +134,16 @@ def test_failed_photo_returns_actionable_error_without_faking_image():
             raise HikError("HikCentral recusou foto: código 128")
     with pytest.raises(HikError, match="selecionar uma foto nova"):
         fetch_visitor_photo(PhotoAPI(), "1009", "old-ref")
+
+
+def test_editor_uses_original_group_even_when_station_preferred_is_different():
+    """Preferência para NOVO cadastro não redefine grupo de visitante existente."""
+    from visitor_editor import selected_editor_access
+    from core import default_settings
+    settings = default_settings()
+    settings["preferred_group"] = "Hóspedes Serra"
+    available = ["Hóspedes Serra", "Hóspedes Vale", "Day use"]
+    assert selected_editor_access("Hóspedes Vale", available, settings) == [
+        "VISITANTE_VALE"]
+    with pytest.raises(ValueError, match="homologado"):
+        selected_editor_access("Grupo Desconhecido", available, settings)
