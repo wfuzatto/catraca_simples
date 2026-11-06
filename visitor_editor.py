@@ -120,13 +120,20 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     must_reenter_card = bool(
         record.get("origin") == "HikCentral" and
         has_remote_card and not card_number)
+    # Ausência de appointRecordId não impede PREPARAR uma correção.
+    # A transação validará o vínculo na API antes de qualquer POST; sem
+    # correspondência única não escreve nem inventa um ID.
+    missing_appointment_link = bool(
+        record.get("origin") == "HikCentral"
+        and not record.get("_original_appointment_id")
+        and record.get("_remote_verified") is True
+        and record.get("checkin_state") == "check-in efetuado")
     if record.get("origin") == "HikCentral" and not readonly:
-        if not record.get("_original_appointment_id"):
+        if not record.get("_original_appointment_id") and not missing_appointment_link:
             readonly = True
             readonly_reason = (
-                "O check-in existe, mas a reserva original não retornou "
-                "appointRecordId para edição segura. Não alteramos datas "
-                "sem validar esse vínculo no HikCentral.")
+                "A reserva original não foi identificada com segurança. "
+                "O check-in precisa ser confirmado no HikCentral antes de editar.")
         elif not has_remote_face and not has_remote_card and not photo_error:
             readonly = True
             readonly_reason = "A OpenAPI não confirmou nenhuma credencial original."
@@ -252,6 +259,15 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 "Trocar de Vale para Serra exige migração separada, com retirada "
                 "do acesso anterior; não ocorrerá ao corrigir datas."),
             wraplength=505, justify="left", text_color="#64748B").pack(pady=(5, 4))
+        if missing_appointment_link:
+            ctk.CTkLabel(
+                body,
+                text=("Você pode corrigir as datas neste formulário. A reserva "
+                      "não retornou o ID original: ao salvar, o aplicativo "
+                      "tentará identificar o vínculo somente por consulta. "
+                      "Sem ID único, NENHUMA alteração será enviada."),
+                text_color="#B45309", wraplength=510,
+                justify="left").pack(pady=(5, 7))
     dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro")
                  + " — " + record["visitor_id"])
     level_status = tk.StringVar()
@@ -369,10 +385,10 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
             if not record.get("registration_record_id"):
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
-            if not record.get("_original_appointment_id"):
-                raise ValueError(
-                    "A reserva não retornou appointRecordId. Atualize a lista; "
-                    "é inseguro editar com o ID do check-in.")
+            # Se o ID estava ausente na abertura, o worker faz nova
+            # conciliação ANTES da escrita. O ID do check-in nunca é usado
+            # como appointRecordId; se persistir a falta de vínculo, falha
+            # apenas de leitura, preservando a digitação do operador.
             if not messagebox.askyesno(
                     "Confirmar atualização de visitante",
                     "Visitante ID: " + str(record["visitor_id"]) +
