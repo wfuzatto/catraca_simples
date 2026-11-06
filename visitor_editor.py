@@ -71,8 +71,9 @@ def selected_editor_access(group, available_groups, settings):
 def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                         readonly=False, readonly_reason="", photo_error=""):
     """Keep the form editable; require the operator to complete missing data."""
-    from editor_validation import (CREDENTIAL_MODES, CLOSED_VISIT_STATES, EDIT_OPERATIONS,
-                                   editor_requirements, validate_editor_fields)
+    from editor_validation import (CREDENTIAL_MODES, EDIT_OPERATIONS,
+                                   editor_requirements, infer_edit_operation,
+                                   validate_editor_fields)
     from hikcentral import normalize
 
     active = getattr(app, "_active_visitor_editor", None)
@@ -135,9 +136,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     error_labels["visit"].pack(fill="x", padx=5)
     widgets["visit"] = visit_border
     dialog._editor_visit_selector = visit_selector
-    operation_hint = record.get("_edit_operation") or (
-        "renew" if record.get("checkin_state") in CLOSED_VISIT_STATES else
-        "update" if record.get("checkin_state") == "check-in efetuado" else "")
+    operation_hint = infer_edit_operation(record)
     operation_var = tk.StringVar(value=next((label for label, code in EDIT_OPERATIONS.items()
                                            if code == operation_hint), ""))
     fields["operation"] = operation_var

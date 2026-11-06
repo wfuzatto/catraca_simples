@@ -1364,9 +1364,8 @@ class ValeApp(tk.Tk):
         if not record:
             return
         record = dict(record)
-        known_state = record.get("checkin_state")
-        record["_edit_operation"] = ("update" if known_state == "check-in efetuado" else "renew" if
-            known_state in ("check-out", "saída automática", "saída no terminal", "saída em atraso") else "")
+        from editor_validation import infer_edit_operation
+        record["_edit_operation"] = infer_edit_operation(record)
         # A reserva original permanece vinculada à pessoa, mesmo quando já
         # não aparece na listagem remota depois do check-out.
         try:

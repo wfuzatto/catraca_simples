@@ -161,7 +161,8 @@ def test_edit_active_checkin_without_reservation_updates_data_and_dates(monkeypa
     assert saved["first"] == "TESTE" and saved["last"] == "TESTE3"
     assert saved["reservation"] == "123"
     assert saved["entry_at"] == NEW_START and saved["exit_at"] == NEW_END
-    assert status[-1][1]["checkin_state"] == "confirmado"
+    assert saved["checkin_state"] == "check-in efetuado"
+    assert status[-1][1]["checkin_state"] == "check-in efetuado"
 
 
 @pytest.mark.parametrize("returned_id", ["", "check-new"])

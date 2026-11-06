@@ -1044,6 +1044,47 @@ def test_active_checkin_without_prior_booking_allows_editing(monkeypatch):
         root.destroy()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Editor Tk requer Windows")
+def test_second_edit_legacy_confirmed_visit_has_no_missing_operation(monkeypatch):
+    import io
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from PIL import Image
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    root = app.ValeApp()
+    try:
+        root.connected_groups = ["Hóspedes Vale"]
+        record = {
+            "visitor_id": "1780", "registration_record_id": "check-1780",
+            "appointment_id": "booking-1780", "origin": "histórico local",
+            "checkin_state": "confirmado", "group": "Hóspedes Vale",
+            "first": "Wesley1", "last": "Nascimento2", "reservation": "123-3",
+            "entry_at": "2026-11-06T00:00:00-03:00",
+            "exit_at": "2026-11-06T23:59:59-03:00",
+            "card_number": "45678910", "expect_face": True, "expect_card": True,
+        }
+        picture = io.BytesIO()
+        Image.new("RGB", (40, 40), "white").save(picture, "JPEG")
+        visitor_editor.open_visitor_editor(root, record,
+            remote_details={"visitorId": "1780", "visitorGroupName": "Hóspedes Vale",
+                            "visitorGivenName": "Wesley1", "visitorFamilyName": "Nascimento2",
+                            "remark": "123-3", "cards": [{"cardNo": "45678910"}]},
+            initial_photo=picture.getvalue())
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel))
+        assert popup._editor_requirements["require_operation"] is False
+        assert "operation" not in popup._editor_field_errors
+        assert not popup._editor_field_errors
+        popup.destroy()
+    finally:
+        root.destroy()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Teste modal Tk apenas no Windows")
 def test_editor_save_shows_loading_until_operation_finishes(monkeypatch):
     import app

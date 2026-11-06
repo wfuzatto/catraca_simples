@@ -195,7 +195,9 @@ def update_existing_visit(client, record: dict, payload: dict,
         "expect_face": bool(visitor.photo_jpeg),
         "expect_card": bool(visitor.card_number),
         "state": "reaplicação pendente",
-        "checkin_state": "confirmado",
+        # The readback above proved visitorStatus=0. Persist the actual state,
+        # so opening this same record again does not demand a hidden operation.
+        "checkin_state": "check-in efetuado",
     }
     # Só modificar a prova local após correspondência remota dupla.
     save_registration(verified)
@@ -209,7 +211,7 @@ def update_existing_visit(client, record: dict, payload: dict,
         vid, doors,
         expect_face=bool(visitor.photo_jpeg),
         expect_card=bool(visitor.card_number))
-    set_history_status(vid, state=report["state"], checkin_state="confirmado")
+    set_history_status(vid, state=report["state"], checkin_state="check-in efetuado")
     report["access_receipt_saved"] = False
     if str(report.get("state") or "").casefold() == "confirmed":
         receipt = make_access_receipt(
