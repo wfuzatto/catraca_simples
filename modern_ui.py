@@ -399,11 +399,12 @@ def _history(app):
     inner.pack(fill="both", expand=True, padx=18, pady=18)
     heading = ctk.CTkFrame(inner, fg_color="transparent")
     heading.pack(fill="x", padx=17, pady=(18, 10))
-    _text(heading, "Cadastros efetuados", size=19, bold=True).pack(side="left")
+    _text(heading, "Histórico de check-ins", size=19, bold=True).pack(side="left")
     _text(inner,
-          "De/Até filtram pelo INÍCIO VÁLIDO da visita, e Nome busca somente check-ins nesse intervalo. "
-          "Cadastrado em é apenas informativo. Para pessoas sem check-in, consulte Visitor Information "
-          "no HikCentral. Dê dois cliques para ver os detalhes e a foto.",
+          "Esta lista consulta o histórico de visitas no HikCentral: um check-out pode continuar "
+          "aqui mesmo após excluir a pessoa em Visitor Information. Não indica cadastro ativo. "
+          "De/Até filtram o INÍCIO VÁLIDO e Nome restringe a busca às mesmas datas. "
+          "Cadastrado em é apenas informativo. Dê dois cliques para consultar os detalhes.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     app.history_loading_frame = ctk.CTkFrame(inner, fg_color="#E9F2FF", corner_radius=8)
     app.history_loading_label = ctk.CTkLabel(

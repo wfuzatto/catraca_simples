@@ -169,14 +169,36 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     # o grupo, nível e catracas efetivamente escolhidos.
 
     original_group = str(record.get("group", "")).strip()
+    # O grupo preferencial deste computador pode ser APENAS Day use,
+    # mesmo quando a pessoa existente está em Hóspedes Vale/Serra.
+    # Não usar essa lista local como autorização para alterar um cadastro
+    # cuja identidade/grupo/nível já foram verificados pela OpenAPI.
+    from hikcentral import normalize
+    remote_group = str(
+        visitor.get("visitorGroupName") or visitor.get("visitorGroup") or ""
+    ).strip()
     allowed_groups = list(dict.fromkeys(
         str(g).strip() for g in getattr(app, "connected_groups", [])
         if str(g).strip()))
-    if not readonly and original_group not in allowed_groups:
+    if not readonly and remote_group and normalize(remote_group) != normalize(original_group):
         readonly = True
         readonly_reason = (
-            f"O grupo original '{original_group or 'não informado'}' não foi "
-            "confirmado na sincronização HikCentral. Reabra após sincronizar.")
+            "O grupo atual do HikCentral difere do grupo do check-in. "
+            "Atualize a lista antes de editar; não será escolhido um grupo padrão.")
+    if not readonly and original_group not in allowed_groups:
+        if (record.get("origin") == "HikCentral"
+                and record.get("_remote_verified") is True
+                and original_group in VALE_VISITOR_LEVELS):
+            # A validação da edição consultou ID, grupo e nível na API.
+            # Apenas permitir selecioná-lo na tela; ANTES de qualquer POST,
+            # work() volta a consultar client.visitor_groups() e resolve_levels().
+            allowed_groups.insert(0, original_group)
+        else:
+            readonly = True
+            readonly_reason = (
+                "Grupo original sem confirmação remota para edição. "
+                "Atualize a lista para validar o grupo e o nível de acesso; "
+                "a preferência deste computador não será usada como substituto.")
     if readonly:
         ctk.CTkLabel(body,
                      text="Somente consulta: " + (readonly_reason or

@@ -909,3 +909,83 @@ def test_next_guest_reset_follows_success_and_exit_stays_readonly(monkeypatch):
         assert root.end_entry.cget("state") == "readonly"
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Editor Tk requer Windows")
+def test_editor_uses_verified_hikcentral_group_when_local_prefers_only_day_use(monkeypatch):
+    """Regressão do erro: caixa autorizado só para Day use não bloqueia edição Vale."""
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    root = app.ValeApp()
+    try:
+        root.connected_groups = ["Day use"]
+        root.settings["preferred_group"] = "Day use"
+        record = {
+            "visitor_id": "1616", "registration_record_id": "check-1616",
+            "_original_appointment_id": "appt-1616", "_remote_verified": True,
+            "first": "luana", "last": "santos", "group": "Hóspedes Vale",
+            "origin": "HikCentral",
+            "entry_at": "2099-11-06T00:00:00-03:00",
+            "exit_at": "2099-11-06T23:59:59-03:00",
+            "access_names": ["VISITANTE_VALE"],
+            "card_number": "123123123",
+        }
+        visitor_editor.open_visitor_editor(
+            root, record, remote_details={
+                "visitorId": "1616", "visitorGroupName": "Hóspedes Vale",
+                "cards": [{"cardNo": "123123123"}]})
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children()
+                     if isinstance(x, ctk.CTkToplevel))
+        assert popup.title().startswith("Editar cadastro")
+        assert popup._editor_group_selector.get() == "Hóspedes Vale"
+        assert list(popup._editor_group_selector.cget("values")) == ["Hóspedes Vale"]
+        assert popup._save_edit_button.cget("state") == "normal"
+        popup.destroy()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Editor Tk requer Windows")
+def test_unverified_or_mismatched_remote_group_never_defaults_to_day_use(monkeypatch):
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    root = app.ValeApp()
+    try:
+        root.connected_groups = ["Day use"]
+        root.settings["preferred_group"] = "Day use"
+        record = {
+            "visitor_id": "1616", "registration_record_id": "check-1616",
+            "_original_appointment_id": "appt-1616", "_remote_verified": True,
+            "first": "luana", "last": "santos", "group": "Hóspedes Vale",
+            "origin": "HikCentral",
+            "entry_at": "2099-11-06T00:00:00-03:00",
+            "exit_at": "2099-11-06T23:59:59-03:00",
+            "access_names": ["VISITANTE_VALE"],
+            "card_number": "123123123",
+        }
+        visitor_editor.open_visitor_editor(
+            root, record, remote_details={"visitorId": "1616",
+                                          "visitorGroupName": "Hóspedes Serra",
+                                          "cards": [{"cardNo": "123123123"}]})
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children()
+                     if isinstance(x, ctk.CTkToplevel))
+        assert popup.title().startswith("Visualizar cadastro")
+        assert popup._save_edit_button.cget("state") == "disabled"
+        assert popup._editor_group_selector.get() == "Hóspedes Vale"
+        popup.destroy()
+    finally:
+        root.destroy()

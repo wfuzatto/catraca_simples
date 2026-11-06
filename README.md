@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.50` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.51` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -520,3 +520,12 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - Removido somente o botão **Atualizar lista** da tela **Cadastros efetuados**. Os filtros **De**, **Até** e **Nome**, o botão **Buscar**, a seleção de quantidade por página e a paginação permanecem disponíveis.
 - A construção da tela continua sem consultar o HikCentral automaticamente. A pesquisa é iniciada por **Buscar** ou pela paginação; os fluxos existentes que atualizam o histórico após operações continuam ativos.
 - Teste de interface Windows verifica a ausência do botão e a presença dos filtros, de **Buscar** e da paginação.
+
+
+## Preview.51 — edição respeita o grupo remoto e identifica o histórico de check-ins
+
+- **Edição existente não herda o grupo preferencial do caixa**: se o operador só vê `Day use` no cadastro novo, mas o registro antigo já foi verificado via OpenAPI como `Hóspedes Vale` ou `Hóspedes Serra`, o editor mostra o **grupo original remoto**, em somente leitura, sem bloquear a edição por ausência desse grupo na lista local.
+- Essa exceção não desabilita a segurança: exige `_remote_verified=True`, grupo homologado, identidade/grupo do detalhe compatíveis com o check-in, ID de reserva confirmado, e, antes de alterar qualquer informação, consulta novamente os grupos atuais e níveis autorizados no próprio HikCentral. Se qualquer verificação falhar, a edição fica somente leitura; não escolhe o grupo preferido como substituto.
+- O cabeçalho da listagem informa explicitamente que é **histórico de check-ins**, não a base de pessoas ativas. Registros de check-out podem permanecer na API de histórico mesmo após exclusão de Visitor Information; a aplicação não apaga dados históricos de auditoria.
+- Filtros Nome + De/Até e a distinção entre validade e horário de cadastro permanecem. Nada é alterado automaticamente no HikCentral por esta atualização.
+- Regressões Windows simulam um computador limitado a Day use editando visitante previamente validado como Hóspedes Vale; e bloqueiam divergência entre grupo do check-in e grupo da consulta detalhada. A entrega física permanece sujeita à homologação na instalação real.
