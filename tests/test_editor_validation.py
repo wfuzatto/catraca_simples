@@ -5,7 +5,8 @@ from PIL import Image
 import pytest
 
 from core import TZ, default_settings
-from editor_validation import editor_requirements, validate_editor_fields
+from editor_validation import (editor_requirements, infer_edit_operation,
+                               validate_editor_fields)
 
 
 def values():
@@ -102,3 +103,14 @@ def test_unknown_remote_state_requires_an_explicit_operation():
     assert "operation" in validate(fields, **required)
     fields["operation"] = "Atualizar visita existente"
     assert validate(fields, **required) == {}
+
+
+@pytest.mark.parametrize("state", ["confirmado", "check-in efetuado"])
+def test_successfully_saved_active_visit_does_not_require_hidden_operation(state):
+    record = {"checkin_state": state}
+    assert infer_edit_operation(record) == "update"
+    requirements = editor_requirements(record)
+    assert requirements["require_operation"] is False
+    fields = values()
+    fields["operation"] = ""
+    assert "operation" not in validate(fields, **requirements)

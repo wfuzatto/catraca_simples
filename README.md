@@ -1,6 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.54` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.55` (prévia técnica; ainda não homologada em catraca física).
+
+Na Preview 55, uma segunda edição reconhece o check-in confirmado na primeira e não exige uma operação adicional oculta.
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 

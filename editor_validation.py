@@ -14,6 +14,24 @@ EDIT_OPERATIONS = {"Atualizar visita existente": "update", "Renovar visita": "re
 CLOSED_VISIT_STATES = {"check-out", "saída automática", "saída no terminal", "saída em atraso"}
 
 
+def infer_edit_operation(record):
+    """Infer the safe operation from the selected visit's confirmed state.
+
+    Older local snapshots used ``confirmado`` after a successful edit. Treat
+    that as an active check-in; the transaction still re-reads the remote
+    status before choosing update versus renewal.
+    """
+    explicit = record.get("_edit_operation")
+    if explicit in ("update", "renew"):
+        return explicit
+    state = record.get("checkin_state")
+    if state in ("check-in efetuado", "confirmado"):
+        return "update"
+    if state in CLOSED_VISIT_STATES:
+        return "renew"
+    return ""
+
+
 def editor_requirements(record, visitor=None, *, photo_error="", photo_loaded=False):
     visitor = visitor if isinstance(visitor, dict) else {}
     photo_meta = visitor.get("visitorPhoto") or visitor.get("VisitorPhoto") or {}
@@ -25,13 +43,12 @@ def editor_requirements(record, visitor=None, *, photo_error="", photo_loaded=Fa
         "Somente foto" if face else "Somente pulseira" if card else "")
     if photo_error and card:
         mode = "Foto e pulseira"
-    known_operation = record.get("_edit_operation")
+    known_operation = infer_edit_operation(record)
     known_state = record.get("checkin_state")
     return {"require_photo": bool(photo_error or face), "require_card": card,
             "initial_credential_mode": mode,
             "require_appointment": known_operation == "renew" or known_state in CLOSED_VISIT_STATES,
-            "require_operation": known_operation not in ("update", "renew") and
-                                 known_state not in CLOSED_VISIT_STATES | {"check-in efetuado"}}
+            "require_operation": not known_operation}
 
 
 def validate_editor_fields(values, settings, available_groups, *, photo_bytes=b"",

@@ -36,6 +36,11 @@ def test_history_is_encrypted_deduplicated_and_does_not_persist_credentials(tmp_
     save_registration({**visitor, "state": "confirmed"}, tmp_path)
     assert len(list_history(tmp_path)) == 1
     assert get_history("v-123", tmp_path)["checkin_state"] == "confirmado"
+    # A verified edit may normalize the legacy local label to the actual
+    # active check-in status without being discarded as an older snapshot.
+    save_registration({**visitor, "state": "confirmed",
+                       "checkin_state": "check-in efetuado"}, tmp_path)
+    assert get_history("v-123", tmp_path)["checkin_state"] == "check-in efetuado"
     with pytest.raises(ValueError):
         set_history_status("unknown", state="failed", base=tmp_path)
 

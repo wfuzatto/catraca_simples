@@ -60,7 +60,9 @@ def save_registration(record, base=None):
         if old["visitor_id"] == clean["visitor_id"]:
             # Never overwrite a confirmed server check-in with an older
             # snapshot from the initial registration attempt.
-            if old.get("checkin_state") == "confirmado" and clean.get("checkin_state") != "confirmado":
+            confirmed_states = {"confirmado", "check-in efetuado"}
+            if (old.get("checkin_state") in confirmed_states and
+                    clean.get("checkin_state") not in confirmed_states):
                 clean.pop("checkin_state", None)
             # A prova de acesso pertence SOMENTE ao mesmo check-in,
             # período e grupo. Não herdar o aceite para outra estadia.
