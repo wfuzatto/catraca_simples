@@ -341,3 +341,63 @@ def test_active_visitor_with_unverified_level_stays_readonly():
             raise AssertionError("Never call write endpoints")
     with pytest.raises(HikError, match="não confirmou um único nível"):
         resolve_remote_edit_record(MissingLevel(), record)
+
+
+def test_name_and_date_window_share_same_checkin_request():
+    """TOALHEIRO 2 com validade no dia seguinte nunca entra por Visitor Information."""
+    from remote_history import filter_local_history_by_entry_date, DIRECTORY_PATH
+    start, end = search_window("05/11/2026", "05/11/2026")
+    current = example_record(visitor="1701", record="701", name="TESTE TOALHEIRO 1")
+    current["visitorBaseInfo"]["visitStartTime"] = "2026-11-05T00:00:00-03:00"
+    current["visitorBaseInfo"]["visitEndTime"] = "2026-11-05T23:59:59-03:00"
+    client = FakeClient({"code": "0", "data": {"list": [current], "totalNum": 1}})
+    found = fetch_checkins(client, start, end, page=1, name="TOALHEIRO", page_size=10)
+    assert len(found["rows"]) == 1
+    assert found["rows"][0]["visitor_id"] == "1701"
+    assert len(client.calls) == 1
+    path, params, options = client.calls[0]
+    assert path == CHECKINS_PATH and path != DIRECTORY_PATH
+    assert params["visitorName"] == "TOALHEIRO"
+    assert params["visitStartTime"] == "2026-11-05T00:00:00-03:00"
+    assert params["visitEndTime"] == "2026-11-06T00:00:00-03:00"
+    assert options == {}
+
+
+def test_offline_date_name_uses_validity_start_not_registration_timestamp():
+    """Cadastrar no dia 05 não inclui ingresso que começa apenas no dia 06."""
+    from remote_history import filter_local_history_by_entry_date
+    start, end = search_window("05/11/2026", "05/11/2026")
+    rows = [
+        {"visitor_id": "1654", "first": "Teste", "last": "Toalheiro 1",
+         "registered_at": "2026-11-05T14:00:37-03:00",
+         "entry_at": "2026-11-05T00:00:00-03:00"},
+        {"visitor_id": "1655", "first": "Teste", "last": "Toalheiro 2",
+         "registered_at": "2026-11-05T14:01:00-03:00",
+         "entry_at": "2026-11-06T00:00:00-03:00"},
+        {"visitor_id": "1656", "first": "Outro", "last": "Visitante",
+         "registered_at": "2026-11-05T10:00:00-03:00",
+         "entry_at": "2026-11-05T00:00:00-03:00"},
+        {"visitor_id": "1657", "first": "Teste", "last": "Sem data",
+         "registered_at": "2026-11-05T10:00:00-03:00", "entry_at": ""},
+    ]
+    selected = filter_local_history_by_entry_date(rows, start, end, "tEsTe")
+    assert [r["visitor_id"] for r in selected] == ["1654"]
+    tomorrow_start, tomorrow_end = search_window("06/11/2026", "06/11/2026")
+    tomorrow = filter_local_history_by_entry_date(
+        rows, tomorrow_start, tomorrow_end, "toalheiro")
+    assert [r["visitor_id"] for r in tomorrow] == ["1655"]
+
+
+def test_offline_date_name_accepts_normalized_accents_but_not_bare_register_time():
+    from remote_history import filter_local_history_by_entry_date
+    start, end = search_window("05/11/2026", "05/11/2026")
+    rows = [
+        {"visitor_id": "1", "full_name": "JOÃO DE SÁ",
+         "registered_at": "2026-11-06T08:00:00-03:00",
+         "entry_at": "2026-11-05T00:00:00-03:00"},
+        {"visitor_id": "2", "full_name": "João de Sá",
+         "registered_at": "2026-11-05T08:00:00-03:00",
+         "entry_at": ""},
+    ]
+    assert [x["visitor_id"] for x in filter_local_history_by_entry_date(
+        rows, start, end, "joao de sa")] == ["1"]
