@@ -239,6 +239,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         ctk.CTkEntry(body, textvariable=var,
                      state="disabled" if readonly else "normal").pack(fill="x")
         fields[field] = var
+    dialog._editor_field_vars = fields
+    dialog._missing_appointment_link = missing_appointment_link
     # A edição de datas não deve trocar o grupo nem suas permissões. Em
     # versões anteriores o combo aceitava mudança de grupo, mas o fluxo
     # não revogava o nível anterior, podendo deixar acessos conflitantes.
