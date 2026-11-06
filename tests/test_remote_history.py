@@ -224,8 +224,9 @@ def test_remote_edit_requires_original_checkin_id_and_level_id():
             self.registered = registered
             self.level_id = level_id
             self.writes = []
-        def find_existing_registration(self, *args):
-            return self.registered
+        def find_registration_record(self, *args, active_only=False):
+            assert active_only is True
+            return example_record(record=self.registered)
         def post(self, path, body, **kw):
             if path.endswith("appointmentlist"):
                 return {"data": {"list": [appointment], "total": 1}}
@@ -249,6 +250,53 @@ def test_remote_edit_requires_original_checkin_id_and_level_id():
         resolve_remote_edit_record(Client(registered="different"), record)
     with pytest.raises(HikError, match="ID do nível"):
         resolve_remote_edit_record(Client(level_id="different"), record)
+
+
+@pytest.mark.parametrize("has_active", [True, False], ids=["active-and-closed", "already-closed"])
+def test_open_editor_reconciles_only_active_checkin_in_same_period(monkeypatch, has_active):
+    """Um check-out anterior não torna ambígua a visita ativa selecionada."""
+    from hikcentral import HikCentral
+    from remote_history import APPOINTMENTS_PATH, resolve_remote_edit_record
+
+    active = example_record(record="active-checkin")
+    closed = example_record(record="closed-checkin")
+    closed["visitorStatus"] = "1"
+    remote_rows = [closed, active] if has_active else [closed]
+    calls = []
+    api = HikCentral("127.0.0.1", 443, "test-key", "test-secret")
+
+    def read_only_post(path, body):
+        calls.append(path)
+        if path == CHECKINS_PATH:
+            return {"data": {"list": remote_rows, "totalNum": len(remote_rows)}}
+        if path == APPOINTMENTS_PATH:
+            return {"data": {"list": [], "total": 0}}
+        if path == DETAIL_PATH:
+            return {"data": {
+                "visitorId": "812", "visitorGroupName": "Hóspedes Vale",
+                "accessInfo": {"accessLevelList": [{"accessLevel": {
+                    "id": "10", "baseInfo": {"name": "VISITANTE_VALE"}}}]},
+            }}
+        pytest.fail("A abertura do editor deve fazer somente consultas simuladas.")
+
+    monkeypatch.setattr(api, "post", read_only_post)
+    monkeypatch.setattr(api, "resolve_levels", lambda names: (
+        [{"id": "10", "name": "VISITANTE_VALE",
+          "elements": [{"Element": {"ID": str(i)}} for i in range(3)]}],
+        [str(i) for i in range(3)]))
+    selected = normalize_checkin(active)
+    if not has_active:
+        with pytest.raises(HikError, match="check-in original mudou"):
+            resolve_remote_edit_record(api, selected)
+        assert calls == [CHECKINS_PATH]
+        return
+
+    verified, _ = resolve_remote_edit_record(api, selected)
+    assert verified["_remote_verified"] is True
+    assert verified["_original_checkin_id"] == "active-checkin"
+    assert verified["_update_record_id"] == "active-checkin"
+    assert verified["_original_appointment_id"] == ""
+    assert set(calls) <= {CHECKINS_PATH, APPOINTMENTS_PATH, DETAIL_PATH}
 
 
 def test_search_general_visitor_information_by_name_includes_person_without_checkin():
@@ -295,7 +343,7 @@ def test_remote_edit_blocked_for_visitor_already_checked_out():
     class FailIfCalled:
         def post(self, *args, **kwargs):
             raise AssertionError("Visitante encerrado não deve ser atualizado.")
-        def find_existing_registration(self, *args):
+        def find_registration_record(self, *args, **kwargs):
             raise AssertionError("Não reabrir check-in anterior.")
     with pytest.raises(HikError, match="Registrar novamente"):
         resolve_remote_edit_record(FailIfCalled(), checked_out)
@@ -305,8 +353,9 @@ def test_active_visitor_can_use_exact_level_from_visitor_information_when_appoin
     from remote_history import resolve_remote_edit_record
     record = normalize_checkin(example_record())
     class ExistingVisitor:
-        def find_existing_registration(self, *args):
-            return "40"
+        def find_registration_record(self, *args, active_only=False):
+            assert active_only is True
+            return example_record()
         def post(self, path, payload):
             if path.endswith("appointmentlist"):
                 return {"data": {"list": [], "total": 0}}
@@ -333,8 +382,9 @@ def test_active_visitor_with_unverified_level_stays_readonly():
     from remote_history import resolve_remote_edit_record
     record = normalize_checkin(example_record())
     class MissingLevel:
-        def find_existing_registration(self, *args):
-            return "40"
+        def find_registration_record(self, *args, active_only=False):
+            assert active_only is True
+            return example_record()
         def post(self, path, payload):
             if path.endswith("appointmentlist"):
                 return {"data": {"list": [], "total": 0}}

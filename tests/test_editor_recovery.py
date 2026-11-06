@@ -39,6 +39,9 @@ class FakeHik:
     def find_existing_registration(self, vid, start, end):
         assert vid == "1009"
         return "check-1009"
+    def find_registration_record(self, vid, start, end, *, active_only=False):
+        assert active_only is True
+        return {"recordId": self.find_existing_registration(vid, start, end), "visitorStatus": "0"}
     def post(self, path, payload, **kw):
         self.calls.append(path)
         if path.endswith("single/visitorinfo"):
