@@ -402,8 +402,9 @@ def _history(app):
     _text(heading, "Cadastros efetuados", size=19, bold=True).pack(side="left")
     _secondary(heading, "Atualizar lista", app.refresh_history, width=142).pack(side="right")
     _text(inner,
-          "Buscar por nome consulta também Visitor Information, mesmo sem check-in no período. "
-          "Dê dois cliques para ver a foto. A renovação de visitas encerradas requer novo registro.",
+          "De/Até filtram pelo INÍCIO VÁLIDO da visita, e Nome busca somente check-ins nesse intervalo. "
+          "Cadastrado em é apenas informativo. Para pessoas sem check-in, consulte Visitor Information "
+          "no HikCentral. Dê dois cliques para ver os detalhes e a foto.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     app.history_loading_frame = ctk.CTkFrame(inner, fg_color="#E9F2FF", corner_radius=8)
     app.history_loading_label = ctk.CTkLabel(
