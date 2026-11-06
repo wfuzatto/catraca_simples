@@ -1034,7 +1034,7 @@ class ValeApp(tk.Tk):
         except Exception:
             local_rows = []
         if self.busy:
-            self.history_status.set("Operação em andamento; atualize a lista ao terminar.")
+            self.history_status.set("Operação em andamento; clique em Buscar ao terminar.")
             return
         try:
             start_iso, end_iso = search_window(
@@ -1143,7 +1143,7 @@ class ValeApp(tk.Tk):
         if hasattr(self, "history_status"):
             self.history_status.set(
                 f"Quantidade alterada para {self.history_page_size.get()} por página. "
-                "Clique em Atualizar lista ou Buscar para consultar.")
+                "Clique em Buscar para consultar.")
 
     def history_change_page(self, delta):
         next_page = self._history_page + delta

@@ -400,7 +400,6 @@ def _history(app):
     heading = ctk.CTkFrame(inner, fg_color="transparent")
     heading.pack(fill="x", padx=17, pady=(18, 10))
     _text(heading, "Cadastros efetuados", size=19, bold=True).pack(side="left")
-    _secondary(heading, "Atualizar lista", app.refresh_history, width=142).pack(side="right")
     _text(inner,
           "De/Até filtram pelo INÍCIO VÁLIDO da visita, e Nome busca somente check-ins nesse intervalo. "
           "Cadastrado em é apenas informativo. Para pessoas sem check-in, consulte Visitor Information "
@@ -794,13 +793,13 @@ def ensure_history_ui(app):
     """Create the history widgets only once, on first navigation to the tab.
 
     Does not query DPAPI or HikCentral; a refresh requires the operator to
-    click Atualizar lista/Buscar or to request the next page.
+    click Buscar or to request the next page.
     """
     if getattr(app, "_history_ui_built", False):
         return
     _history(app)
     app._history_ui_built = True
-    app.history_status.set("Clique em Atualizar lista para consultar o HikCentral.")
+    app.history_status.set("Clique em Buscar para consultar o HikCentral.")
 
 
 def update_navigation(app):

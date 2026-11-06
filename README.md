@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.49` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.50` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -513,3 +513,10 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - Depois de confirmação do grupo original, a edição repete a associação do **mesmo** nível Visitor homologado (`addPersons`, `type=2`) antes da reaplicação aos dispositivos. Não concede níveis de Serra a visitante de Vale, nem vice-versa.
 - **Mudança deliberada de grupo requer fluxo separado de migração**, não disponível na Preview.49. Esse procedimento precisará verificar o nível antigo, retirá-lo via `deletePersons`, confirmar o novo nível e distribuição física; não pode apenas adicionar níveis sem retirar o anterior.
 - Regressões cobrem o caso TOALHEIRO 2: grupo de lista **Hóspedes Vale**, tentativa de seleção **Hóspedes Serra**, preferência local diferente, readback remoto divergente, ausência do grupo e impedimento de nova escrita. Não foram alterados registros reais; é necessário confirmar com o HikCentral em campo.
+
+
+## Preview.50 — remover ação redundante na lista de cadastros
+
+- Removido somente o botão **Atualizar lista** da tela **Cadastros efetuados**. Os filtros **De**, **Até** e **Nome**, o botão **Buscar**, a seleção de quantidade por página e a paginação permanecem disponíveis.
+- A construção da tela continua sem consultar o HikCentral automaticamente. A pesquisa é iniciada por **Buscar** ou pela paginação; os fluxos existentes que atualizam o histórico após operações continuam ativos.
+- Teste de interface Windows verifica a ausência do botão e a presença dos filtros, de **Buscar** e da paginação.
