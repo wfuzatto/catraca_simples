@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.46` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.47` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -479,3 +479,14 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - Se Configurações não contiver nenhum ingresso de 1 dia, a seleção de ingresso é esvaziada e a data volta para hoje, **bloqueando uma nova venda** até configurar um ingresso de 1 dia; nunca reutiliza silenciosamente 2 ou 3 dias.
 - A confirmação de envio segue exibindo o período real. O backend continua enviando a validade 00:00:00–23:59:59 por padrão, com acesso limitado pelo template ACQUAVALE. Edição de visitantes já existentes, fotos, NFC, níveis e recuperação não sofreram mudanças de protocolo.
 - Testes automatizados incluem seleção futura de vários dias, reset após sucesso, transição da meia-noite, ausência de ingresso de 1 dia, saída readonly e cálculo programático. Homologar um cadastro real no HikCentral antes de colocar em operação.
+
+
+## Preview.47 — concatenar pesquisa por nome e período de entrada
+
+- Na aba **Cadastros efetuados**, `De` e `Até` delimitam a **data de INÍCIO VÁLIDO** da visita (inclusive no último dia). `Nome` restringe a mesma pesquisa, não dispara uma busca adicional independente das datas.
+- O programa envia `visitorName`, `visitStartTime` e `visitEndTime` **juntos** à consulta de check-ins do HikCentral. Em seguida verifica novamente a data de início válido e o nome antes de exibir cada linha, inclusive se a API retornar uma janela por sobreposição.
+- Registros encontrados apenas em **Visitor Information** não são mais inseridos na listagem. Um visitante com entrada em 06/11 não aparecerá na busca de 05/11, mesmo que tenha sido cadastrado em 05/11. Para consultar pessoas sem check-in, usar a tela própria do HikCentral.
+- A coluna **Cadastrado em** é informativa: não participa do filtro. Em modo offline, o histórico local também segue **início válido + nome**, sem usar a data de cadastramento. Registros sem validade não têm data presumida.
+- A API pode informar um total maior que o número efetivamente exibido na página caso sua paginação inclua registros de outras datas; o rodapé distingue o total bruto da API da conferência local. Páginas podem ficar parcialmente preenchidas. Isso evita inventar ou exibir visitas fora da seleção.
+- A busca, a visualização e a consulta de eventos continuam somente leitura; não alteram a reserva, o registro de check-in, a foto, a NFC ou os níveis Visitor.
+- Testes de regressão reproduzem o caso de dois visitantes `TESTE TOALHEIRO` com início válido em dias diferentes, filtragem local sem usar `registered_at`, combinação do payload e controlador da interface sem busca da base geral.
