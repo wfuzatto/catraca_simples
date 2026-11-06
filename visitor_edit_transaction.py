@@ -11,7 +11,7 @@ import hashlib
 import json
 import time
 from core import _write_json_atomic, VALE_VISITOR_LEVELS, TZ
-from remote_history import visitor_details
+from remote_history import visitor_details, reservation_period_report
 from edit_journal import select_edit_journal
 from edit_errors import EditorFieldError
 from edit_request import validate_edit_request, preserve_visitor_metadata
@@ -177,6 +177,10 @@ def update_existing_visit(client, record: dict, payload: dict,
         _write_json_atomic(journal, {**summary, "status": "update_acknowledged", "returned_record_id": returned_record_id})
 
     actual_checkin = _readback(client, vid, payload, visitor, group, returned_record_id)
+    # A successful check-in update does not prove that the original booking
+    # changed. Read its independent period and report any real divergence.
+    reservation_period = reservation_period_report(
+        client, {**record, "appointment_id": actual_appointment}, new_start, new_end)
 
     # Repete a etapa de associação usada no cadastro original, mas SOMENTE
     # para o MESMO nível homologado. Não cria permissões de outro grupo.
@@ -199,6 +203,10 @@ def update_existing_visit(client, record: dict, payload: dict,
         # so opening this same record again does not demand a hidden operation.
         "checkin_state": "check-in efetuado",
     }
+    if reservation_period["state"] in ("matched", "different"):
+        verified.update(reservation_entry_at=reservation_period["entry_at"],
+                        reservation_exit_at=reservation_period["exit_at"],
+                        reservation_code=reservation_period["code"])
     # Só modificar a prova local após correspondência remota dupla.
     save_registration(verified)
     _write_json_atomic(journal, {
@@ -224,5 +232,6 @@ def update_existing_visit(client, record: dict, payload: dict,
     report["confirmed_appointment_id"] = actual_appointment
     report["confirmed_checkin_id"] = str(actual_checkin)
     report["confirmed_group"] = original_group
+    report["reservation_period"] = reservation_period
     journal.unlink(missing_ok=True)
     return report

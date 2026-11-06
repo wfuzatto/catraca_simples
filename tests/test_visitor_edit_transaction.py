@@ -50,6 +50,8 @@ class API:
         self.renewal_appointments = []
         self.applies = []
         self.assignments = []
+        self.reservation_rows = None
+        self.reservation_reads = []
 
     def find_registration_record(self, visitor, start, end, *, active_only=False, record_id=""):
         assert visitor == "1654"
@@ -87,8 +89,13 @@ class API:
         self.renewal_appointments.append(appointment_id)
         return self.returned_id
 
-    def post(self, *args, **kwargs):
-        pytest.fail("A transação não deve exigir appointmentlist nem criar uma reserva.")
+    def post(self, path, payload, **kwargs):
+        from remote_history import APPOINTMENTS_PATH
+        assert path == APPOINTMENTS_PATH, "A conferência nunca deve criar ou editar uma reserva."
+        self.reservation_reads.append(payload)
+        if self.reservation_rows is None:
+            raise HikError("Consulta de reservas indisponível neste cenário.")
+        return {"data": {"list": self.reservation_rows, "total": len(self.reservation_rows)}}
 
     def assign_access(self, visitor, level_id):
         self.assignments.append((visitor, str(level_id)))
@@ -182,6 +189,29 @@ def test_known_booking_id_is_preserved_and_not_replaced_by_checkin_id(monkeypatc
     assert result.get("confirmed_appointment_id") == "booking-original"
     assert written[-1]["appointment_id"] == "booking-original"
     assert written[-1]["registration_record_id"] == "check-new"
+
+
+def test_edited_visit_reports_original_booking_dates_without_claiming_sync(monkeypatch, tmp_path):
+    written, _ = use_mocks(monkeypatch)
+    api = API()
+    api.reservation_rows = [{"appointID": "booking-old", "appointCode": "3911",
+        "appointStartTime": OLD_START, "appointEndTime": OLD_END,
+        "visitorInfo": {"visitorId": "1654"}}]
+    result = call(api, tmp_path / "edit.json")
+    assert result["reservation_period"]["state"] == "different"
+    assert result["reservation_period"]["entry_at"] == OLD_START
+    assert written[-1]["entry_at"] == NEW_START
+    assert written[-1]["reservation_entry_at"] == OLD_START
+    assert len(api.updates) == 1 and not api.renewals
+    assert len(api.reservation_reads) == 1
+
+
+def test_unavailable_booking_does_not_prevent_edit_or_claim_dates_match(monkeypatch, tmp_path):
+    use_mocks(monkeypatch)
+    api = API()
+    result = call(api, tmp_path / "edit.json")
+    assert result["reservation_period"]["state"] == "unavailable"
+    assert result["confirmed_checkin_id"] == "check-new"
 
 
 def test_delayed_checkin_readback_retries_reads_without_another_update(monkeypatch, tmp_path):

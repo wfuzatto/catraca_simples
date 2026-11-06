@@ -301,7 +301,9 @@ def parse_access_levels(data):
             continue
         rows = access.get("accessLevelList") or access.get("AccessLevelList") or []
         if isinstance(rows, dict):
-            rows = rows.get("list") or rows.get("AccessLevel") or []
+            rows = rows.get("list") or rows.get("AccessLevel") or rows.get("accessLevel") or []
+            if isinstance(rows, dict):
+                rows = [rows]
         if not isinstance(rows, list):
             continue
         for item in rows:
@@ -310,7 +312,7 @@ def parse_access_levels(data):
             level = item.get("accessLevel") or item.get("AccessLevel") or item
             if not isinstance(level, dict):
                 continue
-            base = level.get("baseInfo") or level.get("BaseInfo") or {}
+            base = level.get("baseInfo") or level.get("BaseInfo") or level.get("baseinfo") or {}
             if not isinstance(base, dict):
                 base = {}
             name = str(base.get("name") or level.get("name") or "").strip()
@@ -360,7 +362,11 @@ def original_appointment_identifier(appointment: dict) -> str:
 
 
 def find_original_appointment(client, record, *, max_pages=10):
-    """Localiza a reserva do MESMO visitante e intervalo; ambiguidades bloqueiam edição."""
+    """Match the known booking ID and visitor, or an exact period without an ID.
+
+    A check-in edit may change its period while the original booking retains
+    the old dates. A known booking ID must not be discarded for that reason.
+    """
     if not record.get("visitor_id") or not record.get("entry_at") or not record.get("exit_at"):
         raise HikError("Visitante e período são necessários para localizar a reserva original.")
     try:
@@ -370,12 +376,21 @@ def find_original_appointment(client, record, *, max_pages=10):
             raise ValueError("intervalo")
     except ValueError as exc:
         raise HikError("Datas do registro são inválidas; nenhuma edição autorizada.") from exc
+    known_id = str(record.get("appointment_id") or record.get("_original_appointment_id") or "")
+    query_start, query_end = start, end
+    for key in ("reservation_entry_at", "reservation_exit_at"):
+        try:
+            reference = datetime.fromisoformat(str(record.get(key) or ""))
+            if reference.tzinfo is not None:
+                query_start, query_end = min(query_start, reference), max(query_end, reference)
+        except (TypeError, ValueError):
+            pass
     matches = []
     for page in range(1, max_pages + 1):
         payload = {
             "pageNo": page, "pageSize": 100,
-            "appointStartTime": (start - timedelta(days=1)).isoformat(timespec="seconds"),
-            "appointEndTime": (end + timedelta(days=1)).isoformat(timespec="seconds"),
+            "appointStartTime": (query_start - timedelta(days=1)).isoformat(timespec="seconds"),
+            "appointEndTime": (query_end + timedelta(days=1)).isoformat(timespec="seconds"),
             "appointState": -1, "sortField": "VisitingTime", "orderType": 1,
         }
         data = client.post(APPOINTMENTS_PATH, payload).get("data") or {}
@@ -383,7 +398,11 @@ def find_original_appointment(client, record, *, max_pages=10):
             raise HikError("A consulta de reservas não retornou lista válida.")
         rows = data["list"]
         for entry in rows:
-            if _same_visit(entry, record):
+            info = (entry.get("visitorInfo") or {}) if isinstance(entry, dict) else {}
+            linked = (known_id and isinstance(info, dict) and
+                      str(info.get("visitorId") or "") == str(record["visitor_id"]) and
+                      original_appointment_identifier(entry) == known_id)
+            if linked or (not known_id and _same_visit(entry, record)):
                 matches.append(entry)
         total = int(data.get("total") or 0)
         if len(rows) < 100 or (total and page * 100 >= total):
@@ -395,6 +414,44 @@ def find_original_appointment(client, record, *, max_pages=10):
             "Não foi possível associar a visita a uma reserva única no HikCentral. "
             "Edição bloqueada sem alterar o visitante.")
     return matches[0]
+
+
+def compare_reservation_period(appointment, start_iso, end_iso):
+    """Compare dates read from a reservation with the current check-in period."""
+    start = datetime.fromisoformat(str(appointment.get("appointStartTime") or ""))
+    end = datetime.fromisoformat(str(appointment.get("appointEndTime") or ""))
+    if start.tzinfo is None or end.tzinfo is None or end <= start:
+        raise ValueError("Período da reserva inválido.")
+    matches = start == datetime.fromisoformat(start_iso) and end == datetime.fromisoformat(end_iso)
+    return {"state": "matched" if matches else "different",
+            "appointment_id": original_appointment_identifier(appointment),
+            "code": str(appointment.get("appointCode") or ""),
+            "entry_at": start.isoformat(timespec="seconds"),
+            "exit_at": end.isoformat(timespec="seconds")}
+
+
+def reservation_period_report(client, record, start_iso, end_iso):
+    """Read the linked booking independently; never infer that an edit synced it."""
+    if not (record.get("appointment_id") or record.get("_original_appointment_id")):
+        return {"state": "unavailable", "message": "Reserva vinculada não identificada."}
+    try:
+        appointment = find_original_appointment(client, record)
+        return compare_reservation_period(appointment, start_iso, end_iso)
+    except (HikError, ValueError, TypeError, KeyError):
+        return {"state": "unavailable", "message": "Datas da reserva original não confirmadas pela consulta."}
+
+
+def reservation_period_notice(period, start_iso, end_iso):
+    """User-facing dates with their actual source, including a real mismatch."""
+    if not isinstance(period, dict) or not period.get("state"):
+        return ""
+    visit = "Visita (Check-In/Out): " + history_time(start_iso) + " a " + history_time(end_iso) + "."
+    if period.get("state") not in ("matched", "different"):
+        return visit + "\nDatas da reserva original: não confirmadas."
+    booking = "Reserva original" + (" " + period["code"] if period.get("code") else "")
+    booking += ": " + history_time(period["entry_at"]) + " a " + history_time(period["exit_at"]) + "."
+    mismatch = "\nAs datas da visita e da reserva são diferentes no HikCentral." if period["state"] == "different" else ""
+    return visit + "\n" + booking + mismatch
 
 
 def resolve_remote_edit_record(client, record):
@@ -552,6 +609,15 @@ def resolve_remote_edit_record(client, record):
     result["_edit_operation"] = "update" if state == "0" else "renew" if state in ("1", "2", "3", "4") else ""
     result["_original_appointment_id"] = appointment_id
     result["_appointment_lookup_error"] = appointment_error
+    result["_reservation_period"] = {"state": "unavailable"}
+    if appointment_id:
+        try:
+            period = compare_reservation_period(appointment, record["entry_at"], record["exit_at"])
+            result.update(_reservation_period=period,
+                          reservation_entry_at=period["entry_at"],
+                          reservation_exit_at=period["exit_at"], reservation_code=period["code"])
+        except (HikError, TypeError, ValueError):
+            pass
     return result, data
 
 

@@ -526,3 +526,46 @@ def test_original_appointment_identifier_not_checkin_id_or_reservation_code():
     with pytest.raises(HikError, match="divergentes"):
         original_appointment_identifier({"appointRecordId": "a",
                                          "appointID": "b"})
+
+
+def test_live_reservation_level_shape_with_lowercase_baseinfo_is_read():
+    from remote_history import parse_access_levels
+    actual_shape = {"accessInfo": {"accessLevelList": {"accessLevel": [
+        {"id": 7, "baseinfo": {"name": "VISITANTE_VALE"}}]}}}
+    assert parse_access_levels(actual_shape) == [{"id": "7", "name": "VISITANTE_VALE"}]
+
+
+def test_linked_booking_is_found_by_both_ids_after_checkin_period_changed():
+    from remote_history import find_original_appointment, reservation_period_report, reservation_period_notice
+    booking = {"appointID": "booking-1780", "appointCode": "3911",
+               "appointStartTime": "2026-11-06T00:00:00-03:00",
+               "appointEndTime": "2026-11-06T23:59:59-03:00",
+               "visitorInfo": {"visitorId": "1780"}}
+    record = {"visitor_id": "1780", "appointment_id": "booking-1780",
+              "entry_at": "2026-11-07T00:00:00-03:00",
+              "exit_at": "2026-11-08T23:59:59-03:00"}
+    client = FakeClient({"data": {"list": [booking], "total": 1}})
+    assert find_original_appointment(client, record) == booking
+    period = reservation_period_report(client, record, record["entry_at"], record["exit_at"])
+    assert period["state"] == "different"
+    notice = reservation_period_notice(period, record["entry_at"], record["exit_at"])
+    assert "Visita (Check-In/Out): 07/11/2026" in notice
+    assert "Reserva original 3911: 06/11/2026" in notice
+    assert "diferentes" in notice
+    # A matching ID never authorizes associating a booking owned by another person.
+    booking["visitorInfo"]["visitorId"] = "other-visitor"
+    assert reservation_period_report(client, record, record["entry_at"], record["exit_at"])["state"] == "unavailable"
+
+
+def test_original_period_metadata_remains_queryable_after_later_edits():
+    from remote_history import find_original_appointment
+    booking = {"appointID": "booking-1780", "appointCode": "3911",
+               "appointStartTime": "2026-11-06T00:00:00-03:00",
+               "appointEndTime": "2026-11-06T23:59:59-03:00",
+               "visitorInfo": {"visitorId": "1780"}}
+    record = {"visitor_id": "1780", "appointment_id": "booking-1780",
+              "entry_at": "2026-11-20T00:00:00-03:00", "exit_at": "2026-11-21T23:59:59-03:00",
+              "reservation_entry_at": booking["appointStartTime"], "reservation_exit_at": booking["appointEndTime"]}
+    client = FakeClient({"data": {"list": [booking], "total": 1}})
+    assert find_original_appointment(client, record) == booking
+    assert client.calls[0][1]["appointStartTime"] == "2026-11-05T00:00:00-03:00"

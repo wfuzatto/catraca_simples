@@ -1,6 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.55` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.56` (prévia técnica; ainda não homologada em catraca física).
+
+Na Preview 56, o editor confere separadamente as datas da visita (Visitor Check-In/Out) e da reserva original (Visitor Reservation). Uma divergência aparece com os dois períodos e não é apresentada como sincronização concluída. A edição da visita continua disponível quando a consulta da reserva não responde. O leitor de níveis também aceita o formato `accessLevelList.accessLevel[].baseinfo` retornado nesta instalação do HikCentral.
 
 Na Preview 55, uma segunda edição reconhece o check-in confirmado na primeira e não exige uma operação adicional oculta.
 

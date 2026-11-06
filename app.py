@@ -744,6 +744,8 @@ class ValeApp(tk.Tk):
                         "group": group, "reservation": obj.reservation,
                         "door_ids": door_ids, "access_names": [level["name"] for level in selected],
                         "entry_at": payload["visitStartTime"], "exit_at": payload["visitEndTime"],
+                        "reservation_entry_at": payload["visitStartTime"],
+                        "reservation_exit_at": payload["visitEndTime"],
                         "registered_at": datetime.now(TZ).isoformat(timespec="seconds"),
                         "expect_face": expect_face, "expect_card": expect_card,
                         "state": "em consulta", "checkin_state": "não verificado"
@@ -1372,6 +1374,9 @@ class ValeApp(tk.Tk):
             local = get_history(record["visitor_id"]) or {}
             if local.get("appointment_id"):
                 record["appointment_id"] = str(local["appointment_id"])
+                for field in ("reservation_entry_at", "reservation_exit_at", "reservation_code"):
+                    if local.get(field):
+                        record[field] = local[field]
         except (OSError, RuntimeError, ValueError):
             pass
         from visitor_editor import open_visitor_editor
