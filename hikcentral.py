@@ -414,15 +414,16 @@ class HikCentral:
                            "Confira o HikCentral antes de tentar novamente.")
         return record
 
-    def update_registered_visitor(self, appointment_id: str, visitor_id: str,
+    def update_registered_visitor(self, checkin_record_id: str, visitor_id: str,
                                   info: dict, levels: list[dict]) -> str:
-        """Edita o check-in existente usando o ID da RESERVA, não recordId.
+        """Edita o registro de check-in, identificado pelo retorno do registerment.
 
-        Resposta contém novo appointRecordId (opcional); não é confirmação
-        suficiente. Caller verifica check-in+reserva após a resposta.
+        registerment chama seu ID de appointRecordId; a consulta de check-ins
+        o retorna como recordId. O appointID da reserva anterior é outro ID.
+        O ID devolvido pela edição pode mudar e deve ser conferido por leitura.
         """
-        if not appointment_id or not visitor_id or not levels:
-            raise HikError("ID da reserva, Visitor ID e nível são obrigatórios para edição.")
+        if not checkin_record_id or not visitor_id or not levels:
+            raise HikError("ID do check-in, Visitor ID e nível são obrigatórios para edição.")
         entries = json.loads(json.dumps(info["visitorInfoList"]))
         if len(entries) != 1 or not entries[0].get("VisitorInfo"):
             raise HikError("Edição exige exatamente um visitante.")
@@ -430,8 +431,11 @@ class HikCentral:
         if not visitor_info.get("cards") and not visitor_info.get("faces"):
             raise HikError("Informe novamente a credencial original ou substituta para edição segura.")
         visitor_info["visitorId"] = visitor_id
+        visitor_info.setdefault("watchListInfo", [
+            {"enableRegister": 1, "ID": "0", "Type": "1"}
+        ])
         response = self.post("/artemis/api/visitor/v1/registerment/update", {
-            "appointRecordId": appointment_id,
+            "appointRecordId": checkin_record_id,
             "receptionistId": "",
             "visitStartTime": info["visitStartTime"],
             "visitEndTime": info["visitEndTime"],
@@ -449,10 +453,15 @@ class HikCentral:
         return str(data.get("appointRecordId") or "").strip()
 
     def find_existing_registration(self, visitor_id: str, start_iso: str, end_iso: str) -> str | None:
-        """Somente leitura: verifica check-in anterior antes de qualquer recuperação.
+        """Somente leitura: retorna o ID de um único check-in no período exato."""
+        row = self.find_registration_record(visitor_id, start_iso, end_iso)
+        return str(row["recordId"]) if row else None
 
-        Retorna recordId somente com correspondência única de visitante e período.
-        Em caso de ambiguidade, falha fechada. NÃO cria nem registra novamente.
+    def find_registration_record(self, visitor_id: str, start_iso: str, end_iso: str,
+                                 *, active_only: bool = False) -> dict | None:
+        """Relê identidade, validade, estado e campos do mesmo registro remoto.
+
+        Não depende da lista de reservas, que pode omitir visitas já registradas.
         """
         if not visitor_id or not start_iso or not end_iso:
             raise HikError("IDs e datas são obrigatórios para conciliar o check-in.")
@@ -467,10 +476,10 @@ class HikCentral:
             raise HikError(f"Período inválido para recuperar check-in: {exc}") from exc
         query_start = (start - timedelta(days=1)).isoformat(timespec="seconds")
         query_end = (end + timedelta(days=1)).isoformat(timespec="seconds")
-        matches = []
+        matches = {}
         for page in range(1, 11):
             data = self.post("/artemis/api/visitor/v1/register/getVistorRegisterRecord", {
-                "pageNo": page, "pageSize": 499,
+                "pageNo": page, "pageSize": 100,
                 "visitStartTime": query_start, "visitEndTime": query_end,
                 "sortField": "visitingTime", "orderType": "0",
             }).get("data") or {}
@@ -478,11 +487,15 @@ class HikCentral:
             if not isinstance(rows, list):
                 raise HikError("Consulta de registros retornou formato inesperado.")
             for row in rows:
+                if not isinstance(row, dict):
+                    continue
                 base = row.get("visitorBaseInfo") or {}
                 if str(base.get("visitorId") or "") != visitor_id:
                     continue
                 record_id = str(row.get("recordId") or "")
                 if not record_id:
+                    continue
+                if active_only and str(row.get("visitorStatus")) != "0":
                     continue
                 try:
                     row_start = datetime.fromisoformat(str(base.get("visitStartTime") or ""))
@@ -492,16 +505,17 @@ class HikCentral:
                 except ValueError:
                     continue
                 if row_start == start and row_end == end:
-                    matches.append(record_id)
+                    if record_id in matches and matches[record_id] != row:
+                        raise HikError("O check-in mudou durante a consulta; pesquise novamente.")
+                    matches[record_id] = row
             total = int(data.get("totalNum", 0) or 0)
-            if len(rows) < 499 or (total and page * 499 >= total):
+            if len(rows) < 100 or (total and page * 100 >= total):
                 break
         else:
             raise HikError("Conciliação atingiu limite de registros; intervenção necessária.")
-        matches = list(dict.fromkeys(matches))
         if len(matches) > 1:
             raise HikError("Múltiplos registros de check-in encontrados; não é seguro reaplicar automaticamente.")
-        return matches[0] if matches else None
+        return next(iter(matches.values())) if matches else None
 
     def assign_access(self, visitor_id: str, level_id: str) -> None:
         self.post("/artemis/api/acs/v1/privilege/group/single/addPersons", {

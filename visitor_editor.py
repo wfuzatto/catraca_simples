@@ -120,20 +120,10 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     must_reenter_card = bool(
         record.get("origin") == "HikCentral" and
         has_remote_card and not card_number)
-    # Ausência de appointRecordId não impede PREPARAR uma correção.
-    # A transação validará o vínculo na API antes de qualquer POST; sem
-    # correspondência única não escreve nem inventa um ID.
-    missing_appointment_link = bool(
-        record.get("origin") == "HikCentral"
-        and not record.get("_original_appointment_id")
-        and record.get("_remote_verified") is True
-        and record.get("checkin_state") == "check-in efetuado")
     if record.get("origin") == "HikCentral" and not readonly:
-        if not record.get("_original_appointment_id") and not missing_appointment_link:
+        if not record.get("registration_record_id") or not record.get("_remote_verified"):
             readonly = True
-            readonly_reason = (
-                "A reserva original não foi identificada com segurança. "
-                "O check-in precisa ser confirmado no HikCentral antes de editar.")
+            readonly_reason = "O check-in ativo precisa ser confirmado no HikCentral antes de editar."
         elif not has_remote_face and not has_remote_card and not photo_error:
             readonly = True
             readonly_reason = "A OpenAPI não confirmou nenhuma credencial original."
@@ -222,8 +212,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             return ""
 
     initial = {
-        "first": record.get("first", ""), "last": record.get("last", ""),
-        "reservation": record.get("reservation", ""),
+        "first": visitor.get("visitorGivenName", record.get("first", "")),
+        "last": visitor.get("visitorFamilyName", record.get("last", "")),
+        "reservation": visitor.get("remark", record.get("reservation", "")),
         "entry": formatted_visit_time("entry_at"),
         "exit": formatted_visit_time("exit_at"),
         "card": card_number if record.get("origin") == "HikCentral" else "",
@@ -240,7 +231,6 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                      state="disabled" if readonly else "normal").pack(fill="x")
         fields[field] = var
     dialog._editor_field_vars = fields
-    dialog._missing_appointment_link = missing_appointment_link
     # A edição de datas não deve trocar o grupo nem suas permissões. Em
     # versões anteriores o combo aceitava mudança de grupo, mas o fluxo
     # não revogava o nível anterior, podendo deixar acessos conflitantes.
@@ -261,15 +251,6 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 "Trocar de Vale para Serra exige migração separada, com retirada "
                 "do acesso anterior; não ocorrerá ao corrigir datas."),
             wraplength=505, justify="left", text_color="#64748B").pack(pady=(5, 4))
-        if missing_appointment_link:
-            ctk.CTkLabel(
-                body,
-                text=("Você pode corrigir as datas neste formulário. A reserva "
-                      "não retornou o ID original: ao salvar, o aplicativo "
-                      "tentará identificar o vínculo somente por consulta. "
-                      "Sem ID único, NENHUMA alteração será enviada."),
-                text_color="#B45309", wraplength=510,
-                justify="left").pack(pady=(5, 7))
     dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro")
                  + " — " + record["visitor_id"])
     level_status = tk.StringVar()
@@ -387,10 +368,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
             if not record.get("registration_record_id"):
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
-            # Se o ID estava ausente na abertura, o worker faz nova
-            # conciliação ANTES da escrita. O ID do check-in nunca é usado
-            # como appointRecordId; se persistir a falta de vínculo, falha
-            # apenas de leitura, preservando a digitação do operador.
+            # A transação relê o check-in ativo antes de salvar e confirma
+            # os dados efetivos após a edição, sem depender da reserva anterior.
             if not messagebox.askyesno(
                     "Confirmar atualização de visitante",
                     "Visitante ID: " + str(record["visitor_id"]) +
@@ -454,10 +433,6 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
 
         def work():
             client = app.client()
-            old_id = client.find_existing_registration(
-                record["visitor_id"], record["entry_at"], record["exit_at"])
-            if not old_id or old_id != record["registration_record_id"]:
-                raise ValueError("Check-in original não confirmado pela consulta.")
             # Revalidar grupo e acesso imediatamente antes da escrita.
             live_groups = client.visitor_groups()
             selected_group = selected_editor_access(
@@ -514,10 +489,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 if result.get("access_receipt_saved") else
                 " A entrega da credencial ainda requer conferência.")
             messagebox.showinfo(
-                "Datas e vínculo confirmados",
-                "A mesma pessoa e sua reserva foram localizadas nas novas datas.\n"
-                "ID da reserva: " + str(result["confirmed_appointment_id"]) +
-                "\nID do check-in: " + str(result["confirmed_checkin_id"]) +
+                "Cadastro atualizado",
+                "Dados do visitante e validade conferidos no HikCentral.\n"
+                "ID do check-in: " + str(result["confirmed_checkin_id"]) +
                 "\nEntrega: " + result["state"] + "." + note, parent=app)
             if dialog.winfo_exists():
                 dialog.destroy()

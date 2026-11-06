@@ -729,7 +729,7 @@ def test_editor_allows_replacement_photo_when_download_fails(monkeypatch):
             "access_names": ["VISITANTE_VALE"],
             "door_ids": ["A", "B", "C"],
             "_requires_access_confirmation": True,
-            "_original_appointment_id": "appt-1009",
+            "_original_appointment_id": "appt-1009", "_remote_verified": True,
             "photo_url": "opaque-photo-ref",
             "card_number": "123123123",
         }
@@ -771,7 +771,7 @@ def test_editor_preserves_original_group_and_blocks_direct_reassignment(monkeypa
             "origin": "HikCentral", "access_names": ["VISITANTE_VALE"],
             "door_ids": ["A", "B", "C"], "card_number": "123123123",
             "_requires_access_confirmation": True,
-            "_original_appointment_id": "appt-1009",
+            "_original_appointment_id": "appt-1009", "_remote_verified": True,
         }
         visitor_editor.open_visitor_editor(
             root, record, remote_details={"visitorId": "1009", "cards": [
@@ -992,7 +992,7 @@ def test_unverified_or_mismatched_remote_group_never_defaults_to_day_use(monkeyp
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Teste modal Tk apenas no Windows")
-def test_future_visit_missing_appointment_id_allows_date_draft_but_does_not_post(monkeypatch):
+def test_active_checkin_without_prior_booking_allows_editing(monkeypatch):
     import app
     import visitor_editor
     import customtkinter as ctk
@@ -1017,12 +1017,16 @@ def test_future_visit_missing_appointment_id_allows_date_draft_but_does_not_post
         visitor_editor.open_visitor_editor(
             root, rec, remote_details={
                 "visitorId": "1649", "visitorGroupName": "Hóspedes Vale",
-                "cards": [{"cardNo": "123456789"}]})
+                "visitorGivenName": "Nome composto", "visitorFamilyName": "Sobrenome composto",
+                "remark": "RESERVA-TESTE", "cards": [{"cardNo": "123456789"}]})
         root.update_idletasks()
         popup = next(x for x in root.winfo_children()
                      if isinstance(x, ctk.CTkToplevel))
         assert popup.title().startswith("Editar cadastro")
-        assert popup._missing_appointment_link is True
+        assert not hasattr(popup, "_missing_appointment_link")
+        assert popup._editor_field_vars["first"].get() == "Nome composto"
+        assert popup._editor_field_vars["last"].get() == "Sobrenome composto"
+        assert popup._editor_field_vars["reservation"].get() == "RESERVA-TESTE"
         assert popup._editor_field_vars["entry"].get() == "06/11/2099"
         popup._editor_field_vars["entry"].set("07/11/2099")
         assert popup._editor_field_vars["entry"].get() == "07/11/2099"

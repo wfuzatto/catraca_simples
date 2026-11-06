@@ -315,6 +315,84 @@ def test_find_registration_missing_stays_unresolved():
                                           "2099-11-01T23:59:59-03:00") is None
 
 
+def _raw_registration(record_id="active-record", *, visitor="vis-1", status="0"):
+    return {
+        "recordId": record_id, "visitorStatus": status,
+        "visitorBaseInfo": {
+            "visitorId": visitor, "visitStartTime": "2099-10-31T12:00:00-03:00",
+            "visitEndTime": "2099-11-01T23:59:59-03:00",
+            "visitorGroup": "Hóspedes Vale", "fullName": "ANA TESTE",
+        },
+        "visitorCardInfo": {"cardNumber": "123456"},
+    }
+
+
+def test_raw_registration_retains_card_group_and_filters_checked_out_records():
+    active = _raw_registration()
+    closed = [_raw_registration(f"closed-{status}", status=status)
+              for status in ("1", "2", "3", "4")]
+    api, session = client({"code": "0", "data": {
+        "list": [*closed, active], "totalNum": 5}})
+    found = api.find_registration_record(
+        "vis-1", "2099-10-31T12:00:00-03:00", "2099-11-01T23:59:59-03:00",
+        active_only=True)
+    assert found == active
+    assert found["visitorBaseInfo"]["visitorGroup"] == "Hóspedes Vale"
+    assert found["visitorCardInfo"]["cardNumber"] == "123456"
+    assert len(session.calls) == 1
+
+
+def test_active_registration_lookup_does_not_return_closed_visit():
+    closed = _raw_registration(status="1")
+    api, _ = client({"code": "0", "data": {"list": [closed], "totalNum": 1}})
+    args = ("vis-1", "2099-10-31T12:00:00-03:00", "2099-11-01T23:59:59-03:00")
+    assert api.find_registration_record(*args, active_only=True) is None
+    assert api.find_registration_record(*args) == closed
+
+
+def test_registration_lookup_paginates_in_hundreds_and_deduplicates_same_record():
+    import json
+    active = _raw_registration()
+    first_page = [_raw_registration(f"other-{i}", visitor=f"other-{i}") for i in range(99)]
+    api, session = client([
+        {"code": "0", "data": {"list": [*first_page, active], "totalNum": 101}},
+        {"code": "0", "data": {"list": [active], "totalNum": 101}},
+    ])
+    found = api.find_registration_record(
+        "vis-1", "2099-10-31T12:00:00-03:00", "2099-11-01T23:59:59-03:00",
+        active_only=True)
+    assert found == active
+    requests = [json.loads(request["data"]) for _, request in session.calls]
+    assert [request["pageNo"] for request in requests] == [1, 2]
+    assert [request["pageSize"] for request in requests] == [100, 100]
+    assert all(url.endswith("/visitor/v1/register/getVistorRegisterRecord")
+               for url, _ in session.calls)
+
+
+def test_registration_lookup_rejects_conflicting_duplicate_record_between_pages():
+    active = _raw_registration()
+    changed = {**active, "visitorCardInfo": {"cardNumber": "999999"}}
+    first_page = [_raw_registration(f"other-{i}", visitor=f"other-{i}") for i in range(99)]
+    api, _ = client([
+        {"code": "0", "data": {"list": [*first_page, active], "totalNum": 101}},
+        {"code": "0", "data": {"list": [changed], "totalNum": 101}},
+    ])
+    with pytest.raises(HikError, match="mudou durante a consulta"):
+        api.find_registration_record(
+            "vis-1", "2099-10-31T12:00:00-03:00", "2099-11-01T23:59:59-03:00",
+            active_only=True)
+
+
+def test_registration_lookup_rejects_two_different_active_records_for_same_visit():
+    api, _ = client({"code": "0", "data": {
+        "list": [_raw_registration("active-a"), _raw_registration("active-b")],
+        "totalNum": 2}})
+    with pytest.raises(HikError, match="Múltiplos registros"):
+        api.find_registration_record(
+            "vis-1", "2099-10-31T12:00:00-03:00", "2099-11-01T23:59:59-03:00",
+            active_only=True)
+
+
 def test_real_visitor_api_paths_include_only_visitor_level_and_local_validity():
     import json
     from core import verify_visitor_access_plan, registration_payload, Visitor, parse_local
@@ -408,6 +486,7 @@ def test_valid_times_survives_both_visitor_appointment_and_checkin_payloads(vali
 
 def test_edit_existing_visitor_uses_update_endpoint_and_original_id():
     import json
+    from copy import deepcopy
     api, session = client({"code": "0", "data": {"appointRecordId": "updated-record"}})
     info = {
         "visitStartTime": "2026-11-02T09:00:00-03:00",
@@ -417,6 +496,7 @@ def test_edit_existing_visitor_uses_update_endpoint_and_original_id():
             "cards": [{"cardNo": "123456"}]
         }}],
     }
+    original = deepcopy(info)
     result = api.update_registered_visitor("original-record", "existing-visitor", info, [{"id":"g1","name":"DAY_USE"}])
     assert result == "updated-record"
     assert len(session.calls) == 1
@@ -425,6 +505,24 @@ def test_edit_existing_visitor_uses_update_endpoint_and_original_id():
     body = json.loads(request["data"])
     assert body["appointRecordId"] == "original-record"
     assert body["visitorInfoList"][0]["VisitorInfo"]["visitorId"] == "existing-visitor"
+    assert body["visitorInfoList"][0]["VisitorInfo"]["watchListInfo"] == [
+        {"enableRegister": 1, "ID": "0", "Type": "1"}]
+    assert info == original
+
+
+def test_edit_preserves_existing_watchlist_without_mutating_input():
+    import json
+    from copy import deepcopy
+    api, session = client({"code": "0", "data": {}})
+    info = _visitor_checkin_fixture()
+    watchlist = [{"enableRegister": 1, "ID": "approved-visitor", "Type": "1"}]
+    info["visitorInfoList"][0]["VisitorInfo"]["watchListInfo"] = watchlist
+    original = deepcopy(info)
+    api.update_registered_visitor(
+        "active-checkin", "existing-visitor", info, [{"id": "23", "name": "DAY_USE"}])
+    body = json.loads(session.calls[0][1]["data"])
+    assert body["visitorInfoList"][0]["VisitorInfo"]["watchListInfo"] == watchlist
+    assert info == original
 
 
 def test_edit_visitor_rejects_missing_credential_before_network():
