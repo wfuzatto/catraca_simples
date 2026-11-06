@@ -326,12 +326,17 @@ def _registration(app):
     _field(start_area, "Entrada (DD/MM/AAAA)", app.start, required=True)
     end_area = ctk.CTkFrame(ticket_row, fg_color="transparent")
     end_area.grid(row=0, column=2, sticky="ew", padx=(9, 0))
-    _field(end_area, "Saída (DD/MM/AAAA)", app.end, required=True)
+    app.end_entry = _field(end_area, "Saída (calculada automaticamente)", app.end,
+                           required=True)
+    # O próprio Tk mantém o texto selecionável, sem permitir digitar ou
+    # colar alterações. app.calculate() ainda pode atualizar via StringVar.
+    app.end_entry.configure(state="readonly")
     app.ticket_cells = [ticket_area, start_area, end_area]
     app.start.trace_add("write", lambda *_: app.calculate())
     _text(period,
-          "Datas apenas. A validade usa horas protegidas em Configurações (padrão 00:00:00–23:59:59); "
-          "o acesso nas catracas segue a agenda ACQUAVALE aplicada no HikCentral.",
+          "Informe apenas a data de entrada. A saída é calculada pelo tipo de ingresso e não pode ser editada. "
+          "Após cada cadastro concluído, o formulário volta para hoje e 1 dia. "
+          "A agenda ACQUAVALE continua controlando o horário das catracas.",
           color=MUTED, size=11).pack(anchor="w", pady=(10, 0))
 
 

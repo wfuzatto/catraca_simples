@@ -22,12 +22,13 @@ class Value:
 
 class Form:
     _set_current_ticket_period = app.ValeApp._set_current_ticket_period
+    _reset_registration_period_after_success = app.ValeApp._reset_registration_period_after_success
     calculate = app.ValeApp.calculate
 
     def __init__(self):
         self.settings = default_settings()
         self.ticket = Value("1 dia")
-        self.start, self.end = Value(), Value()
+        self.start, self.end, self.status = Value(), Value(), Value()
 
 
 def moment(hour, minute):
@@ -91,6 +92,67 @@ def test_registration_never_refreshes_form_from_clock():
     assert "_refresh_ticket_period_if_automatic" not in source
     assert "_set_current_ticket_period" not in source
     assert "visitor_period_from_dates(" in source
+
+
+def test_success_resets_future_two_day_ticket_to_today_one_day():
+    form = Form()
+    form.ticket.set("2 dias")
+    form.start.set("07/11/2026")
+    form.calculate()
+    assert form.end.get() == "08/11/2026"
+    form._reset_registration_period_after_success(
+        datetime(2026, 11, 5, 21, 9, tzinfo=TZ))
+    assert form.ticket.get() == "1 dia"
+    assert form.start.get() == "05/11/2026"
+    assert form.end.get() == "05/11/2026"
+
+
+def test_reset_recomputes_date_from_current_time_after_midnight():
+    form = Form()
+    form.ticket.set("3 dias")
+    form.start.set("07/11/2099")
+    form.calculate()
+    form._reset_registration_period_after_success(
+        datetime(2026, 11, 6, 0, 0, tzinfo=TZ))
+    assert (form.ticket.get(), form.start.get(), form.end.get()) == (
+        "1 dia", "06/11/2026", "06/11/2026")
+
+
+def test_reset_finds_other_existing_single_day_ticket():
+    form = Form()
+    form.settings["tickets"].pop("1 dia")
+    form.settings["tickets"]["Diária"] = {
+        "days": 1, "checkin": "09:00", "checkout": "17:00"}
+    form.ticket.set("2 dias")
+    form.start.set("07/11/2099")
+    form.calculate()
+    form._reset_registration_period_after_success(
+        datetime(2026, 11, 5, 9, 0, tzinfo=TZ))
+    assert (form.ticket.get(), form.start.get(), form.end.get()) == (
+        "Diária", "05/11/2026", "05/11/2026")
+
+
+def test_missing_one_day_ticket_blocks_reuse_of_previous_multi_day():
+    form = Form()
+    form.settings["tickets"].pop("1 dia")
+    form.ticket.set("3 dias")
+    form.start.set("07/11/2099")
+    form.calculate()
+    form._reset_registration_period_after_success(
+        datetime(2026, 11, 5, 11, 0, tzinfo=TZ))
+    assert form.ticket.get() == ""
+    assert form.start.get() == "05/11/2026"
+    assert form.end.get() == "05/11/2026"
+    assert "Configure um ingresso de 1 dia" in form.status.get()
+
+
+def test_success_reset_cannot_run_before_error_handler():
+    source = inspect.getsource(app.ValeApp.register)
+    assert source.count("self._reset_registration_period_after_success()") == 1
+    assert source.index("if error:") < source.index(
+        "self._reset_registration_period_after_success()")
+    assert "if pending:" in source
+    assert "return" in source
 
 def test_first_registration_timestamp_survives_history_updates(monkeypatch):
     import visitor_history

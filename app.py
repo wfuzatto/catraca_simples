@@ -252,6 +252,30 @@ class ValeApp(tk.Tk):
         self.start.set((now or datetime.now(TZ)).astimezone(TZ).strftime("%d/%m/%Y"))
         self.calculate()
 
+    def _reset_registration_period_after_success(self, now=None):
+        """Próximo atendimento sempre começa HOJE com ingresso de um dia.
+
+        Nunca é chamado em erro/cadastro parcial: preserva as datas e
+        o checkpoint de uma operação que exige conciliação no HikCentral.
+        """
+        tickets = self.settings.get("tickets") or {}
+        one_day = [
+            name for name, config in tickets.items()
+            if isinstance(config, dict) and str(config.get("days", "")) == "1"
+        ]
+        preferred = "1 dia" if "1 dia" in one_day else (one_day[0] if one_day else "")
+        self.ticket.set(preferred)
+        # O dia é obtido SOMENTE depois da confirmação da operação, não
+        # no início da requisição (atendimentos podem atravessar meia-noite).
+        self._set_current_ticket_period(now)
+        if not preferred:
+            # Não reutilizar o período anterior se Configurações não contiver
+            # ingresso de 1 dia. Deixar a escolha vazia bloqueia novo envio.
+            self.end.set(self.start.get())
+            self.status.set(
+                "Cadastro concluído. Configure um ingresso de 1 dia antes "
+                "do próximo atendimento.")
+
     def calculate(self):
         """Atualiza apenas a DATA de saída; jamais reescreve Entrada."""
         try:
@@ -796,8 +820,9 @@ class ValeApp(tk.Tk):
                     else (self.connected_groups[0] if not preferred and self.connected_groups else ""))
                 self.photo_data, self.preview = b"", None
                 self.photo_widget.configure(image="", text="SEM FOTO")
-                # Preservar o período escolhido para o próximo visitante.
-                # Nunca substituir entrada/saída pelo relógio após cadastro.
+                # Somente após cadastro efetivamente concluído: não herdar
+                # data futura ou ingresso de vários dias no próximo atendimento.
+                self._reset_registration_period_after_success()
 
             # Spinner visible only after the operator answered SIM to the preview.
             self.task(work, finish, registration_loading=True)

@@ -34,6 +34,11 @@ def test_register_button_visible_and_form_is_simplified(monkeypatch):
         # O caixa recebe somente datas; horas ficam na área protegida.
         assert root.start.get() == "31/10/2099"
         assert root.end.get() == "01/11/2099"
+        assert root.end_entry.cget("state") == "readonly"
+        # O texto permanece atualizável pelo cálculo programático.
+        root.start.set("07/11/2099")
+        root.update_idletasks()
+        assert root.end.get() == "08/11/2099"
         assert root.s_validity_start.get() == "00:00:00"
         assert root.s_validity_end.get() == "23:59:59"
         root.book.select(root.settings_tab)
@@ -860,5 +865,30 @@ def test_new_registration_date_fields_do_not_include_or_autofill_clock(monkeypat
         root.update_idletasks()
         assert root.start.get() == "05/11/2099"
         assert root.end.get() == "07/11/2099"
+    finally:
+        root.destroy()
+
+@pytest.mark.skipif(os.name != "nt", reason="Tk somente no Windows.")
+def test_next_guest_reset_follows_success_and_exit_stays_readonly(monkeypatch):
+    from datetime import datetime
+    import app
+    from core import TZ, default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    root = app.ValeApp()
+    try:
+        root.update()
+        root.ticket.set("2 dias")
+        root.start.set("07/11/2099")
+        root.update_idletasks()
+        assert root.end.get() == "08/11/2099"
+        assert root.end_entry.cget("state") == "readonly"
+        root._reset_registration_period_after_success(
+            datetime(2026, 11, 5, 21, 9, tzinfo=TZ))
+        root.update_idletasks()
+        assert root.ticket.get() == "1 dia"
+        assert root.start.get() == "05/11/2026"
+        assert root.end.get() == "05/11/2026"
+        assert root.end_entry.cget("state") == "readonly"
     finally:
         root.destroy()
