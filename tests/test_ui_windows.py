@@ -713,6 +713,7 @@ def test_editor_allows_replacement_photo_when_download_fails(monkeypatch):
             "access_names": ["VISITANTE_VALE"],
             "door_ids": ["A", "B", "C"],
             "_requires_access_confirmation": True,
+            "_original_appointment_id": "appt-1009",
             "photo_url": "opaque-photo-ref",
             "card_number": "123123123",
         }
@@ -754,6 +755,7 @@ def test_editor_group_select_uses_connected_group_list(monkeypatch):
             "origin": "HikCentral", "access_names": ["VISITANTE_VALE"],
             "door_ids": ["A", "B", "C"], "card_number": "123123123",
             "_requires_access_confirmation": True,
+            "_original_appointment_id": "appt-1009",
         }
         visitor_editor.open_visitor_editor(
             root, record, remote_details={"visitorId": "1009", "cards": [

@@ -340,6 +340,25 @@ def _same_visit(appointment, record):
         return False
 
 
+def original_appointment_identifier(appointment: dict) -> str:
+    """Extrai o identificador da RESERVA; não confundir com recordId de check-in.
+
+    appointRecordId é o campo documentado para a edição de check-in.
+    appointID é aceito para as versões que o retornam na listagem. Quando
+    ambos existirem e divergirem, falhar fechado sem escolher um ID arbitrário.
+    """
+    if not isinstance(appointment, dict):
+        return ""
+    first = str(appointment.get("appointRecordId") or "").strip()
+    legacy = str(appointment.get("appointID") or "").strip()
+    if first and legacy and first != legacy:
+        raise HikError("Reserva retornou identificadores divergentes; edição bloqueada.")
+    value = first or legacy
+    if len(value) > 64:
+        raise HikError("ID de reserva inválido; edição bloqueada.")
+    return value
+
+
 def find_original_appointment(client, record, *, max_pages=10):
     """Localiza a reserva do MESMO visitante e intervalo; ambiguidades bloqueiam edição."""
     if not record.get("visitor_id") or not record.get("entry_at") or not record.get("exit_at"):
@@ -419,8 +438,10 @@ def resolve_remote_edit_record(client, record):
 
     appointment_levels = []
     appointment_error = ""
+    appointment_id = ""
     try:
         appointment = find_original_appointment(client, record)
+        appointment_id = original_appointment_identifier(appointment)
         appointment_levels = parse_access_levels(appointment)
         appt_info = appointment.get("visitorInfo") or appointment.get("VisitorInfo") or {}
         appt_group = str(appt_info.get("visitorGroupName") or "")
@@ -530,6 +551,8 @@ def resolve_remote_edit_record(client, record):
         _access_assurance_type=("local_acknowledged" if receipt else (
             "remote_level" if expected is not None else "needs_consent")))
     result["_original_checkin_id"] = checkin_id
+    result["_original_appointment_id"] = appointment_id
+    result["_appointment_lookup_error"] = appointment_error
     return result, data
 
 

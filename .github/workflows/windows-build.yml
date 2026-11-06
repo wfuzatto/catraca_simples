@@ -47,7 +47,7 @@ jobs:
             python -m pytest -q "$uiCase"
             if ($LASTEXITCODE -ne 0) { throw "Teste de interface falhou: $uiCase" }
           }
-          python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py face_capture_logic.py face_capture_ui.py remote_history.py access_passages.py pending_recovery.py access_receipt.py transaction_cleanup.py
+          python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py face_capture_logic.py face_capture_ui.py remote_history.py access_passages.py pending_recovery.py access_receipt.py visitor_edit_transaction.py transaction_cleanup.py
           if ($LASTEXITCODE -ne 0) { throw "Compilacao dos modulos falhou" }
       - name: Empacotar EXE autocontido
         shell: pwsh

@@ -120,10 +120,19 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         record.get("origin") == "HikCentral" and
         has_remote_card and not card_number)
     if record.get("origin") == "HikCentral" and not readonly:
-        if not has_remote_face and not has_remote_card and not photo_error:
+        if not record.get("_original_appointment_id"):
+            readonly = True
+            readonly_reason = (
+                "O check-in existe, mas a reserva original não retornou "
+                "appointRecordId para edição segura. Não alteramos datas "
+                "sem validar esse vínculo no HikCentral.")
+        elif not has_remote_face and not has_remote_card and not photo_error:
             readonly = True
             readonly_reason = "A OpenAPI não confirmou nenhuma credencial original."
 
+    # Título coerente com a capacidade efetiva depois das verificações.
+    dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro")
+                 + " — " + record["visitor_id"])
     ctk.CTkLabel(body, text="Foto atual no HikCentral", font=("Segoe UI", 14, "bold")).pack(pady=(0, 5))
     photo_panel = ctk.CTkLabel(
         body, text="Foto não disponível na API", width=200, height=200,
@@ -314,6 +323,10 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
             if not record.get("registration_record_id"):
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
+            if not record.get("_original_appointment_id"):
+                raise ValueError(
+                    "A reserva não retornou appointRecordId. Atualize a lista; "
+                    "é inseguro editar com o ID do check-in.")
             if not messagebox.askyesno(
                     "Confirmar atualização de visitante",
                     "Visitante ID: " + str(record["visitor_id"]) +
@@ -374,79 +387,40 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     raise ValueError("Pontos originais alterados; edição bloqueada.")
             # Ao trocar de grupo, a diferença de nível/catracas é intencional,
             # mas somente no plano homologado validado nesta mesma consulta.
-            journal = app_dir() / "visitor_edit_inflight.json"
-            if journal.exists():
-                raise ValueError("Existe edição anterior com resultado incerto.")
-            _write_json_atomic(journal, {"visitor_id": record["visitor_id"],
-                "record_id": old_id, "status": "update_inflight"})
-            # No retry if the remote update is accepted but its response is lost.
-            new_id = client.update_registered_visitor(
-                old_id, record["visitor_id"], payload, selected)
-            save_registration({**record, "first": obj.first_name, "last": obj.last_name,
-                "group": new_group, "access_names": requested_level,
-                "access_level_ids": [str(selected[0]["id"])], "door_ids": list(doors),
-                "reservation": obj.reservation, "entry_at": payload["visitStartTime"],
-                "exit_at": payload["visitEndTime"], "registration_record_id": new_id,
-                "state": "reaplicação pendente", "checkin_state": "a confirmar"})
-            _write_json_atomic(journal, {"visitor_id": record["visitor_id"],
-                "record_id": new_id, "status": "update_acknowledged"})
-            client.apply(record["visitor_id"], doors)
-            report = client.delivery_report(record["visitor_id"], doors,
-                expect_face=bool(obj.photo_jpeg), expect_card=bool(obj.card_number))
-            set_history_status(record["visitor_id"], state=report["state"],
-                               checkin_state="a confirmar")
-            report["access_receipt_saved"] = False
-            if str(report.get("state") or "").casefold() == "confirmed":
-                # Readback consultivo: o ID devolvido pelo UPDATE pode ser
-                # appointRecordId e mudar após edição. A prova local só é
-                # escrita quando o MESMO visitante/período foi reencontrado.
-                try:
-                    actual_id = client.find_existing_registration(
-                        record["visitor_id"], payload["visitStartTime"],
-                        payload["visitEndTime"])
-                    if actual_id:
-                        verified_record = {
-                            **record,
-                            "first": obj.first_name, "last": obj.last_name,
-                            "reservation": obj.reservation, "group": new_group,
-                            "entry_at": payload["visitStartTime"],
-                            "exit_at": payload["visitEndTime"],
-                            "registration_record_id": str(actual_id),
-                            "access_names": [str(selected[0]["name"])],
-                            "door_ids": list(doors),
-                            "state": report["state"],
-                            "checkin_state": "a confirmar",
-                        }
-                        receipt = make_access_receipt(
-                            verified_record, level_id=selected[0]["id"],
-                            door_ids=doors)
-                        save_registration({**verified_record, "access_receipt": receipt})
-                        report["access_receipt_saved"] = True
-                except (ValueError, RuntimeError, OSError, KeyError):
-                    # A atualização do servidor já foi aceita. Uma falha
-                    # em reler ou salvar evidência local não justifica
-                    # repetir o POST de escrita nem fingir confirmação.
-                    pass
-            journal.unlink(missing_ok=True)
-            return report
+            from visitor_edit_transaction import update_existing_visit
+            return update_existing_visit(
+                client, record, payload, selected, doors, obj, new_group,
+                requested_level)
         def done(result, error):
-            app.refresh_history()
             if error:
-                messagebox.showwarning("Edição não confirmada",
-                    str(error) + "\nConfira no HikCentral antes de repetir a edição.",
-                    parent=app)
-            else:
-                note = (
-                    " A confirmação do nível foi registrada nesta estação "
-                    "para evitar avisos repetidos sobre o mesmo check-in."
-                    if result.get("access_receipt_saved") else
-                    " O vínculo do nível continua não verificável pela OpenAPI; "
-                    "a confirmação poderá ser solicitada novamente.")
-                messagebox.showinfo("Atualização enviada",
-                    "Mesmo visitante atualizado. Entrega: " + result["state"] +
-                    ". Consulte o check-in para confirmação." + note, parent=app)
+                # Uma falha pode significar escrita remota parcialmente aceita.
+                # Reabrir o editor só para consulta; não habilitar outro POST
+                # quando houver journal, e manter os dados digitados na tela.
+                if dialog.winfo_exists():
+                    dialog.deiconify()
+                    dialog.grab_set()
+                    dialog.lift()
+                messagebox.showwarning(
+                    "Edição não confirmada",
+                    str(error) + "\n\nConfira a reserva e o check-in no HikCentral "
+                    "antes de repetir. Nenhuma segunda escrita será disparada "
+                    "automaticamente.",
+                    parent=dialog if dialog.winfo_exists() else app)
+                return
+            app.refresh_history()
+            note = (
+                " A confirmação do nível foi registrada nesta estação."
+                if result.get("access_receipt_saved") else
+                " A entrega da credencial ainda requer conferência.")
+            messagebox.showinfo(
+                "Datas e vínculo confirmados",
+                "A mesma pessoa e sua reserva foram localizadas nas novas datas.\n"
+                "ID da reserva: " + str(result["confirmed_appointment_id"]) +
+                "\nID do check-in: " + str(result["confirmed_checkin_id"]) +
+                "\nEntrega: " + result["state"] + "." + note, parent=app)
+            if dialog.winfo_exists():
+                dialog.destroy()
         app.task(work, done)
-        dialog.destroy()
     save_button = ctk.CTkButton(body, text="Salvar e reenviar ao HikCentral",
                                 command=submit,
                                 state="disabled" if readonly else "normal")

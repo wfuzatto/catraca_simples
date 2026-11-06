@@ -414,14 +414,15 @@ class HikCentral:
                            "Confira o HikCentral antes de tentar novamente.")
         return record
 
-    def update_registered_visitor(self, record_id: str, visitor_id: str,
+    def update_registered_visitor(self, appointment_id: str, visitor_id: str,
                                   info: dict, levels: list[dict]) -> str:
-        """Edit existing Visitor check-in; never creates a person or reservation.
+        """Edita o check-in existente usando o ID da RESERVA, não recordId.
 
-        The response may return a new appointRecordId; caller must reconcile.
+        Resposta contém novo appointRecordId (opcional); não é confirmação
+        suficiente. Caller verifica check-in+reserva após a resposta.
         """
-        if not record_id or not visitor_id or not levels:
-            raise HikError("IDs e nível Visitor originais são obrigatórios para edição.")
+        if not appointment_id or not visitor_id or not levels:
+            raise HikError("ID da reserva, Visitor ID e nível são obrigatórios para edição.")
         entries = json.loads(json.dumps(info["visitorInfoList"]))
         if len(entries) != 1 or not entries[0].get("VisitorInfo"):
             raise HikError("Edição exige exatamente um visitante.")
@@ -430,7 +431,7 @@ class HikCentral:
             raise HikError("Informe novamente a credencial original ou substituta para edição segura.")
         visitor_info["visitorId"] = visitor_id
         response = self.post("/artemis/api/visitor/v1/registerment/update", {
-            "appointRecordId": record_id,
+            "appointRecordId": appointment_id,
             "receptionistId": "",
             "visitStartTime": info["visitStartTime"],
             "visitEndTime": info["visitEndTime"],
@@ -440,7 +441,12 @@ class HikCentral:
             "visitorInfoList": entries,
         })
         data = response.get("data") or {}
-        return str(data.get("appointRecordId") or record_id)
+        if not isinstance(data, dict):
+            raise HikError("Resposta de edição sem objeto de IDs; verificar antes de repetir.")
+        returned_visitor = str(data.get("visitorId") or "").strip()
+        if returned_visitor and returned_visitor != visitor_id:
+            raise HikError("Edição retornou Visitor ID divergente. Não repetir a operação.")
+        return str(data.get("appointRecordId") or "").strip()
 
     def find_existing_registration(self, visitor_id: str, start_iso: str, end_iso: str) -> str | None:
         """Somente leitura: verifica check-in anterior antes de qualquer recuperação.

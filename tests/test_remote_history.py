@@ -240,6 +240,8 @@ def test_remote_edit_requires_original_checkin_id_and_level_id():
 
     verified, details = resolve_remote_edit_record(Client(), record)
     assert verified["_remote_verified"] is True
+    assert verified["_original_appointment_id"] == "9"
+    assert verified["_original_checkin_id"] == "40"
     assert verified["access_names"] == ["VISITANTE_VALE"]
     assert verified["door_ids"] == ["0", "1", "2"]
     assert details["visitorId"] == "812"
@@ -472,3 +474,15 @@ def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monke
     assert payload["visitStartTime"] == "2026-11-05T00:00:00-03:00"
     assert payload["visitEndTime"] == "2026-11-06T00:00:00-03:00"
     assert options == {}
+
+
+def test_original_appointment_identifier_not_checkin_id_or_reservation_code():
+    from remote_history import original_appointment_identifier
+    assert original_appointment_identifier({"appointRecordId": "appt-7155",
+                                            "reservationCode": "7155"}) == "appt-7155"
+    assert original_appointment_identifier({"appointID": "appt-legacy"}) == "appt-legacy"
+    assert original_appointment_identifier({"recordId": "check-1654",
+                                            "reservationCode": "7155"}) == ""
+    with pytest.raises(HikError, match="divergentes"):
+        original_appointment_identifier({"appointRecordId": "a",
+                                         "appointID": "b"})
