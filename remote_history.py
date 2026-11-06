@@ -343,7 +343,7 @@ def _same_visit(appointment, record):
 def original_appointment_identifier(appointment: dict) -> str:
     """Extrai o identificador da RESERVA; não confundir com recordId de check-in.
 
-    appointRecordId é o campo documentado para registerment/update.
+    appointRecordId é o campo documentado para a edição de check-in.
     appointID é aceito para as versões que o retornam na listagem. Quando
     ambos existirem e divergirem, falhar fechado sem escolher um ID arbitrário.
     """
