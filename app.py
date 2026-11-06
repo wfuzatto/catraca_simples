@@ -1078,9 +1078,16 @@ class ValeApp(tk.Tk):
                     str(error))
                 self.history_page_label.set("Consulta central indisponível")
                 return
+            # Defesa adicional: a OpenAPI pode devolver também visitas que
+            # se sobrepõem ao intervalo. O filtro visível é SOMENTE a data
+            # de INÍCIO VÁLIDO, e também exige correspondência do nome.
+            # Isso impede mostrar a visita de 06/11 numa pesquisa 05/11.
+            verified_rows = filter_local_history_by_entry_date(
+                result["rows"], start_iso, end_iso, name)
+            excluded = len(result["rows"]) - len(verified_rows)
             local_index = {r["visitor_id"]: r for r in local_rows}
             rows = []
-            for remote in result["rows"]:
+            for remote in verified_rows:
                 local = local_index.get(remote["visitor_id"])
                 # Os privilégios locais só podem ser usados se o mesmo registro
                 # e período continuarem confirmados remotamente.
@@ -1113,14 +1120,17 @@ class ValeApp(tk.Tk):
                     row["state"] = local.get("state", "não verificada")
                 rows.append(row)
             description = (
-                f"HikCentral: {len(rows)} check-ins nesta página; "
-                f"{result['total']} check-ins no período selecionado."
-                + (" Busca limitada ao nome informado." if name.strip() else ""))
+                f"HikCentral: {len(rows)} check-ins nesta página após filtro de "
+                "início válido e nome. "
+                f"API retornou {result['total']} registro(s) antes da conferência local."
+                + (f" {excluded} registro(s) fora da seleção descartado(s) "
+                   "nesta página." if excluded else ""))
             self._show_history_rows(rows, description)
             # Somente visitas confirmadas no período entram na consulta ACS.
             self._load_history_passages(rows, description)
             self.history_page_label.set(
-                f"Página {page} • {result['total']} registros • {page_size} por página")
+                f"Página {page} • {result['total']} registro(s) na API, antes da "
+                f"validação de datas • {page_size} por página")
             self.history_next_button.configure(
                 state="normal" if result["has_next"] else "disabled")
             self.history_previous_button.configure(
