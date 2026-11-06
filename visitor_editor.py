@@ -130,6 +130,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             readonly = True
             readonly_reason = "A OpenAPI não confirmou nenhuma credencial original."
 
+    # Título coerente com a capacidade efetiva depois das verificações.
+    dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro")
+                 + " — " + record["visitor_id"])
     ctk.CTkLabel(body, text="Foto atual no HikCentral", font=("Segoe UI", 14, "bold")).pack(pady=(0, 5))
     photo_panel = ctk.CTkLabel(
         body, text="Foto não disponível na API", width=200, height=200,
