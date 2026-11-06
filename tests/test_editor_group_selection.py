@@ -1,4 +1,4 @@
-"""Group selection in the edit dialog must use the same approved mapping as registration."""
+"""Edição preserva nível homologado do grupo original, sem preferência do caixa."""
 import pytest
 
 from core import default_settings
@@ -11,7 +11,7 @@ def test_current_group_uses_configured_visitor_level():
     assert selected_editor_access("Hóspedes Vale", groups, settings) == ["VISITANTE_VALE"]
 
 
-def test_switch_group_uses_new_level_and_requires_remote_resolve_on_save():
+def test_mapping_for_original_group_returns_corresponding_visitor_level():
     settings = default_settings()
     groups = ["Day use", "Hóspedes Serra", "Hóspedes Vale"]
     assert selected_editor_access("Hóspedes Serra", groups, settings) == ["VISITANTE_SERRA"]
@@ -34,12 +34,17 @@ def test_disallows_nonapproved_access_level_even_if_saved_in_config():
         selected_editor_access("Hóspedes Vale", ["Hóspedes Vale"], settings)
 
 
-def test_preferred_group_lock_is_kept_for_editor():
+def test_preferred_group_does_not_override_existing_visitor_group():
+    # A preferência bloqueia somente NOVOS cadastros neste caixa.
+    # Um visitante existente de Serra deve manter Serra sem cair em Vale.
     settings = default_settings()
     settings["preferred_group"] = "Hóspedes Vale"
-    with pytest.raises(ValueError, match="bloqueado"):
-        selected_editor_access("Hóspedes Serra", ["Hóspedes Vale", "Hóspedes Serra"], settings)
-    assert selected_editor_access("Hóspedes Vale", ["Hóspedes Vale"], settings) == ["VISITANTE_VALE"]
+    assert selected_editor_access(
+        "Hóspedes Serra", ["Hóspedes Vale", "Hóspedes Serra"], settings
+    ) == ["VISITANTE_SERRA"]
+    assert selected_editor_access(
+        "Hóspedes Vale", ["Hóspedes Vale"], settings
+    ) == ["VISITANTE_VALE"]
 
 
 def test_editor_builds_payload_with_selected_group_without_affecting_valid_times():
