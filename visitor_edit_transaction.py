@@ -5,12 +5,16 @@ Se a resposta de escrita não puder ser conciliada, deixa um journal auditável
 e NÃO substitui datas ou IDs do histórico local.
 """
 from pathlib import Path
+from datetime import datetime
+import re
 import hashlib
 import json
 import time
-from core import _write_json_atomic, VALE_VISITOR_LEVELS
+from core import _write_json_atomic, VALE_VISITOR_LEVELS, TZ
 from remote_history import visitor_details
 from edit_journal import select_edit_journal
+from edit_errors import EditorFieldError
+from edit_request import validate_edit_request, preserve_visitor_metadata
 from visitor_history import save_registration, set_history_status
 from access_receipt import make_access_receipt
 from hikcentral import HikError
@@ -19,8 +23,8 @@ from hikcentral import HikError
 def _confirmed_edit(client, vid, payload, visitor, group, returned_id):
     """Confere os campos gravados, sem escrever ou criar outra reserva."""
     row = client.find_registration_record(
-        vid, payload["visitStartTime"], payload["visitEndTime"], active_only=True)
-    if not row:
+        vid, payload["visitStartTime"], payload["visitEndTime"], active_only=True, record_id=returned_id)
+    if not row or str(row.get("visitorStatus")) != "0":
         raise ValueError("O HikCentral NÃO confirmou o check-in nas novas datas.")
     actual = str(row.get("recordId") or "")
     if returned_id and actual != returned_id:
@@ -67,91 +71,112 @@ def update_existing_visit(client, record: dict, payload: dict,
                           selected: list[dict], doors: list[str],
                           visitor, group: str, requested_level: list[str],
                           *, journal_path: Path | None = None) -> dict:
+    validate_edit_request(payload)
     vid = str(record.get("visitor_id") or "").strip()
-    original_checkin = str(record.get("registration_record_id") or "").strip()
-    if not vid or not original_checkin or not selected or not doors:
-        raise ValueError("Edição exige Visitor ID, check-in e nível de acesso confirmados.")
-
-    # Não permitir que o mesmo editor troque um visitante de grupo, mantendo
-    # níveis antigos em paralelo. A mudança de grupo exige fluxo específico
-    # de remoção do privilégio anterior e concessão do novo.
+    if not vid or not selected or not doors:
+        raise EditorFieldError({"visit": "Selecione o cadastro do visitante e confirme o nível de acesso."})
+    record = dict(record)
+    chosen = record.get("_selected_checkin_record")
+    if isinstance(chosen, dict):
+        base = chosen.get("visitorBaseInfo") or {}
+        if str(base.get("visitorId") or "") != vid:
+            raise EditorFieldError({"visit": "A visita selecionada pertence a outro visitante."})
+        record.update(registration_record_id=chosen.get("recordId"),
+                      entry_at=base.get("visitStartTime"), exit_at=base.get("visitEndTime"))
+    original_checkin = str(record.get("_selected_checkin_id") or record.get("registration_record_id") or "")
     original_group = str(record.get("group") or "").strip()
+    if record.get("_operator_selected_group"):
+        original_group = group
     if not original_group or str(group).strip() != original_group:
-        raise ValueError(
-            "O grupo do visitante diverge do original. Alteração de grupo "
-            "bloqueada até haver migração de permissões segura.")
-    approved = VALE_VISITOR_LEVELS.get(original_group)
-    if (not approved or list(requested_level) != [approved] or
-            len(selected) != 1 or str(selected[0].get("name") or "") != approved):
-        raise ValueError("Nível Visitor não corresponde ao grupo original.")
-    visitor_entries = payload.get("visitorInfoList") or []
-    try:
-        requested_group = visitor_entries[0]["VisitorInfo"]["visitorGroupName"]
-    except (IndexError, TypeError, KeyError):
-        raise ValueError("Payload de edição não contém grupo original verificável.")
-    if str(requested_group).strip() != original_group:
-        raise ValueError("O payload altera o grupo original; edição bloqueada.")
+        raise EditorFieldError({"group": "O grupo do visitante diverge do original. Alteração de grupo exige conferir o grupo atual."},
+                               choices={"group": [original_group] if original_group else []})
+    approved = VALE_VISITOR_LEVELS.get(group)
+    if (not approved or list(requested_level) != [approved] or len(selected) != 1 or
+            str(selected[0].get("name") or "") != approved):
+        raise EditorFieldError({"group": "Selecione o nível Visitor correspondente ao grupo."})
+    if payload["visitorInfoList"][0]["VisitorInfo"]["visitorGroupName"].strip() != group:
+        raise EditorFieldError({"group": "O payload altera o grupo original; selecione o grupo correto."})
 
-    # O ID retornado pelo registerment é o recordId da consulta de check-ins.
-    # A reserva feita ANTES do check-in tem outro ID e pode sair da listagem.
     journal = journal_path or select_edit_journal(vid)
     new_start, new_end = payload["visitStartTime"], payload["visitEndTime"]
-    requested_hash = hashlib.sha256(json.dumps({
-        "payload": payload, "group": group,
-    }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
-    summary = {
-        "visitor_id": vid, "original_checkin_id": original_checkin,
-        "old_entry_at": record["entry_at"], "old_exit_at": record["exit_at"],
+    requested_hash = hashlib.sha256(json.dumps({"payload": payload, "group": group},
+        sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    actual_appointment = str(record.get("appointment_id") or record.get("_original_appointment_id") or "")
+    summary = {"visitor_id": vid, "original_checkin_id": original_checkin,
+        "old_entry_at": record.get("entry_at", ""), "old_exit_at": record.get("exit_at", ""),
         "requested_entry_at": new_start, "requested_exit_at": new_end,
-        "requested_fields_sha256": requested_hash,
-    }
+        "requested_fields_sha256": requested_hash}
     if journal.exists():
         pending = json.loads(journal.read_text(encoding="utf-8"))
-        if (pending.get("visitor_id") != vid or
-                pending.get("requested_fields_sha256") != requested_hash or
+        if (pending.get("visitor_id") != vid or pending.get("requested_fields_sha256") != requested_hash or
                 pending.get("status") not in ("update_acknowledged", "link_verified")):
-            raise ValueError(
-                "Existe edição com resultado incerto para este visitante. "
-                "Confira os dados no HikCentral antes de outra alteração.")
-        # Repetir Salvar após uma leitura atrasada retoma SOMENTE consultas.
+            raise EditorFieldError({"visit": "Existe edição com resultado incerto para este visitante. Confira a pendência antes de outro envio."})
         returned_record_id = str(pending.get("returned_record_id") or "")
+        operation = pending.get("operation", "update")
+        actual_appointment = pending.get("appointment_id", actual_appointment)
     else:
-        old = client.find_registration_record(
-            vid, record["entry_at"], record["exit_at"], active_only=True)
-        if not old or str(old.get("recordId") or "") != original_checkin:
-            raise ValueError("Check-in original divergiu ou foi encerrado. Pesquise novamente.")
+        try:
+            old = client.find_registration_record(vid, record.get("entry_at") or new_start,
+                record.get("exit_at") or new_end, active_only=False, record_id=original_checkin)
+        except HikError as exc:
+            raise EditorFieldError({"visit": "Selecione qual visita deste visitante deseja alterar."},
+                choices={"visit": getattr(exc, "candidates", [])}) from exc
+        if not old or (original_checkin and str(old.get("recordId") or "") != original_checkin):
+            raise EditorFieldError({"visit": "O check-in original mudou. Selecione a visita atual para continuar."})
+        original_checkin = str(old["recordId"])
+        summary["original_checkin_id"] = original_checkin
         from hikcentral import normalize
-        if normalize(str((old.get("visitorBaseInfo") or {}).get("visitorGroup") or "")) != normalize(group):
-            raise ValueError("Grupo original divergiu. Pesquise novamente antes de editar.")
+        live_group = str((old.get("visitorBaseInfo") or {}).get("visitorGroup") or "")
+        if live_group and normalize(live_group) != normalize(group):
+            raise EditorFieldError({"group": "Selecione o grupo atual do visitante: " + live_group}, choices={"group": [live_group]})
+        remote_state = str(old.get("visitorStatus", ""))
+        if remote_state not in ("0", "1", "2", "3", "4"):
+            operation = record.get("_operator_edit_operation")
+            if operation not in ("update", "renew"):
+                raise EditorFieldError({"operation": "Selecione atualizar a visita existente ou renovar a visita, pois o estado não retornou."},
+                    choices={"operation": ["Atualizar visita existente", "Renovar visita"]})
+        else:
+            operation = "update" if remote_state == "0" else "renew"
+        if operation == "renew":
+            if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", actual_appointment):
+                raise EditorFieldError({"appointment": "Informe ou selecione a reserva vinculada no HikCentral para renovar esta visita encerrada."})
+            if datetime.fromisoformat(new_end) <= datetime.now(TZ):
+                raise EditorFieldError({"exit": "Para renovar a visita encerrada, informe uma data de saída que ainda não expirou."})
+        try:
+            details = visitor_details(client, vid)
+        except HikError:
+            details = {}
+        info = details.get("VisitorInfo") or details.get("visitorInfo") or details
+        if isinstance(info, dict) and info.get("visitorId") and str(info["visitorId"]) != vid:
+            raise EditorFieldError({"visit": "Não foi possível confirmar o visitante. Selecione o cadastro correto."})
+        detail_group = str(info.get("visitorGroupName") or info.get("visitorGroup") or "") if isinstance(info, dict) else ""
+        if not live_group and detail_group and normalize(detail_group) != normalize(group):
+            raise EditorFieldError({"group": "Selecione o grupo atual do visitante: " + detail_group}, choices={"group": [detail_group]})
+        complete_payload = preserve_visitor_metadata(payload, details)
+        validate_edit_request(complete_payload)
+        summary.update(operation=operation, appointment_id=actual_appointment)
         _write_json_atomic(journal, {**summary, "status": "update_inflight"})
         try:
-            returned_record_id = client.update_registered_visitor(
-                original_checkin, vid, payload, selected)
+            if operation == "renew":
+                returned_record_id = client.register_existing_visitor(vid, complete_payload, selected,
+                    appointment_id=actual_appointment)
+            else:
+                returned_record_id = client.update_registered_visitor(original_checkin, vid, complete_payload, selected)
         except HikError as exc:
             observed = {}
-            for label, start, end in (("old", record["entry_at"], record["exit_at"]),
-                                      ("requested", new_start, new_end)):
+            for label, start, end in (("old", record.get("entry_at") or new_start, record.get("exit_at") or new_end),
+                                     ("requested", new_start, new_end)):
                 try:
                     observed[label] = str(bool(client.find_existing_registration(vid, start, end))).lower()
                 except Exception:
                     observed[label] = "consulta indisponível"
-            _write_json_atomic(journal, {
-                **summary, "status": "update_refused_or_uncertain",
-                "old_checkin_visible": observed["old"],
-                "requested_checkin_visible": observed["requested"],
-            })
-            raise HikError(
-                str(exc) + "\nConsulta posterior (sem gravar): check-in nas datas antigas = "
-                + observed["old"] + "; nas datas novas = " + observed["requested"]
-                + ". Nenhum segundo envio foi realizado.") from exc
-        _write_json_atomic(journal, {
-            **summary, "status": "update_acknowledged",
-            "returned_record_id": returned_record_id})
+            _write_json_atomic(journal, {**summary, "status": "update_refused_or_uncertain",
+                "old_checkin_visible": observed["old"], "requested_checkin_visible": observed["requested"]})
+            raise HikError(str(exc) + "\nConsulta posterior (sem gravar): check-in nas datas antigas = "
+                + observed["old"] + "; nas datas novas = " + observed["requested"] + ". Nenhum segundo envio foi realizado.") from exc
+        _write_json_atomic(journal, {**summary, "status": "update_acknowledged", "returned_record_id": returned_record_id})
 
     actual_checkin = _readback(client, vid, payload, visitor, group, returned_record_id)
-    # O booking ID anterior continua separado do ID de check-in editado.
-    actual_appointment = str(record.get("appointment_id") or
-                             record.get("_original_appointment_id") or "")
 
     # Repete a etapa de associação usada no cadastro original, mas SOMENTE
     # para o MESMO nível homologado. Não cria permissões de outro grupo.
@@ -163,6 +188,7 @@ def update_existing_visit(client, record: dict, payload: dict,
         "group": group, "reservation": visitor.reservation,
         "entry_at": new_start, "exit_at": new_end,
         "registration_record_id": str(actual_checkin),
+        "appointment_id": actual_appointment,
         "access_names": list(requested_level),
         "access_level_ids": [str(selected[0]["id"])],
         "door_ids": list(doors),
@@ -174,7 +200,7 @@ def update_existing_visit(client, record: dict, payload: dict,
     # Só modificar a prova local após correspondência remota dupla.
     save_registration(verified)
     _write_json_atomic(journal, {
-        **summary, "status": "link_verified",
+        **summary, "status": "link_verified", "operation": operation, "appointment_id": actual_appointment,
         "returned_record_id": returned_record_id,
         "confirmed_checkin_id": str(actual_checkin)})
 
@@ -192,6 +218,7 @@ def update_existing_visit(client, record: dict, payload: dict,
         save_registration({
             **verified, "state": report["state"], "access_receipt": receipt})
         report["access_receipt_saved"] = True
+    report["operation"] = operation
     report["confirmed_appointment_id"] = actual_appointment
     report["confirmed_checkin_id"] = str(actual_checkin)
     report["confirmed_group"] = original_group

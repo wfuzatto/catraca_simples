@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.53"
+APP_VERSION = "1.0.0-preview.54"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -492,7 +492,7 @@ def prepare_face_jpeg(image_bytes: bytes, max_bytes: int = 2_000_000) -> bytes:
     raise ValueError("A foto não pôde ser reduzida para menos de 2 MB.")
 
 
-def validate_visitor(v: Visitor, now: datetime | None = None) -> None:
+def validate_visitor(v: Visitor, now: datetime | None = None, *, allow_expired=False) -> None:
     if len(v.first_name.strip()) < 2 or len(v.last_name.strip()) < 2:
         raise ValueError("Informe nome e sobrenome.")
     if not v.group.strip():
@@ -518,7 +518,7 @@ def validate_visitor(v: Visitor, now: datetime | None = None) -> None:
     if v.departure <= v.arrival:
         raise ValueError("Sa\u00edda deve ser posterior \u00e0 entrada.")
     current = now or datetime.now(TZ)
-    if v.departure.astimezone(TZ) <= current.astimezone(TZ):
+    if not allow_expired and v.departure.astimezone(TZ) <= current.astimezone(TZ):
         raise ValueError("O ingresso j\u00e1 expirou. Ajuste a data e hora de sa\u00edda.")
     if len(v.reservation) > 255:
         raise ValueError("N\u00famero da reserva muito longo.")
@@ -535,8 +535,8 @@ def validate_valid_times(value: int) -> int:
     return value
 
 
-def registration_payload(v: Visitor, valid_times: int = 0) -> dict:
-    validate_visitor(v)
+def registration_payload(v: Visitor, valid_times: int = 0, *, editing=False) -> dict:
+    validate_visitor(v, allow_expired=editing)
     validate_valid_times(valid_times)  # Contrato legado; nenhuma limitação é aplicada.
     valid_times = VALE_VALID_TIMES  # Regra obrigatória independentemente do perfil local.
     visitor_info = {

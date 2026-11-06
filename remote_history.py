@@ -409,20 +409,14 @@ def resolve_remote_edit_record(client, record):
     from core import VALE_VISITOR_LEVELS, verify_visitor_access_plan
     from hikcentral import normalize
 
-    if record.get("checkin_state") != "check-in efetuado":
-        raise HikError(
-            "Esta visita não está em check-in ativo. Para renovar após saída ou "
-            "check-out automático, use Visitor Information > Registrar novamente "
-            "no HikCentral. Atualizar o registro antigo não reativa as permissões.")
     visitor_id = str(record.get("visitor_id") or "")
     checkin_id = str(record.get("registration_record_id") or "")
     if not visitor_id or not checkin_id:
         raise HikError("Visitor ID e ID do check-in são necessários para editar.")
     original = client.find_registration_record(
-        visitor_id, record["entry_at"], record["exit_at"], active_only=True)
+        visitor_id, record["entry_at"], record["exit_at"], active_only=False, record_id=checkin_id)
     if (not isinstance(original, dict) or
-            str(original.get("recordId") or "") != checkin_id or
-            str(original.get("visitorStatus")) != "0"):
+            str(original.get("recordId") or "") != checkin_id):
         raise HikError("O check-in original mudou ou não é único; edição bloqueada.")
 
     data = visitor_details(client, visitor_id)
@@ -554,6 +548,8 @@ def resolve_remote_edit_record(client, record):
             "remote_level" if expected is not None else "needs_consent")))
     result["_original_checkin_id"] = checkin_id
     result["_update_record_id"] = checkin_id
+    state = str(original.get("visitorStatus", ""))
+    result["_edit_operation"] = "update" if state == "0" else "renew" if state in ("1", "2", "3", "4") else ""
     result["_original_appointment_id"] = appointment_id
     result["_appointment_lookup_error"] = appointment_error
     return result, data

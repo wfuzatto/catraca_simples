@@ -633,3 +633,32 @@ def test_full_day_calendar_period_is_identical_in_appointment_and_checkin():
     assert checkin["visitEndTime"] == appointment["appointEndTime"]
     assert "09:00" not in appointment["appointStartTime"]
     assert "17:00" not in checkin["visitEndTime"]
+
+
+def test_existing_visitor_renewal_rejects_different_returned_person_id():
+    """Uma resposta com outra pessoa não pode ser tratada como edição concluída."""
+    import json
+    from copy import deepcopy
+    api, session = client({"code": "0", "data": {
+        "visitorId": "unrelated-person", "appointRecordId": "new-checkin"}})
+    info = _visitor_checkin_fixture()
+    original = deepcopy(info)
+    with pytest.raises(HikError, match="Visitor ID"):
+        api.register_existing_visitor("existing-person", info, [{"id": "23", "name": "DAY_USE"}],
+                                      appointment_id="original-booking")
+    assert len(session.calls) == 1
+    path, request = session.calls[0]
+    assert path.endswith("/artemis/api/visitor/v1/registerment")
+    sent = json.loads(request["data"])
+    assert sent["visitorInfoList"][0]["VisitorInfo"]["visitorId"] == "existing-person"
+    assert sent["visitorId"] == "existing-person"
+    assert sent["appointId"] == "original-booking"
+    assert info == original
+
+
+def test_existing_visitor_renewal_requires_original_booking_before_network():
+    api, session = client([])
+    with pytest.raises((HikError, ValueError)):
+        api.register_existing_visitor("existing-person", _visitor_checkin_fixture(),
+                                      [{"id": "23", "name": "DAY_USE"}], appointment_id="")
+    assert not session.calls

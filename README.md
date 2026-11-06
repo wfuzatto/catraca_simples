@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.53` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.54` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -548,3 +548,14 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - Leituras atrasadas são repetidas sem repetir o update. Após confirmação de recebimento, um novo clique em Salvar com os mesmos dados retoma apenas a conferência. Uma falha de resultado incerto continua registrada para conciliação.
 - Pendências de edição passam a ser isoladas por visitante, preservando os arquivos antigos. Uma pendência de outro visitante não bloqueia todos os cadastros.
 - Validação autorizada no servidor real alterou nome, sobrenome, reserva/apartamento, foto sintética, pulseira e datas de uma visita ativa, preservando o Visitor ID. A releitura confirmou os novos dados, o ID atualizado de check-in e a entrega facial/cartão nos três dispositivos do nível original. Isso comprova a edição e o estado reportado pelo HikCentral; a passagem física futura nas catracas não foi executada.
+
+
+## Preview.54 — campos obrigatórios e renovação no próprio editor
+
+- O formulário permanece editável quando a visita está encerrada ou uma consulta omite dados. Foto, câmera e Salvar continuam disponíveis. Campos ausentes ou inválidos são destacados em vermelho com instruções individuais; nenhuma gravação começa enquanto o pedido estiver incompleto.
+- Quando a API não informa as credenciais, o operador escolhe explicitamente foto, pulseira ou ambas. Uma foto que não pôde ser baixada precisa ser selecionada ou capturada novamente. Nome, sobrenome, datas, grupo, modalidade e credenciais são validados tanto na interface quanto na transação.
+- Uma visita ativa usa `registerment/update`. O teste real confirmou que esta instalação recusa esse endpoint para check-out. Para visita encerrada, o editor oferece renovação com `registerment`, reutilizando o **mesmo Visitor ID e o ID original da reserva**, e preservando a visita anterior no histórico. A confirmação explica a criação de nova visita. Não chama `v2/appointment` para criar outra pessoa.
+- A referência original da reserva é preenchida pelo histórico deste Windows quando disponível. Se faltar, aparece como campo obrigatório separado de Reserva/apartamento; o operador precisa selecionar ou informar a referência correta. Estado da visita não retornado exige escolher explicitamente atualizar ou renovar.
+- A consulta de check-ins usa o ID selecionado e aceita todos os estados. Visitas antigas com datas iguais não impedem editar a visita escolhida. Retirado o limite local de 27 dias; a consulta continua paginada.
+- Os campos opcionais conhecidos, como gênero, empresa, documento, contato e campos customizados, são preservados quando não fazem parte da edição. `watchListInfo` e os padrões obrigatórios são incluídos antes da gravação.
+- Validação controlada no servidor real cobriu check-out e renovação de uma pessoa de teste, confirmou novo check-in ativo com o mesmo Visitor ID e manteve o vínculo da reserva original.

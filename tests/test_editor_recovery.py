@@ -12,10 +12,10 @@ from remote_history import (
 )
 
 
-def active_checkin():
+def active_checkin(status="0"):
     return normalize_checkin({
         "recordId": "check-1009",
-        "visitorStatus": "0",
+        "visitorStatus": status,
         "visitorBaseInfo": {
             "visitorId": "1009", "fullName": "Wesley Teste",
             "visitorGroup": "Hóspedes Vale",
@@ -31,17 +31,21 @@ def single_level():
 
 
 class FakeHik:
-    def __init__(self, details=None, appointment=None, level=None):
+    def __init__(self, details=None, appointment=None, level=None, status="0"):
         self.details = details or {"visitorId": "1009", "visitorGroupName": "Hóspedes Vale"}
         self.appointment = appointment or {"data": {"list": [], "total": 0}}
         self.level = level or single_level()
         self.calls = []
+        self.status = status
     def find_existing_registration(self, vid, start, end):
         assert vid == "1009"
         return "check-1009"
-    def find_registration_record(self, vid, start, end, *, active_only=False):
-        assert active_only is True
-        return {"recordId": self.find_existing_registration(vid, start, end), "visitorStatus": "0"}
+    def find_registration_record(self, vid, start, end, *, active_only=False, record_id=""):
+        assert active_only is False
+        found = self.find_existing_registration(vid, start, end)
+        if record_id and record_id != found:
+            return None
+        return {"recordId": found, "visitorStatus": self.status}
     def post(self, path, payload, **kw):
         self.calls.append(path)
         if path.endswith("single/visitorinfo"):
@@ -103,11 +107,14 @@ def test_wrong_visitor_id_or_checkin_id_blocks_without_remote_writes():
         resolve_remote_edit_record(FakeHik(), row)
 
 
-def test_checked_out_cannot_reopen_through_update():
-    row = active_checkin()
-    row["checkin_state"] = "saída no terminal"
-    with pytest.raises(HikError, match="Registrar novamente"):
-        resolve_remote_edit_record(FakeHik(), row)
+@pytest.mark.parametrize("status", ["1", "2", "3", "4"])
+def test_closed_registration_can_be_prepared_for_editing_without_writes(status):
+    api = FakeHik(status=status)
+    row = active_checkin(status)
+    verified, _ = resolve_remote_edit_record(api, row)
+    assert verified["_remote_verified"] is True
+    assert verified["registration_record_id"] == "check-1009"
+    assert not any("/update" in path or "/registerment" in path for path in api.calls)
 
 
 def test_photo_tries_detail_reference_after_first_reference_fails():
