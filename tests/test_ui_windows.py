@@ -701,6 +701,7 @@ def test_editor_allows_replacement_photo_when_download_fails(monkeypatch):
     monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
     root = app.ValeApp()
     try:
+        root.connected_groups = ["Hóspedes Vale", "Hóspedes Serra"]
         root.update()
         record = {
             "visitor_id": "1009",
