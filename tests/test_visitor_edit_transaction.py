@@ -172,8 +172,15 @@ def test_remote_post_exception_preserves_journal_for_manual_reconciliation(monke
         raise HikError("timeout após envio")
     api.update_registered_visitor = unknown
     journal = tmp_path / "edit.json"
-    with pytest.raises(HikError, match="timeout"):
+    with pytest.raises(HikError, match="timeout") as err:
         call(api, journal)
+    assert "Consulta posterior" in str(err.value)
+    assert "datas antigas = true" in str(err.value)
+    assert "datas novas = true" in str(err.value)
+    import json
+    state = json.loads(journal.read_text(encoding="utf-8"))
+    assert state["status"] == "update_refused_or_uncertain"
+    assert state["old_checkin_visible"] == "true"
     assert journal.exists() and not written and not api.applies
 
 
@@ -234,3 +241,40 @@ def test_missing_remote_group_requires_manual_conciliation(monkeypatch, tmp_path
         call(api, journal)
     assert journal.exists() and not written
     assert not api.assignments and not api.applies
+
+
+def test_future_checkin_missing_id_on_open_can_be_resolved_before_writing(monkeypatch, tmp_path):
+    written, _ = use_mocks(monkeypatch)
+    item = record()
+    item["_original_appointment_id"] = ""
+    api = API()
+    person = SimpleNamespace(first_name="TESTE", last_name="TESTE3",
+                             reservation="123", photo_jpeg=b"jpeg", card_number="3631506494")
+    result = tx.update_existing_visit(
+        api, item, payload(),
+        [{"id": "10", "name": "VISITANTE_VALE"}], ["door-a"], person,
+        "Hóspedes Vale", ["VISITANTE_VALE"],
+        journal_path=tmp_path / "edit.json")
+    assert result["confirmed_appointment_id"] == "appt-new"
+    assert len(api.updates) == 1
+    assert api.updates[0][0] == "appt-old"
+    assert written[-1]["visitor_id"] == "1654"
+
+
+def test_update_refusal_128_checks_both_dates_without_second_post(monkeypatch, tmp_path):
+    written, _ = use_mocks(monkeypatch)
+    api = API(new_record=None)
+    sent = []
+    def rejected(*args):
+        sent.append(args)
+        raise HikError("HikCentral recusou a operação (HTTP 200; código 128)")
+    api.update_registered_visitor = rejected
+    journal = tmp_path / "edit.json"
+    with pytest.raises(HikError, match="código 128") as exc:
+        call(api, journal)
+    assert "datas antigas = true" in str(exc.value)
+    assert "datas novas = false" in str(exc.value)
+    assert len(sent) == 1 and not written and not api.assignments
+    with pytest.raises(ValueError, match="resultado incerto"):
+        call(api, journal)
+    assert len(sent) == 1

@@ -989,3 +989,98 @@ def test_unverified_or_mismatched_remote_group_never_defaults_to_day_use(monkeyp
         popup.destroy()
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Teste modal Tk apenas no Windows")
+def test_future_visit_missing_appointment_id_allows_date_draft_but_does_not_post(monkeypatch):
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    root = app.ValeApp()
+    try:
+        root.connected_groups = ["Hóspedes Vale"]
+        root.update()
+        rec = {
+            "visitor_id": "1649", "registration_record_id": "check1649",
+            "_remote_verified": True, "_original_appointment_id": "",
+            "checkin_state": "check-in efetuado",
+            "first": "TESTE", "last": "TOALHEIRO 2", "group": "Hóspedes Vale",
+            "origin": "HikCentral", "entry_at": "2099-11-06T00:00:00-03:00",
+            "exit_at": "2099-11-07T23:59:59-03:00",
+            "card_number": "123456789",
+        }
+        visitor_editor.open_visitor_editor(
+            root, rec, remote_details={
+                "visitorId": "1649", "visitorGroupName": "Hóspedes Vale",
+                "cards": [{"cardNo": "123456789"}]})
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children()
+                     if isinstance(x, ctk.CTkToplevel))
+        assert popup.title().startswith("Editar cadastro")
+        assert popup._missing_appointment_link is True
+        assert popup._editor_field_vars["entry"].get() == "06/11/2099"
+        popup._editor_field_vars["entry"].set("07/11/2099")
+        assert popup._editor_field_vars["entry"].get() == "07/11/2099"
+        assert popup._save_edit_button.cget("state") == "normal"
+        popup.destroy()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Teste modal Tk apenas no Windows")
+def test_editor_save_shows_loading_until_operation_finishes(monkeypatch):
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
+    alerts = []
+    monkeypatch.setattr(visitor_editor.messagebox, "showwarning",
+                        lambda *a, **k: alerts.append(str(a)))
+    root = app.ValeApp()
+    try:
+        root.connected_groups = ["Hóspedes Vale"]
+        captured = {}
+        root.task = lambda work, done, **kw: captured.update(work=work, done=done)
+        rec = {
+            "visitor_id": "1649", "registration_record_id": "check1649",
+            "_remote_verified": True, "_original_appointment_id": "appt1649",
+            "checkin_state": "check-in efetuado",
+            "first": "TESTE", "last": "TOALHEIRO 2", "group": "Hóspedes Vale",
+            "origin": "HikCentral", "entry_at": "2099-11-06T00:00:00-03:00",
+            "exit_at": "2099-11-07T23:59:59-03:00",
+            "card_number": "123456789",
+        }
+        visitor_editor.open_visitor_editor(
+            root, rec, remote_details={
+                "visitorId": "1649", "visitorGroupName": "Hóspedes Vale",
+                "cards": [{"cardNo": "123456789"}]})
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children()
+                     if isinstance(x, ctk.CTkToplevel))
+        popup._editor_field_vars["exit"].set("08/11/2099")
+        popup._save_edit_button.invoke()
+        root.update_idletasks()
+        assert "done" in captured
+        assert popup._edit_submitting is True
+        assert popup._edit_loading_overlay.winfo_exists()
+        assert popup._edit_loading_overlay.winfo_viewable()
+        # Operação ainda não acabou: overlay proíbe fechar e reabrir envio.
+        captured["done"](None, ValueError("Recusa simulada do HikCentral"))
+        root.update_idletasks()
+        assert not popup._edit_loading_overlay.winfo_exists()
+        assert popup._edit_submitting is False
+        assert popup.winfo_viewable()
+        assert alerts
+        popup.destroy()
+    finally:
+        root.destroy()

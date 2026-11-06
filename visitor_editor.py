@@ -120,13 +120,20 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     must_reenter_card = bool(
         record.get("origin") == "HikCentral" and
         has_remote_card and not card_number)
+    # Ausência de appointRecordId não impede PREPARAR uma correção.
+    # A transação validará o vínculo na API antes de qualquer POST; sem
+    # correspondência única não escreve nem inventa um ID.
+    missing_appointment_link = bool(
+        record.get("origin") == "HikCentral"
+        and not record.get("_original_appointment_id")
+        and record.get("_remote_verified") is True
+        and record.get("checkin_state") == "check-in efetuado")
     if record.get("origin") == "HikCentral" and not readonly:
-        if not record.get("_original_appointment_id"):
+        if not record.get("_original_appointment_id") and not missing_appointment_link:
             readonly = True
             readonly_reason = (
-                "O check-in existe, mas a reserva original não retornou "
-                "appointRecordId para edição segura. Não alteramos datas "
-                "sem validar esse vínculo no HikCentral.")
+                "A reserva original não foi identificada com segurança. "
+                "O check-in precisa ser confirmado no HikCentral antes de editar.")
         elif not has_remote_face and not has_remote_card and not photo_error:
             readonly = True
             readonly_reason = "A OpenAPI não confirmou nenhuma credencial original."
@@ -232,6 +239,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         ctk.CTkEntry(body, textvariable=var,
                      state="disabled" if readonly else "normal").pack(fill="x")
         fields[field] = var
+    dialog._editor_field_vars = fields
+    dialog._missing_appointment_link = missing_appointment_link
     # A edição de datas não deve trocar o grupo nem suas permissões. Em
     # versões anteriores o combo aceitava mudança de grupo, mas o fluxo
     # não revogava o nível anterior, podendo deixar acessos conflitantes.
@@ -252,6 +261,15 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 "Trocar de Vale para Serra exige migração separada, com retirada "
                 "do acesso anterior; não ocorrerá ao corrigir datas."),
             wraplength=505, justify="left", text_color="#64748B").pack(pady=(5, 4))
+        if missing_appointment_link:
+            ctk.CTkLabel(
+                body,
+                text=("Você pode corrigir as datas neste formulário. A reserva "
+                      "não retornou o ID original: ao salvar, o aplicativo "
+                      "tentará identificar o vínculo somente por consulta. "
+                      "Sem ID único, NENHUMA alteração será enviada."),
+                text_color="#B45309", wraplength=510,
+                justify="left").pack(pady=(5, 7))
     dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro")
                  + " — " + record["visitor_id"])
     level_status = tk.StringVar()
@@ -369,10 +387,10 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
             if not record.get("registration_record_id"):
                 raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
-            if not record.get("_original_appointment_id"):
-                raise ValueError(
-                    "A reserva não retornou appointRecordId. Atualize a lista; "
-                    "é inseguro editar com o ID do check-in.")
+            # Se o ID estava ausente na abertura, o worker faz nova
+            # conciliação ANTES da escrita. O ID do check-in nunca é usado
+            # como appointRecordId; se persistir a falta de vínculo, falha
+            # apenas de leitura, preservando a digitação do operador.
             if not messagebox.askyesno(
                     "Confirmar atualização de visitante",
                     "Visitante ID: " + str(record["visitor_id"]) +
@@ -393,8 +411,47 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         except Exception as exc:
             messagebox.showerror("Dados", str(exc), parent=dialog)
             return
+        if getattr(dialog, "_edit_submitting", False):
+            return
+        dialog._edit_submitting = True
         dialog.grab_release()
         dialog.withdraw()
+        # Modal independente: a aba de histórico está atrás do editor, então
+        # sua barra de progresso não basta para quem acabou de clicar Salvar.
+        loading = ctk.CTkToplevel(app)
+        loading.withdraw()
+        loading.title("Atualizando visitante")
+        loading.geometry("425x155")
+        loading.resizable(False, False)
+        loading.transient(app)
+        loading.protocol("WM_DELETE_WINDOW", lambda: None)
+        frame = ctk.CTkFrame(loading, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=22, pady=18)
+        ctk.CTkLabel(
+            frame, text="Salvando alteração no HikCentral...",
+            font=("Segoe UI", 15, "bold")).pack(pady=(4, 7))
+        ctk.CTkLabel(
+            frame, text="Conferindo reserva, check-in e permissões. Aguarde.",
+            font=("Segoe UI", 12)).pack(pady=(0, 10))
+        progress = ctk.CTkProgressBar(frame, mode="indeterminate", width=360)
+        progress.pack(fill="x")
+        progress.start()
+        loading.deiconify()
+        loading.lift()
+        loading.grab_set()
+        dialog._edit_loading_overlay = loading
+        dialog._edit_loading_bar = progress
+
+        def close_edit_loading():
+            progress.stop()
+            if loading.winfo_exists():
+                try:
+                    loading.grab_release()
+                except Exception:
+                    pass
+                loading.destroy()
+            dialog._edit_submitting = False
+
         def work():
             client = app.client()
             old_id = client.find_existing_registration(
@@ -435,6 +492,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 client, record, payload, selected, doors, obj, new_group,
                 requested_level)
         def done(result, error):
+            close_edit_loading()
             if error:
                 # Uma falha pode significar escrita remota parcialmente aceita.
                 # Reabrir o editor só para consulta; não habilitar outro POST

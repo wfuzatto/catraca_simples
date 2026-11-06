@@ -9,6 +9,7 @@ from core import app_dir, _write_json_atomic, VALE_VISITOR_LEVELS
 from remote_history import find_original_appointment, original_appointment_identifier
 from visitor_history import save_registration, set_history_status
 from access_receipt import make_access_receipt
+from hikcentral import HikError
 
 
 def update_existing_visit(client, record: dict, payload: dict,
@@ -73,8 +74,37 @@ def update_existing_visit(client, record: dict, payload: dict,
     }
     _write_json_atomic(journal, {**summary, "status": "update_inflight"})
     # Exatamente um POST de escrita. Timeout/erro não autoriza reenviar.
-    returned_appointment_id = client.update_registered_visitor(
-        appointment_id, vid, payload, selected)
+    # Após recusa da OpenAPI, duas consultas somente leitura ajudam a separar
+    # uma resposta recusada de uma operação possivelmente persistida, sem
+    # jamais concluir automaticamente que é seguro repetir o POST.
+    try:
+        returned_appointment_id = client.update_registered_visitor(
+            appointment_id, vid, payload, selected)
+    except HikError as exc:
+        observed_old = "consulta indisponível"
+        observed_new = "consulta indisponível"
+        try:
+            observed_old = str(bool(client.find_existing_registration(
+                vid, record["entry_at"], record["exit_at"]))).lower()
+        except Exception:
+            pass
+        try:
+            observed_new = str(bool(client.find_existing_registration(
+                vid, new_start, new_end))).lower()
+        except Exception:
+            pass
+        _write_json_atomic(journal, {
+            **summary, "status": "update_refused_or_uncertain",
+            "old_checkin_visible": observed_old,
+            "requested_checkin_visible": observed_new,
+        })
+        raise HikError(
+            str(exc)
+            + "\nConsulta posterior (sem gravar): check-in nas datas antigas = "
+            + observed_old + "; nas datas novas = " + observed_new
+            + ". O código da API não identifica sozinho a causa da recusa. "
+              "Confira o estado da visita e o log protegido do HikCentral. "
+              "Não repita o envio antes de conciliar a pendência.") from exc
     _write_json_atomic(journal, {
         **summary, "status": "update_acknowledged",
         "returned_appointment_id": returned_appointment_id})
