@@ -1064,9 +1064,11 @@ def test_second_edit_legacy_confirmed_visit_has_no_missing_operation(monkeypatch
             "appointment_id": "booking-1780", "origin": "histórico local",
             "checkin_state": "confirmado", "group": "Hóspedes Vale",
             "first": "Wesley1", "last": "Nascimento2", "reservation": "123-3",
-            "entry_at": "2026-11-06T00:00:00-03:00",
-            "exit_at": "2026-11-06T23:59:59-03:00",
+            "entry_at": "2026-11-07T00:00:00-03:00",
+            "exit_at": "2026-11-08T23:59:59-03:00",
             "card_number": "45678910", "expect_face": True, "expect_card": True,
+            "_reservation_period": {"state": "different", "code": "3911",
+                "entry_at": "2026-11-06T00:00:00-03:00", "exit_at": "2026-11-06T23:59:59-03:00"},
         }
         picture = io.BytesIO()
         Image.new("RGB", (40, 40), "white").save(picture, "JPEG")
@@ -1080,6 +1082,9 @@ def test_second_edit_legacy_confirmed_visit_has_no_missing_operation(monkeypatch
         assert popup._editor_requirements["require_operation"] is False
         assert "operation" not in popup._editor_field_errors
         assert not popup._editor_field_errors
+        notice = popup._reservation_period_label.cget("text")
+        assert "Visita (Check-In/Out): 07/11/2026" in notice
+        assert "Reserva original 3911: 06/11/2026" in notice
         popup.destroy()
     finally:
         root.destroy()

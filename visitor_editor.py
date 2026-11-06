@@ -12,6 +12,7 @@ from core import (Visitor, TZ, visitor_period_from_dates, registration_payload,
                   VALE_VISITOR_LEVELS)
 from visitor_history import save_registration, set_history_status
 from access_receipt import make_access_receipt
+from remote_history import reservation_period_notice
 
 
 
@@ -196,7 +197,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     }
     for field, label in (("first", "Nome"), ("last", "Sobrenome"),
                          ("reservation", "Reserva / apartamento"),
-                         ("entry", "Entrada (DD/MM/AAAA)"), ("exit", "Saída (DD/MM/AAAA)"),
+                         ("entry", "Entrada da visita (DD/MM/AAAA)"), ("exit", "Saída da visita (DD/MM/AAAA)"),
                          ("card", "Pulseira/NFC")):
         ctk.CTkLabel(body, text=label, anchor="w").pack(fill="x", pady=(7, 2))
         fields[field] = tk.StringVar(value=initial[field] or "")
@@ -258,6 +259,11 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
 
     level_status = tk.StringVar()
     ctk.CTkLabel(body, textvariable=level_status, wraplength=590, justify="left").pack(fill="x", pady=(4, 5))
+    period_notice = reservation_period_notice(record.get("_reservation_period"), record.get("entry_at"), record.get("exit_at"))
+    period_label = ctk.CTkLabel(body, text=period_notice, wraplength=590, justify="left", text_color="#9A3412")
+    if period_notice:
+        period_label.pack(fill="x", pady=(4, 5))
+    dialog._reservation_period_label = period_label
     summary = tk.StringVar()
     summary_label = ctk.CTkLabel(body, textvariable=summary, wraplength=590, justify="left")
     summary_label.pack(fill="x", pady=(4, 5))
@@ -382,7 +388,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     "Visitante ID: " + str(record.get("visitor_id") or "") +
                     "\nGrupo: " + new_group + "\nNível Visitor: " + requested_level[0] +
                     f"\nValidade: {visit_start:%d/%m/%Y %H:%M:%S} a {visit_end:%d/%m/%Y %H:%M:%S}.\n\n" +
-                    action + "\n\nConfirma o envio dos dados preenchidos?", parent=dialog):
+                    action + ("\n\n" + period_notice if period_notice else "") +
+                    "\n\nAs datas editadas são as da visita em Visitor Check-In/Out. "
+                    "A reserva original será consultada separadamente.\n\nConfirma o envio dos dados preenchidos?", parent=dialog):
                 return
         except Exception as exc:
             messagebox.showerror("Dados do cadastro", str(exc), parent=dialog)
@@ -440,7 +448,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             return update_existing_visit(client, edit_record, payload, selected, doors, obj, new_group, requested_level)
 
         def done(result, error):
-            nonlocal group_recovery
+            nonlocal group_recovery, period_notice
             close_edit_loading()
             if error:
                 choices = getattr(error, "choices", {}) or {}
@@ -511,6 +519,13 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 messagebox.showwarning("Cadastro não confirmado", str(error), parent=dialog if dialog.winfo_exists() else app)
                 return
             app.refresh_history()
+            booking_period = result.get("reservation_period") or {}
+            booking_note = reservation_period_notice(booking_period, payload["visitStartTime"], payload["visitEndTime"])
+            if booking_note:
+                period_notice = booking_note
+                record["_reservation_period"] = booking_period
+                period_label.configure(text=booking_note)
+                period_label.pack(fill="x", pady=(4, 5), before=summary_label)
             if str(result.get("state") or "").casefold() == "failed":
                 # The data already exists under the new check-in. A correction
                 # must update it, never renew the previous visit a second time.
@@ -554,16 +569,21 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     dialog.lift()
                     refresh_validation()
                 messagebox.showwarning("Dados gravados; credencial recusada",
-                    "Os dados e a validade foram gravados no HikCentral. "
+                    "Os dados e o período da visita foram gravados em Visitor Check-In/Out. "
                     "Complete a credencial destacada em vermelho e salve novamente. "
-                    "A próxima gravação corrigirá o check-in já criado.", parent=dialog)
+                    "A próxima gravação corrigirá o check-in já criado." +
+                    ("\n\n" + booking_note if booking_note else ""), parent=dialog)
                 return
             renewed = result.get("operation") == "renew"
-            messagebox.showinfo("Renovação concluída" if renewed else "Cadastro atualizado",
+            notify = messagebox.showwarning if booking_period.get("state") == "different" else messagebox.showinfo
+            title = "Visita atualizada; reserva com datas diferentes" if booking_period.get("state") == "different" else (
+                "Renovação concluída" if renewed else "Visita atualizada")
+            notify(title,
                 ("Nova visita criada para o mesmo visitante; histórico anterior preservado.\n" if renewed else
-                 "Dados do visitante e validade conferidos no HikCentral.\n") +
+                 "Dados e período da visita conferidos em Visitor Check-In/Out.\n") +
                 "ID do check-in: " + str(result["confirmed_checkin_id"]) +
-                "\nEntrega: " + result["state"] + ".", parent=app)
+                "\nEntrega: " + result["state"] + "." +
+                ("\n\n" + booking_note if booking_note else ""), parent=app)
             if dialog.winfo_exists():
                 dialog.destroy()
         app.task(work, done)
