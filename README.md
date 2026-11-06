@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.47` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.48` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -490,3 +490,15 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - A API pode informar um total maior que o número efetivamente exibido na página caso sua paginação inclua registros de outras datas; o rodapé distingue o total bruto da API da conferência local. Páginas podem ficar parcialmente preenchidas. Isso evita inventar ou exibir visitas fora da seleção.
 - A busca, a visualização e a consulta de eventos continuam somente leitura; não alteram a reserva, o registro de check-in, a foto, a NFC ou os níveis Visitor.
 - Testes de regressão reproduzem o caso de dois visitantes `TESTE TOALHEIRO` com início válido em dias diferentes, filtragem local sem usar `registered_at`, combinação do payload e controlador da interface sem busca da base geral.
+
+
+## Preview.48 — preservar vínculo da reserva ao editar a validade
+
+- Causa identificada no fluxo anterior: o endpoint `POST /artemis/api/visitor/v1/registerment/update` exige `appointRecordId` (ID da reserva), mas o código lhe enviava `recordId` (ID do check-in). Além disso, o histórico local era atualizado logo após a resposta HTTP, antes de validar o novo período na OpenAPI.
+- Para abrir a edição é necessário confirmar um único check-in, uma reserva associada ao mesmo Visitor ID/período e identificar seu `appointRecordId` (`appointID` em determinadas respostas). Ausência ou divergência desses IDs torna o editor **somente leitura**; não usar o código numérico de reserva exibido na interface como substituto.
+- Ao salvar, realiza **exatamente um** `registerment/update` utilizando o ID de reserva confirmado e o mesmo Visitor ID. Depois faz consultas de **somente leitura** para localizar um check-in único **e** uma reserva única nas novas datas. Se o endpoint retornar outro `appointRecordId`, ele deve coincidir com a reserva encontrada após a edição.
+- Somente após as duas consultas confirmarem vínculo e datas o app atualiza o registro local, os identificadores correspondentes e reaplica os níveis de acesso. Se a validação falhar, o histórico local permanece com as datas antigas e `visitor_edit_inflight.json` registra a operação incerta, impedindo uma segunda escrita automática ou uma edição duplicada.
+- Alterar datas pode deslocar o hóspede para fora do período atual da aba **Cadastros efetuados**. Atualize os filtros para as novas datas antes de concluir que o registro desapareceu. `registered_at` continua independente da validade de entrada.
+- Se a foto anterior não for recuperada (erro 128), continua necessário fornecer uma foto substituta para não apagar o reconhecimento facial. A correção de datas não altera os dados de credenciais por si só.
+- Testes offline cobrem identificadores distintos de reserva e check-in, alteração bem-sucedida, retorno de IDs divergentes, falta de registro nas novas datas, perda de resposta após POST e preservação do journal sem nova escrita.
+- **Ainda exige homologação no HikCentral real:** as APIs de diferentes versões podem não refletir imediatamente a alteração de reserva/check-in. Quando isso acontecer, o aplicativo manterá a pendência e não declarará sucesso nem repetirá gravações, evitando inconsistências.
