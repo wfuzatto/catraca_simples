@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.45` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.46` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -469,3 +469,13 @@ O indicador giratório passou a ser exibido em uma janela de progresso própria,
 - Antes de liberar em produção, confirme **agenda ACQUAVALE**, **feriados**, **aplicação efetiva de permissões às catracas** e negativas fora da janela. Uma credencial não aplicada, outro nível All-Day ou configuração `Always Open` pode alterar o comportamento observado.
 
 Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinfo.hikvision.com/hkwsen/unzip/20230830144955_12918_doc/GUID-847FBB20-C785-4B29-A776-F2C552DBA340.html), [Visitor Reservation](https://enpinfo.hikvision.com/hkwsen/unzip/20230830144955_12918_doc/GUID-B8A0D0E8-3771-4B7F-B710-A48E5B729FD1.html).
+
+
+## Preview.46 — Saída somente leitura e retorno seguro para hoje/1 dia
+
+- No formulário de novo cadastro, **Saída é somente leitura**: não aceita digitação ou colagem de datas. O cálculo em `calculate()` continua atualizando a data automaticamente conforme **Entrada + duração do ingresso − 1 dia**, incluindo mudanças de mês/ano.
+- **Somente depois de uma operação concluída** (reserva, check-in, níveis e reaplicação de credenciais processados), o próximo atendimento volta a **Ingresso de 1 dia**, **Entrada = data atual** e **Saída = data atual**, no fuso America/Sao_Paulo. Exemplo: atendente seleciona 07/11 com ingresso de 2 dias → depois do sucesso, o próximo cadastro apresenta 05/11 / 1 dia (caso a data corrente seja 05/11).
+- Se houver falha ou confirmação incerta, o formulário não é redefinido; preserva a data escolhida e o checkpoint para recuperação do registro existente, sem criar reserva duplicada.
+- Se Configurações não contiver nenhum ingresso de 1 dia, a seleção de ingresso é esvaziada e a data volta para hoje, **bloqueando uma nova venda** até configurar um ingresso de 1 dia; nunca reutiliza silenciosamente 2 ou 3 dias.
+- A confirmação de envio segue exibindo o período real. O backend continua enviando a validade 00:00:00–23:59:59 por padrão, com acesso limitado pelo template ACQUAVALE. Edição de visitantes já existentes, fotos, NFC, níveis e recuperação não sofreram mudanças de protocolo.
+- Testes automatizados incluem seleção futura de vários dias, reset após sucesso, transição da meia-noite, ausência de ingresso de 1 dia, saída readonly e cálculo programático. Homologar um cadastro real no HikCentral antes de colocar em operação.
