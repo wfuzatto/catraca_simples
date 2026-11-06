@@ -168,6 +168,15 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     # o alerta laranja repetitivo; a confirmação do salvamento mostra
     # o grupo, nível e catracas efetivamente escolhidos.
 
+    original_group = str(record.get("group", "")).strip()
+    allowed_groups = list(dict.fromkeys(
+        str(g).strip() for g in getattr(app, "connected_groups", [])
+        if str(g).strip()))
+    if not readonly and original_group not in allowed_groups:
+        readonly = True
+        readonly_reason = (
+            f"O grupo original '{original_group or 'não informado'}' não foi "
+            "confirmado na sincronização HikCentral. Reabra após sincronizar.")
     if readonly:
         ctk.CTkLabel(body,
                      text="Somente consulta: " + (readonly_reason or
@@ -201,19 +210,10 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         ctk.CTkEntry(body, textvariable=var,
                      state="disabled" if readonly else "normal").pack(fill="x")
         fields[field] = var
-    original_group = str(record.get("group", "")).strip()
-    allowed_groups = list(dict.fromkeys(
-        str(g).strip() for g in getattr(app, "connected_groups", [])
-        if str(g).strip()))
     # A edição de datas não deve trocar o grupo nem suas permissões. Em
     # versões anteriores o combo aceitava mudança de grupo, mas o fluxo
     # não revogava o nível anterior, podendo deixar acessos conflitantes.
     # Grupo diferente requer futura migração própria com remoção auditada.
-    if not readonly and original_group not in allowed_groups:
-        readonly = True
-        readonly_reason = (
-            f"O grupo original '{original_group or 'não informado'}' não foi "
-            "confirmado na sincronização HikCentral. Reabra após sincronizar.")
     ctk.CTkLabel(body, text="Grupo original (preservado na edição)",
                  anchor="w").pack(fill="x", pady=(10, 3))
     group_var = tk.StringVar(value=original_group)
