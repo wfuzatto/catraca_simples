@@ -78,6 +78,36 @@ def normalize_checkin(row: dict):
     }
 
 
+def filter_local_history_by_entry_date(rows: list[dict], start_iso: str,
+                                       end_iso: str, name: str = "") -> list[dict]:
+    """Aplica ao histórico offline o mesmo recorte de data e nome da tela.
+
+    A data considerada é `entry_at` (início válido), NUNCA
+    `registered_at` (momento do cadastro). Data final é exclusiva,
+    conforme search_window(); ausência de validade não permite inferências.
+    """
+    start = datetime.fromisoformat(start_iso).astimezone(TZ)
+    end = datetime.fromisoformat(end_iso).astimezone(TZ)
+    needle = _normalized_person_name(name)
+    matching = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        try:
+            validity = datetime.fromisoformat(
+                str(item.get("entry_at") or "")).astimezone(TZ)
+        except (TypeError, ValueError):
+            continue
+        if not (start <= validity < end):
+            continue
+        label = item.get("full_name") or " ".join(filter(
+            None, (item.get("first"), item.get("last"))))
+        if needle and needle not in _normalized_person_name(label):
+            continue
+        matching.append(item)
+    return matching
+
+
 def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
                    name: str = "", page_size: int = PAGE_SIZE):
     """Paginate the selected batch using safe server requests of up to 100.

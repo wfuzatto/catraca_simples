@@ -341,3 +341,134 @@ def test_active_visitor_with_unverified_level_stays_readonly():
             raise AssertionError("Never call write endpoints")
     with pytest.raises(HikError, match="não confirmou um único nível"):
         resolve_remote_edit_record(MissingLevel(), record)
+
+
+def test_name_and_date_window_share_same_checkin_request():
+    """TOALHEIRO 2 com validade no dia seguinte nunca entra por Visitor Information."""
+    from remote_history import filter_local_history_by_entry_date, DIRECTORY_PATH
+    start, end = search_window("05/11/2026", "05/11/2026")
+    current = example_record(visitor="1701", record="701", name="TESTE TOALHEIRO 1")
+    current["visitorBaseInfo"]["visitStartTime"] = "2026-11-05T00:00:00-03:00"
+    current["visitorBaseInfo"]["visitEndTime"] = "2026-11-05T23:59:59-03:00"
+    client = FakeClient({"code": "0", "data": {"list": [current], "totalNum": 1}})
+    found = fetch_checkins(client, start, end, page=1, name="TOALHEIRO", page_size=10)
+    assert len(found["rows"]) == 1
+    assert found["rows"][0]["visitor_id"] == "1701"
+    assert len(client.calls) == 1
+    path, params, options = client.calls[0]
+    assert path == CHECKINS_PATH and path != DIRECTORY_PATH
+    assert params["visitorName"] == "TOALHEIRO"
+    assert params["visitStartTime"] == "2026-11-05T00:00:00-03:00"
+    assert params["visitEndTime"] == "2026-11-06T00:00:00-03:00"
+    assert options == {}
+
+
+def test_offline_date_name_uses_validity_start_not_registration_timestamp():
+    """Cadastrar no dia 05 não inclui ingresso que começa apenas no dia 06."""
+    from remote_history import filter_local_history_by_entry_date
+    start, end = search_window("05/11/2026", "05/11/2026")
+    rows = [
+        {"visitor_id": "1654", "first": "Teste", "last": "Toalheiro 1",
+         "registered_at": "2026-11-05T14:00:37-03:00",
+         "entry_at": "2026-11-05T00:00:00-03:00"},
+        {"visitor_id": "1655", "first": "Teste", "last": "Toalheiro 2",
+         "registered_at": "2026-11-05T14:01:00-03:00",
+         "entry_at": "2026-11-06T00:00:00-03:00"},
+        {"visitor_id": "1656", "first": "Outro", "last": "Visitante",
+         "registered_at": "2026-11-05T10:00:00-03:00",
+         "entry_at": "2026-11-05T00:00:00-03:00"},
+        {"visitor_id": "1657", "first": "Teste", "last": "Sem data",
+         "registered_at": "2026-11-05T10:00:00-03:00", "entry_at": ""},
+    ]
+    selected = filter_local_history_by_entry_date(rows, start, end, "tEsTe")
+    assert [r["visitor_id"] for r in selected] == ["1654"]
+    tomorrow_start, tomorrow_end = search_window("06/11/2026", "06/11/2026")
+    tomorrow = filter_local_history_by_entry_date(
+        rows, tomorrow_start, tomorrow_end, "toalheiro")
+    assert [r["visitor_id"] for r in tomorrow] == ["1655"]
+
+
+def test_offline_date_name_accepts_normalized_accents_but_not_bare_register_time():
+    from remote_history import filter_local_history_by_entry_date
+    start, end = search_window("05/11/2026", "05/11/2026")
+    rows = [
+        {"visitor_id": "1", "full_name": "JOÃO DE SÁ",
+         "registered_at": "2026-11-06T08:00:00-03:00",
+         "entry_at": "2026-11-05T00:00:00-03:00"},
+        {"visitor_id": "2", "full_name": "João de Sá",
+         "registered_at": "2026-11-05T08:00:00-03:00",
+         "entry_at": ""},
+    ]
+    assert [x["visitor_id"] for x in filter_local_history_by_entry_date(
+        rows, start, end, "joao de sa")] == ["1"]
+
+
+def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monkeypatch):
+    """Integração offline do controller: nome+De/Até, sem consultar Visitor Information."""
+    from types import SimpleNamespace
+    import app
+    import modern_ui
+    import remote_history
+
+    current = example_record(
+        visitor="1654", record="250", name="TESTE TOALHEIRO 1")
+    current["visitorBaseInfo"]["visitStartTime"] = "2026-11-05T00:00:00-03:00"
+    current["visitorBaseInfo"]["visitEndTime"] = "2026-11-05T23:59:59-03:00"
+    next_day = example_record(
+        visitor="1655", record="251", name="TESTE TOALHEIRO 2")
+    next_day["visitorBaseInfo"]["visitStartTime"] = "2026-11-06T00:00:00-03:00"
+    next_day["visitorBaseInfo"]["visitEndTime"] = "2026-11-06T23:59:59-03:00"
+    # Simula API com semântica de sobreposição, que devolve também 06/11.
+    # O app precisa filtrar novamente para cumprir exatamente o recorte.
+    client = FakeClient({"code": "0", "data": {
+        "list": [current, next_day], "totalNum": 2}})
+    monkeypatch.setattr(app, "list_history", lambda: [
+        {"visitor_id": "1655", "entry_at": "2026-11-06T00:00:00-03:00",
+         "registered_at": "2026-11-05T14:15:00-03:00",
+         "first": "TESTE", "last": "TOALHEIRO 2"}])
+    monkeypatch.setattr(remote_history, "search_visitor_directory",
+                        lambda *args, **kwargs: pytest.fail(
+                            "Visitor Information nao deve fazer parte da lista"))
+    monkeypatch.setattr(modern_ui, "start_history_loading", lambda *a, **kw: None)
+    monkeypatch.setattr(modern_ui, "stop_history_loading", lambda *a, **kw: None)
+
+    class Value:
+        def __init__(self, value=""):
+            self.value = value
+        def get(self):
+            return self.value
+        def set(self, value):
+            self.value = value
+
+    class Control:
+        def configure(self, **kwargs):
+            self.params = kwargs
+
+    ui = SimpleNamespace(
+        key="fake-key", secret="fake-secret", busy=False,
+        _history_page=1,
+        history_start=Value("05/11/2026"),
+        history_end=Value("05/11/2026"),
+        history_name=Value("TOALHEIRO"),
+        history_page_size=Value("10"),
+        history_status=Value(), history_page_label=Value(),
+        history_previous_button=Control(), history_next_button=Control(),
+    )
+    captured = {}
+    ui.client = lambda: client
+    ui._show_history_rows = lambda rows, label: captured.update(
+        rows=rows, label=label)
+    ui._load_history_passages = lambda rows, label: captured.update(
+        passages=rows)
+    ui.task = lambda action, finish: finish(action(), None)
+    app.ValeApp.refresh_history(ui)
+    assert [r["visitor_id"] for r in captured["rows"]] == ["1654"]
+    assert [r["visitor_id"] for r in captured["passages"]] == ["1654"]
+    assert "descartado" in captured["label"]
+    assert len(client.calls) == 1
+    path, payload, options = client.calls[0]
+    assert path == CHECKINS_PATH
+    assert payload["visitorName"] == "TOALHEIRO"
+    assert payload["visitStartTime"] == "2026-11-05T00:00:00-03:00"
+    assert payload["visitEndTime"] == "2026-11-06T00:00:00-03:00"
+    assert options == {}

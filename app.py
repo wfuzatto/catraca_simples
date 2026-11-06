@@ -30,7 +30,7 @@ from visitor_history import list_history, save_registration, set_history_status,
 from remote_history import (search_window, fetch_checkins, visitor_details,
                             fetch_visitor_photo, history_time,
                             enrich_checkins_with_appointment_levels,
-                            resolve_remote_edit_record, search_visitor_directory)
+                            resolve_remote_edit_record, filter_local_history_by_entry_date)
 from access_passages import fetch_visitor_passages, load_reader_directions
 from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
 
@@ -1033,9 +1033,6 @@ class ValeApp(tk.Tk):
             local_rows = list_history()
         except Exception:
             local_rows = []
-        if not self.key or not self.secret:
-            self._show_history_rows(local_rows, f"{len(local_rows)} cadastros LOCAIS: configure a conexão HikCentral.")
-            return
         if self.busy:
             self.history_status.set("Operação em andamento; atualize a lista ao terminar.")
             return
@@ -1047,8 +1044,17 @@ class ValeApp(tk.Tk):
             page_size = int(self.history_page_size.get())
             if page_size not in (10, 50, 100, 200, 500):
                 raise ValueError("Quantidade de cadastros por página inválida.")
+            # Offline, filtrar pelo INÍCIO VÁLIDO e nome; o horário de
+            # cadastro não participa da busca. Não inventar datas ausentes.
+            local_rows = filter_local_history_by_entry_date(
+                local_rows, start_iso, end_iso, name)
         except Exception as exc:
             self.history_status.set("Filtro inválido: " + str(exc))
+            return
+        if not self.key or not self.secret:
+            self._show_history_rows(
+                local_rows,
+                f"{len(local_rows)} cadastro(s) LOCAIS no período: configure a conexão HikCentral.")
             return
 
         self.history_status.set("Consultando registros compartilhados do HikCentral...")
@@ -1059,20 +1065,9 @@ class ValeApp(tk.Tk):
             client = self.client()
             result = fetch_checkins(
                 client, start_iso, end_iso, page, name, page_size=page_size)
-            # Níveis não aparecem na tabela. Consultar centenas de reservas
-            # antecipadamente atrasava a lista inteira; a confirmação remota
-            # do nível continua sendo feita ao abrir um cadastro para editar.
-            result["level_warning"] = ""
-            result["directory_rows"] = []
-            result["directory_warning"] = ""
-            if name.strip() and page == 1 and len(result["rows"]) < page_size:
-                try:
-                    result["directory_rows"] = search_visitor_directory(
-                        client, name.strip(), page=1,
-                        page_size=page_size - len(result["rows"]))
-                except Exception as exc:
-                    result["directory_warning"] = (
-                        " Visitor Information indisponível: " + str(exc))
+            # Uma única busca de check-ins, já combinando data de validade
+            # e nome na API. A base geral Visitor Information não possui
+            # validade verificável e NÃO deve contaminar esta lista.
             return result
 
         def finish(result, error):
@@ -1083,9 +1078,16 @@ class ValeApp(tk.Tk):
                     str(error))
                 self.history_page_label.set("Consulta central indisponível")
                 return
+            # Defesa adicional: a OpenAPI pode devolver também visitas que
+            # se sobrepõem ao intervalo. O filtro visível é SOMENTE a data
+            # de INÍCIO VÁLIDO, e também exige correspondência do nome.
+            # Isso impede mostrar a visita de 06/11 numa pesquisa 05/11.
+            verified_rows = filter_local_history_by_entry_date(
+                result["rows"], start_iso, end_iso, name)
+            excluded = len(result["rows"]) - len(verified_rows)
             local_index = {r["visitor_id"]: r for r in local_rows}
             rows = []
-            for remote in result["rows"]:
+            for remote in verified_rows:
                 local = local_index.get(remote["visitor_id"])
                 # Os privilégios locais só podem ser usados se o mesmo registro
                 # e período continuarem confirmados remotamente.
@@ -1117,29 +1119,18 @@ class ValeApp(tk.Tk):
                     row["_local_verified"] = True
                     row["state"] = local.get("state", "não verificada")
                 rows.append(row)
-            # Visitantes podem existir na base geral SEM check-in no intervalo.
-            # Não os confundir com visitas verificadas nem permitir gravação.
-            checkin_count = len(rows)
-            listed_ids = {r["visitor_id"] for r in rows}
-            for directory_row in result.get("directory_rows", []):
-                if len(rows) >= page_size:
-                    break
-                if directory_row["visitor_id"] not in listed_ids:
-                    rows.append(directory_row)
-                    listed_ids.add(directory_row["visitor_id"])
-            directory_count = len(rows) - checkin_count
             description = (
-                f"HikCentral: {checkin_count} check-ins nesta página; "
-                f"{result['total']} check-ins no período."
-                + (f" {directory_count} visitante(s) adicional(is) encontrado(s) "
-                   "em Visitor Information, sem check-in no período." if directory_count else "")
-                + result.get("directory_warning", "")
-                + result.get("level_warning", ""))
+                f"HikCentral: {len(rows)} check-ins nesta página após filtro de "
+                "início válido e nome. "
+                f"API retornou {result['total']} registro(s) antes da conferência local."
+                + (f" {excluded} registro(s) fora da seleção descartado(s) "
+                   "nesta página." if excluded else ""))
             self._show_history_rows(rows, description)
-            # Eventos de catraca só podem ser buscados para visitas com intervalo.
-            self._load_history_passages(rows[:checkin_count], description)
+            # Somente visitas confirmadas no período entram na consulta ACS.
+            self._load_history_passages(rows, description)
             self.history_page_label.set(
-                f"Página {page} • {result['total']} registros • {page_size} por página")
+                f"Página {page} • {result['total']} registro(s) na API, antes da "
+                f"validação de datas • {page_size} por página")
             self.history_next_button.configure(
                 state="normal" if result["has_next"] else "disabled")
             self.history_previous_button.configure(
