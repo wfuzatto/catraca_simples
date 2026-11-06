@@ -56,9 +56,10 @@ def selected_editor_access(group, available_groups, settings):
     independently checked just before applying any changes.
     """
     group = str(group or "").strip()
+    # A preferência de grupo vale para novos cadastros neste caixa, não
+    # para editar um visitante existente de outro grupo já validado.
     requested = visitor_levels_for_group(
-        group, available_groups, settings.get("group_access", {}),
-        settings.get("preferred_group", ""))
+        group, available_groups, settings.get("group_access", {}), "")
     approved = VALE_VISITOR_LEVELS.get(group)
     if not approved or requested != [approved]:
         raise ValueError(
@@ -167,6 +168,15 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     # o alerta laranja repetitivo; a confirmação do salvamento mostra
     # o grupo, nível e catracas efetivamente escolhidos.
 
+    original_group = str(record.get("group", "")).strip()
+    allowed_groups = list(dict.fromkeys(
+        str(g).strip() for g in getattr(app, "connected_groups", [])
+        if str(g).strip()))
+    if not readonly and original_group not in allowed_groups:
+        readonly = True
+        readonly_reason = (
+            f"O grupo original '{original_group or 'não informado'}' não foi "
+            "confirmado na sincronização HikCentral. Reabra após sincronizar.")
     if readonly:
         ctk.CTkLabel(body,
                      text="Somente consulta: " + (readonly_reason or
@@ -200,19 +210,28 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         ctk.CTkEntry(body, textvariable=var,
                      state="disabled" if readonly else "normal").pack(fill="x")
         fields[field] = var
-    ctk.CTkLabel(body, text="Grupo de visitante", anchor="w").pack(
-        fill="x", pady=(10, 3))
-    original_group = str(record.get("group", "")).strip()
-    allowed_groups = list(dict.fromkeys(
-        str(g).strip() for g in getattr(app, "connected_groups", [])
-        if str(g).strip()))
+    # A edição de datas não deve trocar o grupo nem suas permissões. Em
+    # versões anteriores o combo aceitava mudança de grupo, mas o fluxo
+    # não revogava o nível anterior, podendo deixar acessos conflitantes.
+    # Grupo diferente requer futura migração própria com remoção auditada.
+    ctk.CTkLabel(body, text="Grupo original (preservado na edição)",
+                 anchor="w").pack(fill="x", pady=(10, 3))
     group_var = tk.StringVar(value=original_group)
     editor_groups = ttk.Combobox(
-        body, textvariable=group_var, state=(
-            "disabled" if readonly or not allowed_groups else "readonly"),
-        values=allowed_groups, style="Vale.TCombobox", font=("Segoe UI", 12))
+        body, textvariable=group_var, state="disabled",
+        values=[original_group] if original_group else [],
+        style="Vale.TCombobox", font=("Segoe UI", 12))
     editor_groups.pack(fill="x", ipady=5)
     dialog._editor_group_selector = editor_groups
+    if not readonly:
+        ctk.CTkLabel(
+            body, text=(
+                "Este cadastro conserva o grupo original e seu nível Visitor. "
+                "Trocar de Vale para Serra exige migração separada, com retirada "
+                "do acesso anterior; não ocorrerá ao corrigir datas."),
+            wraplength=505, justify="left", text_color="#64748B").pack(pady=(5, 4))
+    dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro")
+                 + " — " + record["visitor_id"])
     level_status = tk.StringVar()
 
     def show_selected_level(*_):
@@ -221,8 +240,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             level = selected_editor_access(
                 group, allowed_groups, app.settings)[0]
             level_status.set(
-                "Nível a aplicar: " + level +
-                " • pontos de acesso consultados no HikCentral ao salvar")
+                "Nível original a preservar: " + level +
+                " • pontos de acesso serão confirmados antes de salvar")
         except ValueError:
             level_status.set(
                 "Grupo sem mapeamento Visitor autorizado — salvar indisponível")
@@ -233,9 +252,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     if not readonly:
         ctk.CTkLabel(
             body, text=(
-                "O grupo selecionado define as permissões A APLICAR ao salvar. "
-                "O HikCentral pode omitir o nível anteriormente concedido; "
-                "a seleção não comprova permissões antigas."),
+                "A edição mantém o grupo original. O nível de acesso "
+                "será validado e reaplicado ao mesmo visitante, sem mudar "
+                "para outro grupo."),
             wraplength=505, justify="left", text_color="#64748B").pack(pady=(0, 5))
     ctk.CTkLabel(body,
         text="A imagem e a pulseira não ficam no histórico local. "
@@ -307,6 +326,11 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             if record.get("expect_card") and not fields["card"].get().strip():
                 raise ValueError("Informe a pulseira para preservar a credencial NFC.")
             new_group = group_var.get().strip()
+            if new_group != original_group:
+                raise ValueError(
+                    "O grupo original não pode ser alterado nesta edição. "
+                    "Para trocar grupo, é necessário retirar o nível anterior "
+                    "por um procedimento de migração separado.")
             requested_level = selected_editor_access(
                 new_group, allowed_groups, app.settings)
             visit_start, visit_end = visitor_period_from_dates(
@@ -333,10 +357,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     "\nGrupo selecionado: " + new_group +
                     "\nNível Visitor a aplicar: " + requested_level[0] +
                     "\n\n" +
-                    ("ATENÇÃO: o grupo será alterado de '" + original_group +
-                     "' para '" + new_group + "'. Isso altera as permissões.\n\n"
-                     if new_group != original_group else
-                     "Será reaplicado o nível configurado para esse grupo.\n\n") +
+                    "O grupo original será preservado; não será alterado nesta edição.\n"
+                    "Será reaplicado apenas o nível do grupo já existente.\n\n" +
                     f"Validade a gravar: {visit_start:%d/%m/%Y %H:%M:%S} a "
                     f"{visit_end:%d/%m/%Y %H:%M:%S}.\n"
                     + ("ATENÇÃO: a validade anterior possui horários/período diferentes. "
@@ -378,15 +400,14 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     "Atualize a lista antes de editar.")
             selected, doors = client.resolve_levels(requested_level)
             verify_visitor_access_plan(selected, doors, requested_level)
-            if new_group == original_group:
-                if record.get("access_level_ids") and (
-                        [str(x["id"]) for x in selected] !=
-                        [str(x) for x in record["access_level_ids"]]):
-                    raise ValueError("O nível original mudou. Edição bloqueada.")
-                if record.get("door_ids") and set(doors) != set(record["door_ids"]):
-                    raise ValueError("Pontos originais alterados; edição bloqueada.")
-            # Ao trocar de grupo, a diferença de nível/catracas é intencional,
-            # mas somente no plano homologado validado nesta mesma consulta.
+            if record.get("access_level_ids") and (
+                    [str(x["id"]) for x in selected] !=
+                    [str(x) for x in record["access_level_ids"]]):
+                raise ValueError("O nível original mudou. Edição bloqueada.")
+            if record.get("door_ids") and set(doors) != set(record["door_ids"]):
+                raise ValueError("Pontos originais alterados; edição bloqueada.")
+            # Não há troca de grupo aqui; jamais adicionar nível diferente
+            # sem revogar o antigo com procedimento homologado.
             from visitor_edit_transaction import update_existing_visit
             return update_existing_visit(
                 client, record, payload, selected, doors, obj, new_group,

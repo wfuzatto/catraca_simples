@@ -5,7 +5,7 @@ Se a resposta de escrita não puder ser conciliada, deixa um journal auditável
 e NÃO substitui datas ou IDs do histórico local.
 """
 from pathlib import Path
-from core import app_dir, _write_json_atomic
+from core import app_dir, _write_json_atomic, VALE_VISITOR_LEVELS
 from remote_history import find_original_appointment, original_appointment_identifier
 from visitor_history import save_registration, set_history_status
 from access_receipt import make_access_receipt
@@ -19,6 +19,27 @@ def update_existing_visit(client, record: dict, payload: dict,
     original_checkin = str(record.get("registration_record_id") or "").strip()
     if not vid or not original_checkin or not selected or not doors:
         raise ValueError("Edição exige Visitor ID, check-in e nível de acesso confirmados.")
+
+    # Não permitir que o mesmo editor troque um visitante de grupo, mantendo
+    # níveis antigos em paralelo. A mudança de grupo exige fluxo específico
+    # de remoção do privilégio anterior e concessão do novo.
+    original_group = str(record.get("group") or "").strip()
+    if not original_group or str(group).strip() != original_group:
+        raise ValueError(
+            "O grupo do visitante diverge do original. Alteração de grupo "
+            "bloqueada até haver migração de permissões segura.")
+    approved = VALE_VISITOR_LEVELS.get(original_group)
+    if (not approved or list(requested_level) != [approved] or
+            len(selected) != 1 or str(selected[0].get("name") or "") != approved):
+        raise ValueError("Nível Visitor não corresponde ao grupo original.")
+    visitor_entries = payload.get("visitorInfoList") or []
+    try:
+        requested_group = visitor_entries[0]["VisitorInfo"]["visitorGroupName"]
+    except (IndexError, TypeError, KeyError):
+        raise ValueError("Payload de edição não contém grupo original verificável.")
+    if str(requested_group).strip() != original_group:
+        raise ValueError("O payload altera o grupo original; edição bloqueada.")
+
     old_id = client.find_existing_registration(
         vid, record["entry_at"], record["exit_at"])
     if str(old_id or "") != original_checkin:
@@ -81,6 +102,28 @@ def update_existing_visit(client, record: dict, payload: dict,
             "O ID da reserva devolvido pelo update difere da reserva consultada. "
             "Não repita a operação; concilie pelo HikCentral.")
 
+    # A confirmação da DATA não basta: conferir também o grupo remoto.
+    # Sem evidência do grupo original, não informar sucesso nem reaplicar
+    # acesso, para não deixar Vale e Serra incoerentes.
+    from remote_history import visitor_details
+    from hikcentral import normalize
+    details = visitor_details(client, vid)
+    info = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    if not isinstance(info, dict):
+        raise ValueError("O HikCentral não confirmou o grupo do visitante editado.")
+    remote_vid = str(info.get("visitorId") or info.get("ID") or "").strip()
+    remote_group = str(
+        info.get("visitorGroupName") or info.get("visitorGroup") or "").strip()
+    if (remote_vid and remote_vid != vid) or not remote_group or (
+            normalize(remote_group) != normalize(original_group)):
+        raise ValueError(
+            "Grupo do visitante no HikCentral não corresponde ao grupo original. "
+            "Histórico preservado; verifique o registro antes de nova alteração.")
+
+    # Repete a etapa de associação usada no cadastro original, mas SOMENTE
+    # para o MESMO nível homologado. Não cria permissões de outro grupo.
+    client.assign_access(vid, str(selected[0]["id"]))
+
     verified = {
         **record,
         "first": visitor.first_name, "last": visitor.last_name,
@@ -117,5 +160,6 @@ def update_existing_visit(client, record: dict, payload: dict,
         report["access_receipt_saved"] = True
     report["confirmed_appointment_id"] = actual_appointment
     report["confirmed_checkin_id"] = str(actual_checkin)
+    report["confirmed_group"] = original_group
     journal.unlink(missing_ok=True)
     return report

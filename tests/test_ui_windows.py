@@ -701,6 +701,7 @@ def test_editor_allows_replacement_photo_when_download_fails(monkeypatch):
     monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
     root = app.ValeApp()
     try:
+        root.connected_groups = ["Hóspedes Vale", "Hóspedes Serra"]
         root.update()
         record = {
             "visitor_id": "1009",
@@ -734,7 +735,7 @@ def test_editor_allows_replacement_photo_when_download_fails(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Interface Tk do editor exige Windows")
-def test_editor_group_select_uses_connected_group_list(monkeypatch):
+def test_editor_preserves_original_group_and_blocks_direct_reassignment(monkeypatch):
     import app
     import visitor_editor
     import customtkinter as ctk
@@ -764,11 +765,10 @@ def test_editor_group_select_uses_connected_group_list(monkeypatch):
         popup = next(x for x in root.winfo_children()
                      if isinstance(x, ctk.CTkToplevel))
         combo = popup._editor_group_selector
-        assert combo.instate(["readonly"])
+        assert combo.instate(["disabled"])
         assert combo.get() == "Hóspedes Vale"
-        assert list(combo.cget("values")) == root.connected_groups
-        combo.set("Hóspedes Serra")
-        assert combo.get() == "Hóspedes Serra"
+        # A edição da validade NÃO deve listar Serra como alternativa.
+        assert list(combo.cget("values")) == ["Hóspedes Vale"]
         assert popup._save_edit_button.cget("state") == "normal"
         visitor_editor.open_visitor_editor(
             root, record, remote_details={"visitorId": "1009"})

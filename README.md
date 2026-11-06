@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.48` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.49` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -502,3 +502,14 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - Se a foto anterior não for recuperada (erro 128), continua necessário fornecer uma foto substituta para não apagar o reconhecimento facial. A correção de datas não altera os dados de credenciais por si só.
 - Testes offline cobrem identificadores distintos de reserva e check-in, alteração bem-sucedida, retorno de IDs divergentes, falta de registro nas novas datas, perda de resposta após POST e preservação do journal sem nova escrita.
 - **Ainda exige homologação no HikCentral real:** as APIs de diferentes versões podem não refletir imediatamente a alteração de reserva/check-in. Quando isso acontecer, o aplicativo manterá a pendência e não declarará sucesso nem repetirá gravações, evitando inconsistências.
+
+
+## Preview.49 — preservar o grupo original ao editar visitantes
+
+- Causa detectada na edição: a tela permitia trocar diretamente o grupo de um visitante existente, por exemplo, de **Hóspedes Vale** para **Hóspedes Serra**, mas o fluxo só fazia `registerment/update` e `auth/reapplication`. Ele **não repetia** a associação do nível Visitor com `privilege/group/single/addPersons` feita no cadastro novo e também **não retirava** privilégios do grupo anterior. Assim, podia haver divergência entre o grupo exibido, o nível e o acesso real na catraca.
+- O seletor da edição agora mostra **exclusivamente o grupo original da visita verificada no HikCentral, bloqueado para alteração**. A preferência de grupo deste computador vale só para novos cadastros e não pode substituir o grupo de visitantes existentes.
+- A transação rejeita antes do envio qualquer tentativa de trocar o grupo ou o nível pelo código, inclusive se o campo for alterado programaticamente. O `VisitorInfo.visitorGroupName` deve corresponder exatamente ao original.
+- Depois da atualização de datas, o aplicativo relê **identidade e grupo** no HikCentral, além de confirmar reserva e check-in no novo período. Se o grupo remoto faltar ou divergir, mantém a edição pendente e **não declara sucesso**, nem reaplica acessos.
+- Depois de confirmação do grupo original, a edição repete a associação do **mesmo** nível Visitor homologado (`addPersons`, `type=2`) antes da reaplicação aos dispositivos. Não concede níveis de Serra a visitante de Vale, nem vice-versa.
+- **Mudança deliberada de grupo requer fluxo separado de migração**, não disponível na Preview.49. Esse procedimento precisará verificar o nível antigo, retirá-lo via `deletePersons`, confirmar o novo nível e distribuição física; não pode apenas adicionar níveis sem retirar o anterior.
+- Regressões cobrem o caso TOALHEIRO 2: grupo de lista **Hóspedes Vale**, tentativa de seleção **Hóspedes Serra**, preferência local diferente, readback remoto divergente, ausência do grupo e impedimento de nova escrita. Não foram alterados registros reais; é necessário confirmar com o HikCentral em campo.
