@@ -145,5 +145,5 @@ def test_editor_uses_original_group_even_when_station_preferred_is_different():
     available = ["Hóspedes Serra", "Hóspedes Vale", "Day use"]
     assert selected_editor_access("Hóspedes Vale", available, settings) == [
         "VISITANTE_VALE"]
-    with pytest.raises(ValueError, match="homologado"):
+    with pytest.raises(ValueError, match="Grupo"):
         selected_editor_access("Grupo Desconhecido", available, settings)
