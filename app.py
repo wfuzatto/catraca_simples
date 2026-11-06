@@ -1363,74 +1363,55 @@ class ValeApp(tk.Tk):
         record = self._selected_history()
         if not record:
             return
-        if self.busy:
-            messagebox.showwarning("Em andamento", "Aguarde a operação atual.", parent=self)
+        record = dict(record)
+        known_state = record.get("checkin_state")
+        record["_edit_operation"] = ("update" if known_state == "check-in efetuado" else "renew" if
+            known_state in ("check-out", "saída automática", "saída no terminal", "saída em atraso") else "")
+        # A reserva original permanece vinculada à pessoa, mesmo quando já
+        # não aparece na listagem remota depois do check-out.
+        try:
+            local = get_history(record["visitor_id"]) or {}
+            if local.get("appointment_id"):
+                record["appointment_id"] = str(local["appointment_id"])
+        except (OSError, RuntimeError, ValueError):
+            pass
+        from visitor_editor import open_visitor_editor
+        if self.busy or not self.key or not self.secret:
+            open_visitor_editor(self, record, readonly=False,
+                readonly_reason="Complete os campos; a conexão será conferida ao salvar.")
             return
-        if not self.key or not self.secret:
-            from visitor_editor import open_visitor_editor
-            open_visitor_editor(self, record, readonly=True,
-                                readonly_reason="Sem conexão autenticada para edição.")
-            return
-
-        self.history_status.set("Consultando nível, check-in e foto original no HikCentral...")
-        modern_ui.start_history_loading(
-            self, "Carregando dados e foto do visitante...", phase="editor")
+        self.history_status.set("Carregando dados para edição...")
+        modern_ui.start_history_loading(self, "Carregando dados e foto do visitante...", phase="editor")
         def work():
             client = self.client()
-            verified, detail, issue = None, {}, ""
-            if record.get("origin") == "HikCentral":
-                try:
+            verified, detail, issue = dict(record), {}, ""
+            try:
+                if record.get("registration_record_id"):
                     verified, detail = resolve_remote_edit_record(client, record)
-                except Exception as exc:
-                    issue = str(exc)
-                    try:
-                        detail = visitor_details(client, record["visitor_id"])
-                    except Exception:
-                        pass
-            elif record.get("origin") == "VisitorInformation":
-                # Base geral pode conter visitantes sem visita ativa ou encerrados.
-                # Sem recordId de check-in, nunca permitir atualizar/reaplicar.
-                issue = ("Visitante encontrado em Visitor Information, mas sem "
-                         "check-in no período consultado. Para renovar uma estadia "
-                         "encerrada, use o recurso Registrar novamente do HikCentral.")
-                detail = visitor_details(client, record["visitor_id"])
-                detail_id = str(
-                    detail.get("visitorId") or
-                    (detail.get("VisitorInfo") or {}).get("visitorId") or "")
-                if detail_id and detail_id != record["visitor_id"]:
-                    raise ValueError("Visitor ID do detalhe diverge do selecionado.")
-            else:
-                verified = dict(record)
+                else:
+                    detail = visitor_details(client, record["visitor_id"])
+            except Exception as exc:
+                issue = str(exc)
                 try:
                     detail = visitor_details(client, record["visitor_id"])
                 except Exception:
                     pass
-            photo = b""
-            photo_error = ""
+            photo, photo_error = b"", ""
             try:
-                photo = fetch_visitor_photo(
-                    client, record["visitor_id"], record.get("photo_url", ""),
-                    details=detail)
+                photo = fetch_visitor_photo(client, record["visitor_id"], record.get("photo_url", ""), details=detail)
             except Exception as exc:
                 photo_error = str(exc)
-            return verified or dict(record), detail, photo, issue, photo_error
-
+            return verified, detail, photo, issue, photo_error
         def finish(result, error):
             modern_ui.stop_history_loading(self, phase="editor")
             if error:
-                self.history_status.set("Não foi possível consultar o visitante: " + str(error))
+                open_visitor_editor(self, record, readonly=False, readonly_reason=str(error), photo_error=str(error))
+                self.history_status.set("Complete os campos destacados para editar.")
                 return
             verified, detail, photo, issue, photo_error = result
-            from visitor_editor import open_visitor_editor
-            open_visitor_editor(self, verified, remote_details=detail,
-                                initial_photo=photo,
-                                readonly=bool(issue),
-                                readonly_reason=issue,
-                                photo_error=photo_error)
-            if issue:
-                self.history_status.set("Detalhes carregados. Edição protegida: " + issue)
-            else:
-                self.history_status.set("Cadastro e nível originais confirmados para edição.")
+            open_visitor_editor(self, verified, remote_details=detail, initial_photo=photo,
+                readonly=False, readonly_reason=issue, photo_error=photo_error)
+            self.history_status.set("Edição disponível. Complete os campos destacados e salve.")
         self.task(work, finish)
 
     def clean_transaction_cache(self):

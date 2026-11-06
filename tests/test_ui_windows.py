@@ -462,7 +462,7 @@ def test_new_history_tab_keeps_registration_and_settings_intact(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Visualização real da foto exige Tk do Windows")
-def test_remote_editor_shows_photo_at_top_and_blocks_unverified_updates(monkeypatch):
+def test_remote_editor_shows_photo_and_keeps_unverified_form_editable(monkeypatch):
     """Teste de janela offline: nenhuma chamada ao HikCentral, nenhum cadastro alterado."""
     import io
     import customtkinter as ctk
@@ -497,7 +497,8 @@ def test_remote_editor_shows_photo_at_top_and_blocks_unverified_updates(monkeypa
         assert len(dialogs) == 1
         dialog = dialogs[0]
         assert getattr(dialog._photo_preview_widget, "image", None) is not None
-        assert dialog._save_edit_button.cget("state") == "disabled"
+        assert dialog._save_edit_button.cget("state") == "normal"
+        assert dialog.title().startswith("Editar cadastro")
         dialog.destroy()
     finally:
         root.destroy()
@@ -618,8 +619,8 @@ def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monke
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Teste do editor exige Tk Windows")
-def test_general_visitor_without_checkin_opens_photo_readonly(monkeypatch):
-    """Visitor Information não possui datas de visita nem recordId: nunca editar."""
+def test_general_visitor_without_checkin_opens_editable_required_fields(monkeypatch):
+    """Dados ausentes devem ser completados na tela, sem torná-la somente leitura."""
     import app
     import visitor_editor
     import customtkinter as ctk
@@ -646,14 +647,17 @@ def test_general_visitor_without_checkin_opens_photo_readonly(monkeypatch):
         windows = [child for child in root.winfo_children()
                    if isinstance(child, ctk.CTkToplevel)]
         assert len(windows) == 1
-        assert windows[0]._save_edit_button.cget("state") == "disabled"
+        assert windows[0]._save_edit_button.cget("state") == "normal"
+        assert windows[0].title().startswith("Editar cadastro")
+        assert "entry" in windows[0]._editor_field_errors
+        assert "exit" in windows[0]._editor_field_errors
         windows[0].destroy()
     finally:
         root.destroy()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Teste da janela de pendências exige Windows")
-def test_pending_recovery_button_and_readonly_editor(monkeypatch, tmp_path):
+def test_pending_recovery_does_not_make_other_editor_readonly(monkeypatch, tmp_path):
     import app
     import core
     import visitor_editor
@@ -696,8 +700,9 @@ def test_pending_recovery_button_and_readonly_editor(monkeypatch, tmp_path):
         root.update_idletasks()
         dialogs = [x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel)]
         assert len(dialogs) == 1
-        assert dialogs[0]._save_edit_button.cget("state") == "disabled"
-        assert dialogs[0].title().startswith("Visualizar cadastro")
+        assert dialogs[0]._save_edit_button.cget("state") == "normal"
+        assert dialogs[0].title().startswith("Editar cadastro")
+        assert dialogs[0]._editor_field_widgets["first"].cget("state") == "normal"
         dialogs[0].destroy()
     finally:
         root.destroy()
@@ -780,7 +785,7 @@ def test_editor_preserves_original_group_and_blocks_direct_reassignment(monkeypa
         popup = next(x for x in root.winfo_children()
                      if isinstance(x, ctk.CTkToplevel))
         combo = popup._editor_group_selector
-        assert combo.instate(["disabled"])
+        assert str(combo.cget("state")) == "readonly"
         assert combo.get() == "Hóspedes Vale"
         # A edição da validade NÃO deve listar Serra como alternativa.
         assert list(combo.cget("values")) == ["Hóspedes Vale"]
@@ -983,9 +988,12 @@ def test_unverified_or_mismatched_remote_group_never_defaults_to_day_use(monkeyp
         root.update_idletasks()
         popup = next(x for x in root.winfo_children()
                      if isinstance(x, ctk.CTkToplevel))
-        assert popup.title().startswith("Visualizar cadastro")
-        assert popup._save_edit_button.cget("state") == "disabled"
-        assert popup._editor_group_selector.get() == "Hóspedes Vale"
+        assert popup.title().startswith("Editar cadastro")
+        assert popup._save_edit_button.cget("state") == "normal"
+        assert popup._editor_group_selector.get() == ""
+        assert "group" in popup._editor_field_errors
+        popup._editor_group_selector.set("Hóspedes Serra")
+        assert "group" not in popup._editor_field_errors
         popup.destroy()
     finally:
         root.destroy()
@@ -1086,5 +1094,157 @@ def test_editor_save_shows_loading_until_operation_finishes(monkeypatch):
         assert popup.winfo_viewable()
         assert alerts
         popup.destroy()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Campos reais do editor exigem Windows Tk")
+def test_closed_visit_photo_error_marks_required_fields_and_accepts_completion(monkeypatch, tmp_path):
+    import app
+    import visitor_editor
+    import customtkinter as ctk
+    from PIL import Image
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    errors, submissions = [], []
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: errors.append(a))
+    monkeypatch.setattr(visitor_editor.messagebox, "showwarning", lambda *a, **k: errors.append(a))
+    monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
+    photo = tmp_path / "photo.jpg"
+    Image.new("RGB", (80, 80), "white").save(photo, "JPEG")
+    monkeypatch.setattr(visitor_editor.filedialog, "askopenfilename", lambda **k: str(photo))
+    root = app.ValeApp()
+    root.task = lambda work, done, **kw: submissions.append((work, done))
+    try:
+        root.connected_groups = ["Hóspedes Serra"]
+        visitor_editor.open_visitor_editor(root, {
+            "visitor_id": "1426", "registration_record_id": "old-checkin",
+            "appointment_id": "booking-1426",
+            "origin": "HikCentral", "checkin_state": "check-out",
+            "first": "Wesley", "last": "123 Nascimento", "group": "Hóspedes Serra",
+            "entry_at": "2026-11-06T00:00:00-03:00", "exit_at": "2026-11-06T23:59:59-03:00",
+        }, readonly=True, readonly_reason="Esta visita está encerrada.", photo_error="código128")
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel))
+        assert popup.title().startswith("Editar cadastro")
+        assert popup._save_edit_button.cget("state") == "normal"
+        assert popup._editor_photo_button.cget("state") == "normal"
+        assert popup._editor_camera_button.cget("state") == "normal"
+        assert popup._editor_appointment_selector.get() == "booking-1426"
+        assert "appointment" not in popup._editor_field_errors
+        assert "photo" in popup._editor_field_errors
+        assert "credential_mode" in popup._editor_field_errors
+        assert popup._editor_field_widgets["photo"].cget("border_color") == "#DC2626"
+        popup._save_edit_button.invoke()
+        assert errors and not submissions
+        popup._editor_field_vars["card"].set("12345678")
+        popup._editor_credential_selector.set("Foto e pulseira")
+        popup._editor_photo_button.invoke()
+        assert not popup._editor_field_errors
+        assert popup._editor_field_widgets["photo"].cget("border_color") != "#DC2626"
+        popup._save_edit_button.invoke()
+        root.update_idletasks()
+        assert len(submissions) == 1
+        assert popup._edit_submitting is True
+        class ChooseVisit(ValueError):
+            fields = {"visit": "Selecione a visita correspondente."}
+            choices = {"visit": [{
+                "recordId": "old-checkin", "visitorStatus": "1",
+                "visitorBaseInfo": {"visitorId": "1426", "visitorGroup": "Hóspedes Serra",
+                                    "visitStartTime": "2026-11-06T00:00:00-03:00",
+                                    "visitEndTime": "2026-11-06T23:59:59-03:00"}}]}
+        submissions[0][1](None, ChooseVisit("Selecione a visita."))
+        assert "visit" in popup._editor_field_errors
+        choices = list(popup._editor_visit_selector.cget("values"))
+        assert len(choices) == 1
+        popup._editor_visit_selector.set(choices[0])
+        assert "visit" not in popup._editor_field_errors
+        assert popup._editor_field_vars["card"].get() == "12345678"
+        popup.destroy()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Correção de entrega no editor exige Windows Tk")
+@pytest.mark.parametrize("rejected_field", ["photo", "card"])
+def test_failed_delivery_keeps_form_and_corrects_new_checkin_without_second_renewal(monkeypatch, tmp_path, rejected_field):
+    import io
+    import app
+    import visitor_editor
+    import visitor_edit_transaction
+    import customtkinter as ctk
+    from PIL import Image
+    from core import default_settings
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
+    warnings = []
+    monkeypatch.setattr(visitor_editor.messagebox, "showwarning", lambda *a, **k: warnings.append(a))
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
+    monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
+    stream = io.BytesIO()
+    Image.new("RGB", (80, 80), "white").save(stream, "JPEG")
+    replacement = tmp_path / "replacement.jpg"
+    Image.new("RGB", (80, 80), "gray").save(replacement, "JPEG")
+    monkeypatch.setattr(visitor_editor.filedialog, "askopenfilename", lambda **k: str(replacement))
+    root = app.ValeApp()
+    root.refresh_history = lambda: None
+    submissions, sent_records = [], []
+    root.task = lambda work, done, **kw: submissions.append((work, done))
+    record = {
+        "visitor_id": "1426", "registration_record_id": "old-checkin", "appointment_id": "old-booking",
+        "origin": "HikCentral", "checkin_state": "check-out", "_edit_operation": "renew",
+        "first": "Wesley", "last": "Nascimento", "group": "Hóspedes Serra",
+        "entry_at": "2026-11-06T00:00:00-03:00", "exit_at": "2026-11-06T23:59:59-03:00",
+        "card_number": "12345678",
+    }
+    class FakeClient:
+        def visitor_groups(self):
+            return ["Hóspedes Serra"]
+        def resolve_levels(self, names):
+            return [{"id": "serra", "name": "VISITANTE_SERRA"}], [str(i) for i in range(8)]
+    root.client = lambda: FakeClient()
+    def update(_client, item, *_args):
+        sent_records.append(item)
+        return {"state": "confirmed", "operation": "update", "confirmed_checkin_id": "new-checkin"}
+    monkeypatch.setattr(visitor_edit_transaction, "update_existing_visit", update)
+    try:
+        root.connected_groups = ["Hóspedes Serra"]
+        visitor_editor.open_visitor_editor(root, record, initial_photo=stream.getvalue())
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel))
+        popup._save_edit_button.invoke()
+        assert len(submissions) == 1
+        submissions[0][1]({
+            "state": "failed", "operation": "renew", "confirmed_checkin_id": "new-checkin",
+            "doors": [{"faceState": "failed" if rejected_field == "photo" else "confirmed",
+                       "credentialState": "failed" if rejected_field == "card" else "confirmed"}]}, None)
+        root.update_idletasks()
+        assert warnings and popup.winfo_viewable()
+        assert popup._edit_submitting is False
+        assert popup._save_edit_button.cget("state") == "normal"
+        assert set(popup._editor_field_errors) == {rejected_field}
+        assert record["registration_record_id"] == "new-checkin"
+        assert record["checkin_state"] == "check-in efetuado"
+        assert record["_edit_operation"] == "update"
+        assert popup._editor_operation_selector.get() == "Atualizar visita existente"
+        if rejected_field == "photo":
+            popup._editor_photo_button.invoke()
+        else:
+            popup._editor_field_vars["card"].set("87654321")
+        assert not popup._editor_field_errors
+        popup._save_edit_button.invoke()
+        assert len(submissions) == 2
+        result = submissions[1][0]()
+        assert sent_records[-1]["registration_record_id"] == "new-checkin"
+        assert sent_records[-1]["_operator_edit_operation"] == "update"
+        assert "_selected_checkin_record" not in sent_records[-1]
+        submissions[1][1](result, None)
+        assert not popup.winfo_exists()
     finally:
         root.destroy()

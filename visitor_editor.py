@@ -70,27 +70,20 @@ def selected_editor_access(group, available_groups, settings):
 
 def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                         readonly=False, readonly_reason="", photo_error=""):
-    # Nunca empilhar várias janelas modais por cliques repetidos.
+    """Keep the form editable; require the operator to complete missing data."""
+    from editor_validation import (CREDENTIAL_MODES, CLOSED_VISIT_STATES, EDIT_OPERATIONS,
+                                   editor_requirements, validate_editor_fields)
+    from hikcentral import normalize
+
     active = getattr(app, "_active_visitor_editor", None)
     if active is not None and active.winfo_exists():
         active.lift()
         active.focus_force()
         return
-    if app.busy:
-        messagebox.showwarning("Em andamento",
-            "Aguarde a consulta atual antes de abrir o visitante.", parent=app)
-        return
-    # Uma operação pendente impede gravações, mas não pode impedir o operador
-    # de VISUALIZAR um visitante e sua foto.
-    if load_pending():
-        readonly = True
-        readonly_reason = ("Há uma operação de cadastro pendente neste Windows. "
-                           "A visualização permanece disponível; resolva a pendência "
-                           "na aba Cadastro para habilitar alterações.")
     dialog = ctk.CTkToplevel(app)
     app._active_visitor_editor = dialog
-    dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro") + " — " + record["visitor_id"])
-    dialog.geometry("630x750")
+    dialog.title("Editar cadastro — " + str(record.get("visitor_id") or "visitante"))
+    dialog.geometry("660x790")
     dialog.transient(app)
     dialog.grab_set()
     body = ctk.CTkScrollableFrame(dialog)
@@ -98,45 +91,78 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
 
     detail = remote_details if isinstance(remote_details, dict) else {}
     visitor = detail.get("VisitorInfo") or detail.get("visitorInfo") or detail
-    if not isinstance(visitor, dict):
-        visitor = {}
+    visitor = visitor if isinstance(visitor, dict) else {}
     raw_cards = visitor.get("cards") or []
     card_values = [str(x.get("cardNo") or "") for x in raw_cards if isinstance(x, dict)] \
         if isinstance(raw_cards, list) else []
-    card_number = next((x for x in card_values if x), "") or record.get("card_number", "")
-    visitor_photo_metadata = visitor.get("visitorPhoto") or visitor.get("VisitorPhoto") or {}
-    if not isinstance(visitor_photo_metadata, dict):
-        visitor_photo_metadata = {}
-    has_remote_face = bool(
-        record.get("photo_url") or visitor.get("faces") or
-        visitor_photo_metadata.get("haveVisitorPhoto"))
-    has_remote_card = bool(raw_cards or card_number)
-    # A falta da foto pela API não deve tornar o formulário imutável.
-    # Nesse cenário exige-se captura/substituição explícita ANTES de enviar.
-    # Nunca faz update com foto vazia quando a imagem anterior pode existir.
-    must_replace_photo = bool(
-        record.get("origin") == "HikCentral" and
-        (has_remote_face or photo_error) and not initial_photo)
-    must_reenter_card = bool(
-        record.get("origin") == "HikCentral" and
-        has_remote_card and not card_number)
-    if record.get("origin") == "HikCentral" and not readonly:
-        if not record.get("registration_record_id") or not record.get("_remote_verified"):
-            readonly = True
-            readonly_reason = "O check-in ativo precisa ser confirmado no HikCentral antes de editar."
-        elif not has_remote_face and not has_remote_card and not photo_error:
-            readonly = True
-            readonly_reason = "A OpenAPI não confirmou nenhuma credencial original."
+    card_number = next((x for x in card_values if x), "") or str(record.get("card_number") or "")
+    original_group = str(record.get("group") or "").strip()
+    remote_group = str(visitor.get("visitorGroupName") or visitor.get("visitorGroup") or "").strip()
+    missing_fields = record.get("_editor_missing_fields") or {}
+    group_recovery = (not original_group or original_group not in VALE_VISITOR_LEVELS or
+                      bool(remote_group and normalize(remote_group) != normalize(original_group)) or
+                      "group" in missing_fields)
+    available = list(dict.fromkeys(str(g).strip() for g in getattr(app, "connected_groups", [])
+                                   if str(g).strip() in VALE_VISITOR_LEVELS))
+    for group in (original_group, remote_group):
+        if group in VALE_VISITOR_LEVELS and group not in available:
+            available.append(group)
+    if not available:
+        available = list(VALE_VISITOR_LEVELS)
+    allowed_groups = available if group_recovery else [original_group]
 
-    # Título coerente com a capacidade efetiva depois das verificações.
-    dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro")
-                 + " — " + record["visitor_id"])
-    ctk.CTkLabel(body, text="Foto atual no HikCentral", font=("Segoe UI", 14, "bold")).pack(pady=(0, 5))
-    photo_panel = ctk.CTkLabel(
-        body, text="Foto não disponível na API", width=200, height=200,
-        fg_color=("#E9EEF5", "#243043"), corner_radius=10)
-    photo_panel.pack(pady=(0, 7))
-    dialog._photo_preview_widget = photo_panel  # Permite teste GUI e limpeza automática.
+    notes = []
+    if readonly_reason:
+        notes.append("Complete os dados indicados para salvar. " + str(readonly_reason))
+    try:
+        if load_pending():
+            notes.append("Há uma operação pendente neste computador; os campos continuam editáveis e a gravação será conferida para este visitante.")
+    except Exception:
+        notes.append("A consulta de pendências não terminou; a conferência será refeita ao salvar.")
+    if notes:
+        ctk.CTkLabel(body, text="\n".join(notes), wraplength=590,
+                     justify="left", text_color="#64748B").pack(fill="x", pady=(0, 8))
+
+    widgets, error_labels, remote_errors, fields = {}, {}, {}, {}
+    selected_visit, visit_choices = {"raw": None}, {}
+    visit_var = tk.StringVar()
+    fields["visit"] = visit_var
+    visit_border = ctk.CTkFrame(body, border_width=2, border_color="#9CA3AF")
+    ctk.CTkLabel(visit_border, text="Selecione a visita que deseja corrigir", anchor="w").pack(fill="x", padx=5)
+    visit_selector = ttk.Combobox(visit_border, textvariable=visit_var, state="readonly", font=("Segoe UI", 11))
+    visit_selector.pack(fill="x", padx=5, pady=3)
+    error_labels["visit"] = ctk.CTkLabel(visit_border, text="", text_color="#B91C1C", wraplength=580, justify="left")
+    error_labels["visit"].pack(fill="x", padx=5)
+    widgets["visit"] = visit_border
+    dialog._editor_visit_selector = visit_selector
+    operation_hint = record.get("_edit_operation") or (
+        "renew" if record.get("checkin_state") in CLOSED_VISIT_STATES else
+        "update" if record.get("checkin_state") == "check-in efetuado" else "")
+    operation_var = tk.StringVar(value=next((label for label, code in EDIT_OPERATIONS.items()
+                                           if code == operation_hint), ""))
+    fields["operation"] = operation_var
+    operation_border = ctk.CTkFrame(body, border_width=2, border_color="#9CA3AF")
+    ctk.CTkLabel(operation_border, text="Operação para este visitante", anchor="w").pack(fill="x", padx=5)
+    operation_selector = ttk.Combobox(operation_border, textvariable=operation_var,
+                                     state="readonly", values=list(EDIT_OPERATIONS))
+    operation_selector.pack(fill="x", padx=5, pady=3)
+    widgets["operation"] = operation_border
+    error_labels["operation"] = ctk.CTkLabel(operation_border, text="", text_color="#B91C1C",
+                                            wraplength=580, justify="left")
+    error_labels["operation"].pack(fill="x", padx=5)
+    dialog._editor_operation_selector = operation_selector
+    if not operation_hint:
+        operation_border.pack(fill="x", pady=(3, 7))
+    ctk.CTkLabel(body, text="Foto do visitante", font=("Segoe UI", 14, "bold")).pack(pady=(0, 4))
+    photo_border = ctk.CTkFrame(body, border_width=2, border_color="#9CA3AF")
+    photo_border.pack(pady=(0, 3))
+    photo_panel = ctk.CTkLabel(photo_border, text="Selecione uma foto ou use a câmera",
+                             width=220, height=200, fg_color=("#E9EEF5", "#243043"))
+    photo_panel.pack(padx=3, pady=3)
+    widgets["photo"] = photo_border
+    error_labels["photo"] = ctk.CTkLabel(body, text="", text_color="#B91C1C", wraplength=590, justify="left")
+    error_labels["photo"].pack(fill="x")
+    dialog._photo_preview_widget = photo_panel
     original_photo = b""
     try:
         if initial_photo:
@@ -148,66 +174,17 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             photo_panel.image = preview
     except Exception:
         original_photo = b""
-        photo_panel.configure(text="Foto indisponível")
-    if (has_remote_face or photo_error) and not original_photo and not readonly:
-        must_replace_photo = True
+    requirements = editor_requirements(record, visitor, photo_error=photo_error,
+                                       photo_loaded=bool(original_photo))
+    chosen_photo = {"bytes": original_photo}
+    dialog._editor_requirements = requirements
     if photo_error and not original_photo:
-        ctk.CTkLabel(body, text="Foto não retornada: " + photo_error,
-                     wraplength=530, justify="left").pack(pady=(0, 6))
-    if not readonly and must_replace_photo:
-        ctk.CTkLabel(body, text=(
-            "Para preservar o reconhecimento facial, selecione ou capture "
-            "uma NOVA foto antes de salvar. A original não foi recuperada. "
-            "Nada será substituído antes da confirmação do cadastro."),
-            text_color="#B45309", wraplength=530, justify="left").pack(pady=(0, 6))
-    # A seleção do grupo determina o plano A APLICAR. Ela não é prova
-    # de associação anterior (a OpenAPI pode omitir accessInfo). Evitar
-    # o alerta laranja repetitivo; a confirmação do salvamento mostra
-    # o grupo, nível e catracas efetivamente escolhidos.
+        ctk.CTkLabel(body, text="A foto não foi recuperada. Selecione uma nova imagem ou use a câmera.",
+                     wraplength=590, justify="left", text_color="#64748B").pack(fill="x", pady=(0, 5))
 
-    original_group = str(record.get("group", "")).strip()
-    # O grupo preferencial deste computador pode ser APENAS Day use,
-    # mesmo quando a pessoa existente está em Hóspedes Vale/Serra.
-    # Não usar essa lista local como autorização para alterar um cadastro
-    # cuja identidade/grupo/nível já foram verificados pela OpenAPI.
-    from hikcentral import normalize
-    remote_group = str(
-        visitor.get("visitorGroupName") or visitor.get("visitorGroup") or ""
-    ).strip()
-    allowed_groups = list(dict.fromkeys(
-        str(g).strip() for g in getattr(app, "connected_groups", [])
-        if str(g).strip()))
-    if not readonly and remote_group and normalize(remote_group) != normalize(original_group):
-        readonly = True
-        readonly_reason = (
-            "O grupo atual do HikCentral difere do grupo do check-in. "
-            "Atualize a lista antes de editar; não será escolhido um grupo padrão.")
-    if not readonly and original_group not in allowed_groups:
-        if (record.get("origin") == "HikCentral"
-                and record.get("_remote_verified") is True
-                and original_group in VALE_VISITOR_LEVELS):
-            # A validação da edição consultou ID, grupo e nível na API.
-            # Apenas permitir selecioná-lo na tela; ANTES de qualquer POST,
-            # work() volta a consultar client.visitor_groups() e resolve_levels().
-            allowed_groups.insert(0, original_group)
-        else:
-            readonly = True
-            readonly_reason = (
-                "Grupo original sem confirmação remota para edição. "
-                "Atualize a lista para validar o grupo e o nível de acesso; "
-                "a preferência deste computador não será usada como substituto.")
-    if readonly:
-        ctk.CTkLabel(body,
-                     text="Somente consulta: " + (readonly_reason or
-                        "não foi possível validar todos os dados originais."),
-                     text_color="#B14F26", wraplength=540,
-                     justify="left").pack(pady=(0, 8))
     def formatted_visit_time(field):
-        # Visitor Information contém pessoas sem um check-in no período.
-        # Não fabricar datas nem falhar ao abrir a foto.
         try:
-            value = record.get(field) or ""
-            return datetime.fromisoformat(value).astimezone(TZ).strftime("%d/%m/%Y")
+            return datetime.fromisoformat(record.get(field) or "").astimezone(TZ).strftime("%d/%m/%Y")
         except (ValueError, TypeError):
             return ""
 
@@ -215,90 +192,134 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         "first": visitor.get("visitorGivenName", record.get("first", "")),
         "last": visitor.get("visitorFamilyName", record.get("last", "")),
         "reservation": visitor.get("remark", record.get("reservation", "")),
-        "entry": formatted_visit_time("entry_at"),
-        "exit": formatted_visit_time("exit_at"),
-        "card": card_number if record.get("origin") == "HikCentral" else "",
+        "entry": formatted_visit_time("entry_at"), "exit": formatted_visit_time("exit_at"),
+        "card": card_number,
     }
-    fields = {}
-    for field, label in [("first", "Nome"), ("last", "Sobrenome"),
+    for field, label in (("first", "Nome"), ("last", "Sobrenome"),
                          ("reservation", "Reserva / apartamento"),
-                         ("entry", "Entrada (DD/MM/AAAA)"),
-                         ("exit", "Saída (DD/MM/AAAA)"),
-                         ("card", "Pulseira/NFC (informar novamente)")]:
-        ctk.CTkLabel(body, text=label, anchor="w").pack(fill="x", pady=(8, 2))
-        var = tk.StringVar(value=initial[field])
-        ctk.CTkEntry(body, textvariable=var,
-                     state="disabled" if readonly else "normal").pack(fill="x")
-        fields[field] = var
-    dialog._editor_field_vars = fields
-    # A edição de datas não deve trocar o grupo nem suas permissões. Em
-    # versões anteriores o combo aceitava mudança de grupo, mas o fluxo
-    # não revogava o nível anterior, podendo deixar acessos conflitantes.
-    # Grupo diferente requer futura migração própria com remoção auditada.
-    ctk.CTkLabel(body, text="Grupo original (preservado na edição)",
-                 anchor="w").pack(fill="x", pady=(10, 3))
-    group_var = tk.StringVar(value=original_group)
-    editor_groups = ttk.Combobox(
-        body, textvariable=group_var, state="disabled",
-        values=[original_group] if original_group else [],
-        style="Vale.TCombobox", font=("Segoe UI", 12))
-    editor_groups.pack(fill="x", ipady=5)
-    dialog._editor_group_selector = editor_groups
-    if not readonly:
-        ctk.CTkLabel(
-            body, text=(
-                "Este cadastro conserva o grupo original e seu nível Visitor. "
-                "Trocar de Vale para Serra exige migração separada, com retirada "
-                "do acesso anterior; não ocorrerá ao corrigir datas."),
-            wraplength=505, justify="left", text_color="#64748B").pack(pady=(5, 4))
-    dialog.title(("Visualizar cadastro" if readonly else "Editar cadastro")
-                 + " — " + record["visitor_id"])
-    level_status = tk.StringVar()
+                         ("entry", "Entrada (DD/MM/AAAA)"), ("exit", "Saída (DD/MM/AAAA)"),
+                         ("card", "Pulseira/NFC")):
+        ctk.CTkLabel(body, text=label, anchor="w").pack(fill="x", pady=(7, 2))
+        fields[field] = tk.StringVar(value=initial[field] or "")
+        entry = ctk.CTkEntry(body, textvariable=fields[field], state="normal", border_width=2)
+        entry.pack(fill="x")
+        widgets[field] = entry
+        error_labels[field] = ctk.CTkLabel(body, text="", text_color="#B91C1C", wraplength=590, justify="left")
+        error_labels[field].pack(fill="x")
 
-    def show_selected_level(*_):
-        group = group_var.get()
+    appointment_var = tk.StringVar(value=str(record.get("appointment_id") or
+                                            record.get("_original_appointment_id") or ""))
+    fields["appointment"] = appointment_var
+    appointment_border = ctk.CTkFrame(body, border_width=2, border_color="#9CA3AF")
+    ctk.CTkLabel(appointment_border, text="Reserva vinculada no HikCentral (ID)",
+                 anchor="w").pack(fill="x", padx=5)
+    appointment_selector = ttk.Combobox(appointment_border, textvariable=appointment_var,
+                                       state="normal", values=[appointment_var.get()] if appointment_var.get() else [])
+    appointment_selector.pack(fill="x", padx=5, pady=3)
+    widgets["appointment"] = appointment_border
+    error_labels["appointment"] = ctk.CTkLabel(appointment_border, text="", text_color="#B91C1C",
+                                              wraplength=580, justify="left")
+    error_labels["appointment"].pack(fill="x", padx=5)
+    dialog._editor_appointment_selector = appointment_selector
+    booking_anchor = ctk.CTkFrame(body, fg_color="transparent", height=1)
+    booking_anchor.pack(fill="x")
+
+    ctk.CTkLabel(body, text="Grupo de visitantes" if group_recovery else "Grupo original",
+                 anchor="w").pack(fill="x", pady=(7, 2))
+    group_var = tk.StringVar(value="" if group_recovery else original_group)
+    fields["group"] = group_var
+    group_border = ctk.CTkFrame(body, border_width=2, border_color="#9CA3AF", corner_radius=4)
+    group_border.pack(fill="x")
+    editor_groups = ttk.Combobox(group_border, textvariable=group_var, state="readonly",
+                                values=allowed_groups, style="Vale.TCombobox", font=("Segoe UI", 12))
+    editor_groups.pack(fill="x", padx=3, pady=3, ipady=5)
+    widgets["group"] = group_border
+    error_labels["group"] = ctk.CTkLabel(body, text="", text_color="#B91C1C", wraplength=590, justify="left")
+    error_labels["group"].pack(fill="x")
+    dialog._editor_group_selector = editor_groups
+    if group_recovery:
+        ctk.CTkLabel(body, text="O grupo não foi confirmado. Selecione o valor correto antes de salvar.",
+                     wraplength=590, justify="left").pack(fill="x")
+    else:
+        ctk.CTkLabel(body, text="O grupo original e seu nível de acesso serão preservados.",
+                     wraplength=590, justify="left", text_color="#64748B").pack(fill="x")
+
+    ctk.CTkLabel(body, text="Credenciais deste visitante", anchor="w").pack(fill="x", pady=(7, 2))
+    mode_var = tk.StringVar(value=requirements["initial_credential_mode"])
+    fields["credential_mode"] = mode_var
+    mode_border = ctk.CTkFrame(body, border_width=2, border_color="#9CA3AF", corner_radius=4)
+    mode_border.pack(fill="x")
+    credential_modes = ttk.Combobox(mode_border, textvariable=mode_var, state="readonly",
+                                   values=list(CREDENTIAL_MODES), font=("Segoe UI", 12))
+    credential_modes.pack(fill="x", padx=3, pady=3, ipady=5)
+    widgets["credential_mode"] = mode_border
+    error_labels["credential_mode"] = ctk.CTkLabel(body, text="", text_color="#B91C1C", wraplength=590, justify="left")
+    error_labels["credential_mode"].pack(fill="x")
+    dialog._editor_credential_selector = credential_modes
+
+    level_status = tk.StringVar()
+    ctk.CTkLabel(body, textvariable=level_status, wraplength=590, justify="left").pack(fill="x", pady=(4, 5))
+    summary = tk.StringVar()
+    summary_label = ctk.CTkLabel(body, textvariable=summary, wraplength=590, justify="left")
+    summary_label.pack(fill="x", pady=(4, 5))
+    status = tk.StringVar(value="Foto original carregada" if original_photo else "Nenhuma foto selecionada")
+
+    def values():
+        return {key: var.get() for key, var in fields.items()}
+
+    def refresh_validation(changed=None):
+        if changed is not None:
+            remote_errors.pop(changed, None)
+            related = {"entry": ("exit",), "exit": ("entry",),
+                       "first": ("last",), "last": ("first",),
+                       "card": ("credential_mode",), "photo": ("credential_mode",)}
+            for field in related.get(changed, ()):
+                remote_errors.pop(field, None)
+        errors = validate_editor_fields(values(), app.settings, allowed_groups,
+                                        photo_bytes=chosen_photo["bytes"], **requirements)
+        if operation_var.get() == "Renovar visita" or requirements["require_appointment"]:
+            appointment_border.pack(fill="x", pady=(7, 3), before=booking_anchor)
+        else:
+            appointment_border.pack_forget()
+        errors.update(remote_errors)
+        dialog._editor_field_errors = dict(errors)
+        for field, widget in widgets.items():
+            widget.configure(border_color="#DC2626" if field in errors else "#9CA3AF")
+            error_labels[field].configure(text=errors.get(field, ""))
+        selected_group = group_var.get().strip()
         try:
-            level = selected_editor_access(
-                group, allowed_groups, app.settings)[0]
-            level_status.set(
-                "Nível original a preservar: " + level +
-                " • pontos de acesso serão confirmados antes de salvar")
+            level = selected_editor_access(selected_group, allowed_groups, app.settings)[0]
+            level_status.set("Nível Visitor: " + level + " • será conferido no HikCentral ao salvar")
         except ValueError:
-            level_status.set(
-                "Grupo sem mapeamento Visitor autorizado — salvar indisponível")
-    group_var.trace_add("write", show_selected_level)
-    show_selected_level()
-    ctk.CTkLabel(body, textvariable=level_status,
-                 wraplength=505, justify="left").pack(pady=(4, 10))
-    if not readonly:
-        ctk.CTkLabel(
-            body, text=(
-                "A edição mantém o grupo original. O nível de acesso "
-                "será validado e reaplicado ao mesmo visitante, sem mudar "
-                "para outro grupo."),
-            wraplength=505, justify="left", text_color="#64748B").pack(pady=(0, 5))
-    ctk.CTkLabel(body,
-        text="A imagem e a pulseira não ficam no histórico local. "
-             "A edição exige as credenciais necessárias para não apagar "
-             "um rosto ou cartão ainda usado. O Visitor ID será preservado.",
-        wraplength=505, justify="left").pack(pady=8)
-    chosen_photo = {"bytes": original_photo}
-    status = tk.StringVar(value=(
-        "Foto original carregada; selecione outra para substituir."
-        if original_photo else "Nenhuma foto original disponível"))
+            level_status.set("Selecione um grupo com nível Visitor válido.")
+        summary.set("Complete os campos em vermelho antes de salvar." if errors else "Dados preenchidos. Você pode salvar o cadastro.")
+        summary_label.configure(text_color="#B91C1C" if errors else "#15803D")
+        return errors
+
+    dialog._editor_field_vars = fields
+    dialog._editor_field_widgets = widgets
+    dialog._editor_error_labels = error_labels
+    dialog._editor_refresh_validation = refresh_validation
+    for field, var in fields.items():
+        if field != "visit":
+            var.trace_add("write", lambda *_args, key=field: refresh_validation(key))
+
+    def choose_visit(*_):
+        selected_visit["raw"] = visit_choices.get(visit_var.get())
+        if selected_visit["raw"] is not None:
+            refresh_validation("visit")
+    visit_var.trace_add("write", choose_visit)
+
     def update_photo_preview(data):
-        try:
-            with Image.open(BytesIO(data)) as source:
-                source.thumbnail((220, 220), Image.Resampling.LANCZOS)
-                frame = ImageTk.PhotoImage(source.copy())
-            photo_panel.configure(image=frame, text="")
-            photo_panel.image = frame
-        except Exception as exc:
-            status.set("Pré-visualização indisponível: " + str(exc))
+        with Image.open(BytesIO(data)) as source:
+            source.thumbnail((220, 220), Image.Resampling.LANCZOS)
+            frame = ImageTk.PhotoImage(source.copy())
+        photo_panel.configure(image=frame, text="")
+        photo_panel.image = frame
+        refresh_validation("photo")
 
     def select_photo():
-        path = filedialog.askopenfilename(parent=dialog,
-            filetypes=[("Fotos", "*.jpg *.jpeg *.png *.bmp")])
+        path = filedialog.askopenfilename(parent=dialog, filetypes=[("Fotos", "*.jpg *.jpeg *.png *.bmp")])
         if path:
             try:
                 chosen_photo["bytes"] = prepare_face_jpeg(Path(path).read_bytes())
@@ -306,8 +327,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 update_photo_preview(chosen_photo["bytes"])
             except Exception as exc:
                 messagebox.showerror("Foto", str(exc), parent=dialog)
+
     def use_camera_photo(stream):
-        # Somente a foto deste registro editado; não modifica o novo cadastro.
         chosen_photo["bytes"] = prepare_face_jpeg(stream.read())
         status.set("Foto capturada pela câmera")
         update_photo_preview(chosen_photo["bytes"])
@@ -321,97 +342,67 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
 
     photo_buttons = ctk.CTkFrame(body, fg_color="transparent")
     photo_buttons.pack(pady=5)
-    ctk.CTkButton(photo_buttons, text="Selecionar foto",
-                  command=select_photo,
-                  state="disabled" if readonly else "normal").pack(side="left", padx=5)
-    ctk.CTkButton(photo_buttons, text="Abrir câmera",
-                  command=capture_photo,
-                  state="disabled" if readonly else "normal").pack(side="left", padx=5)
+    photo_button = ctk.CTkButton(photo_buttons, text="Selecionar foto", command=select_photo)
+    photo_button.pack(side="left", padx=5)
+    camera_button = ctk.CTkButton(photo_buttons, text="Abrir câmera", command=capture_photo)
+    camera_button.pack(side="left", padx=5)
+    dialog._editor_photo_button = photo_button
+    dialog._editor_camera_button = camera_button
     ctk.CTkLabel(body, textvariable=status).pack()
+
     def submit():
-        if readonly:
-            messagebox.showwarning("Edição protegida", readonly_reason, parent=dialog)
-            return
-        if app.busy or load_pending():
-            messagebox.showwarning("Bloqueado", "Outra operação em andamento.", parent=dialog)
-            return
-        try:
-            if must_replace_photo and not chosen_photo["bytes"]:
-                raise ValueError(
-                    "A foto original não foi recuperada. Capture ou selecione "
-                    "uma nova foto antes de salvar; não vamos apagar a face antiga.")
-            if must_reenter_card and not fields["card"].get().strip():
-                raise ValueError("Reinforme a pulseira para preservar a credencial NFC.")
-            if record.get("expect_face") and not chosen_photo["bytes"]:
-                raise ValueError("Selecione a foto para preservar a credencial facial.")
-            if record.get("expect_card") and not fields["card"].get().strip():
-                raise ValueError("Informe a pulseira para preservar a credencial NFC.")
-            new_group = group_var.get().strip()
-            if new_group != original_group:
-                raise ValueError(
-                    "O grupo original não pode ser alterado nesta edição. "
-                    "Para trocar grupo, é necessário retirar o nível anterior "
-                    "por um procedimento de migração separado.")
-            requested_level = selected_editor_access(
-                new_group, allowed_groups, app.settings)
-            visit_start, visit_end = visitor_period_from_dates(
-                fields["entry"].get(), fields["exit"].get(), app.settings)
-            obj = Visitor(fields["first"].get(), fields["last"].get(),
-                new_group, chosen_photo["bytes"], fields["card"].get().strip(),
-                visit_start, visit_end, fields["reservation"].get())
-            try:
-                original_start = datetime.fromisoformat(record.get("entry_at") or "").astimezone(TZ)
-                original_end = datetime.fromisoformat(record.get("exit_at") or "").astimezone(TZ)
-                validity_changed = original_start != visit_start or original_end != visit_end
-            except (ValueError, TypeError):
-                validity_changed = True
-            payload = registration_payload(obj, 0)  # Nunca limitar utilizações na edição.
-            if not record.get("registration_record_id"):
-                raise ValueError("Este cadastro não contém ID de check-in para edição segura.")
-            # A transação relê o check-in ativo antes de salvar e confirma
-            # os dados efetivos após a edição, sem depender da reserva anterior.
-            if not messagebox.askyesno(
-                    "Confirmar atualização de visitante",
-                    "Visitante ID: " + str(record["visitor_id"]) +
-                    "\nGrupo selecionado: " + new_group +
-                    "\nNível Visitor a aplicar: " + requested_level[0] +
-                    "\n\n" +
-                    "O grupo original será preservado; não será alterado nesta edição.\n"
-                    "Será reaplicado apenas o nível do grupo já existente.\n\n" +
-                    f"Validade a gravar: {visit_start:%d/%m/%Y %H:%M:%S} a "
-                    f"{visit_end:%d/%m/%Y %H:%M:%S}.\n"
-                    + ("ATENÇÃO: a validade anterior possui horários/período diferentes. "
-                       "Ao salvar, eles serão substituídos pelos horários configurados "
-                       "(padrão dia inteiro).\n\n" if validity_changed else "\n")
-                    + "O registro de check-in será atualizado sem criar outra reserva. "
-                    "Confirma a aplicação do grupo e nível selecionados?",
-                    parent=dialog):
-                return
-        except Exception as exc:
-            messagebox.showerror("Dados", str(exc), parent=dialog)
-            return
         if getattr(dialog, "_edit_submitting", False):
             return
+        if app.busy:
+            status.set("Aguarde a operação atual terminar; os dados digitados serão mantidos.")
+            return
+        errors = refresh_validation()
+        if errors:
+            first_error = next(iter(errors))
+            widgets[first_error].focus_set()
+            messagebox.showerror("Complete os campos indicados", "\n".join(dict.fromkeys(errors.values())), parent=dialog)
+            return
+        try:
+            new_group = group_var.get().strip()
+            requested_level = selected_editor_access(new_group, allowed_groups, app.settings)
+            visit_start, visit_end = visitor_period_from_dates(fields["entry"].get(), fields["exit"].get(), app.settings)
+            obj = Visitor(fields["first"].get(), fields["last"].get(), new_group,
+                          chosen_photo["bytes"], fields["card"].get().strip(),
+                          visit_start, visit_end, fields["reservation"].get())
+            payload = registration_payload(obj, 0, editing=True)
+            operation = EDIT_OPERATIONS.get(operation_var.get()) or record.get("_edit_operation")
+            if operation == "renew":
+                action = ("Visita encerrada: salvar abrirá uma NOVA VISITA para o MESMO visitante, "
+                          "preservando o histórico encerrado.")
+            elif operation != "update":
+                action = ("Se esta visita estiver encerrada, salvar abrirá uma nova visita para o mesmo "
+                          "visitante, preservando o histórico anterior.")
+            else:
+                action = "O cadastro da visita existente será atualizado para o mesmo visitante."
+            if not messagebox.askyesno("Confirmar cadastro do visitante",
+                    "Visitante ID: " + str(record.get("visitor_id") or "") +
+                    "\nGrupo: " + new_group + "\nNível Visitor: " + requested_level[0] +
+                    f"\nValidade: {visit_start:%d/%m/%Y %H:%M:%S} a {visit_end:%d/%m/%Y %H:%M:%S}.\n\n" +
+                    action + "\n\nConfirma o envio dos dados preenchidos?", parent=dialog):
+                return
+        except Exception as exc:
+            messagebox.showerror("Dados do cadastro", str(exc), parent=dialog)
+            return
+
         dialog._edit_submitting = True
         dialog.grab_release()
         dialog.withdraw()
-        # Modal independente: a aba de histórico está atrás do editor, então
-        # sua barra de progresso não basta para quem acabou de clicar Salvar.
         loading = ctk.CTkToplevel(app)
         loading.withdraw()
-        loading.title("Atualizando visitante")
+        loading.title("Salvando cadastro")
         loading.geometry("425x155")
         loading.resizable(False, False)
         loading.transient(app)
         loading.protocol("WM_DELETE_WINDOW", lambda: None)
         frame = ctk.CTkFrame(loading, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=22, pady=18)
-        ctk.CTkLabel(
-            frame, text="Salvando alteração no HikCentral...",
-            font=("Segoe UI", 15, "bold")).pack(pady=(4, 7))
-        ctk.CTkLabel(
-            frame, text="Conferindo reserva, check-in e permissões. Aguarde.",
-            font=("Segoe UI", 12)).pack(pady=(0, 10))
+        ctk.CTkLabel(frame, text="Salvando dados no HikCentral...", font=("Segoe UI", 15, "bold")).pack(pady=(4, 7))
+        ctk.CTkLabel(frame, text="Conferindo dados, validade e permissões. Aguarde.", font=("Segoe UI", 12)).pack(pady=(0, 10))
         progress = ctk.CTkProgressBar(frame, mode="indeterminate", width=360)
         progress.pack(fill="x")
         progress.start()
@@ -433,72 +424,153 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
 
         def work():
             client = app.client()
-            # Revalidar grupo e acesso imediatamente antes da escrita.
             live_groups = client.visitor_groups()
-            selected_group = selected_editor_access(
-                new_group, live_groups, app.settings)
-            if selected_group != requested_level:
-                raise ValueError("O mapeamento do grupo foi alterado; edição bloqueada.")
-            from remote_history import visitor_details
-            details = visitor_details(client, record["visitor_id"])
-            info = details.get("VisitorInfo") or details.get("visitorInfo") or details
-            if not isinstance(info, dict):
-                raise ValueError("O HikCentral não confirmou os dados atuais do visitante.")
-            identity = str(info.get("visitorId") or info.get("ID") or "")
-            actual_group = str(info.get("visitorGroupName") or
-                               info.get("visitorGroup") or "")
-            if (identity and identity != str(record["visitor_id"])) or (
-                    actual_group and actual_group != original_group):
-                raise ValueError(
-                    "A identidade ou grupo foi alterado em outra estação. "
-                    "Atualize a lista antes de editar.")
+            current_level = selected_editor_access(new_group, live_groups, app.settings)
+            if current_level != requested_level:
+                raise ValueError("Selecione novamente o grupo: o nível Visitor mudou no servidor.")
             selected, doors = client.resolve_levels(requested_level)
             verify_visitor_access_plan(selected, doors, requested_level)
-            if record.get("access_level_ids") and (
-                    [str(x["id"]) for x in selected] !=
-                    [str(x) for x in record["access_level_ids"]]):
-                raise ValueError("O nível original mudou. Edição bloqueada.")
-            if record.get("door_ids") and set(doors) != set(record["door_ids"]):
-                raise ValueError("Pontos originais alterados; edição bloqueada.")
-            # Não há troca de grupo aqui; jamais adicionar nível diferente
-            # sem revogar o antigo com procedimento homologado.
+            edit_record = dict(record)
+            edit_record["_operator_selected_group"] = bool(group_recovery)
+            edit_record["appointment_id"] = appointment_var.get().strip()
+            edit_record["_operator_edit_operation"] = EDIT_OPERATIONS.get(operation_var.get(), "")
+            if selected_visit["raw"] is not None:
+                edit_record["_selected_checkin_record"] = selected_visit["raw"]
+                edit_record["_selected_checkin_id"] = str(selected_visit["raw"].get("recordId") or "")
             from visitor_edit_transaction import update_existing_visit
-            return update_existing_visit(
-                client, record, payload, selected, doors, obj, new_group,
-                requested_level)
+            return update_existing_visit(client, edit_record, payload, selected, doors, obj, new_group, requested_level)
+
         def done(result, error):
+            nonlocal group_recovery
             close_edit_loading()
             if error:
-                # Uma falha pode significar escrita remota parcialmente aceita.
-                # Reabrir o editor só para consulta; não habilitar outro POST
-                # quando houver journal, e manter os dados digitados na tela.
+                choices = getattr(error, "choices", {}) or {}
+                if isinstance(choices, dict) and "appointment" in choices:
+                    appointments = []
+                    for item in choices.get("appointment") or []:
+                        value = (item.get("appointRecordId") or item.get("appointID") or
+                                 item.get("appointment_id") or "") if isinstance(item, dict) else item
+                        if str(value or "").strip():
+                            appointments.append(str(value).strip())
+                    appointment_selector.configure(values=list(dict.fromkeys(appointments)))
+                    requirements["require_appointment"] = True
+                    appointment_border.pack(fill="x", pady=(7, 3), before=booking_anchor)
+                if isinstance(choices, dict) and isinstance(choices.get("operation"), list):
+                    operation_selector.configure(values=choices["operation"])
+                    operation_var.set("")
+                    requirements["require_operation"] = True
+                    requirements["require_appointment"] = False
+                    operation_border.pack(fill="x", pady=(3, 7), before=photo_border)
+                if isinstance(choices, dict) and isinstance(choices.get("group"), list):
+                    allowed_groups[:] = list(dict.fromkeys(str(x) for x in choices["group"] if str(x)))
+                    editor_groups.configure(values=allowed_groups)
+                    group_recovery = True
+                    group_var.set("")
+                if isinstance(choices, dict) and isinstance(choices.get("visit"), list):
+                    visit_choices.clear()
+                    statuses = {"0": "Check-in", "1": "Check-out", "2": "Saída automática",
+                                "3": "Saída no terminal", "4": "Saída em atraso"}
+                    for row in choices["visit"]:
+                        if not isinstance(row, dict):
+                            continue
+                        base = row.get("visitorBaseInfo") or {}
+                        start, end = str(base.get("visitStartTime") or ""), str(base.get("visitEndTime") or "")
+                        try:
+                            start = datetime.fromisoformat(start).astimezone(TZ).strftime("%d/%m/%Y %H:%M")
+                            end = datetime.fromisoformat(end).astimezone(TZ).strftime("%d/%m/%Y %H:%M")
+                        except ValueError:
+                            pass
+                        label = (start + " → " + end + " · " + statuses.get(str(row.get("visitorStatus")), "Visita")
+                                 + " · " + str(row.get("recordId") or "")[-6:])
+                        visit_choices[label] = row
+                    visit_selector.configure(values=list(visit_choices))
+                    visit_var.set("")
+                    selected_visit["raw"] = None
+                    visit_border.pack(fill="x", pady=(3, 7), before=photo_border)
+                supplied = getattr(error, "fields", None) or getattr(error, "field_errors", None)
+                if isinstance(supplied, dict):
+                    if "appointment" in supplied:
+                        requirements["require_appointment"] = True
+                        appointment_border.pack(fill="x", pady=(7, 3), before=booking_anchor)
+                    if "operation" in supplied:
+                        requirements["require_operation"] = True
+                        operation_border.pack(fill="x", pady=(3, 7), before=photo_border)
+                    remote_errors.update({key: str(value) for key, value in supplied.items() if key in widgets})
+                else:
+                    message = str(error).casefold()
+                    for field, words in (("photo", ("foto", "facial")),
+                                         ("card", ("pulseira", "cartão", "cardnumber")),
+                                         ("group", ("grupo", "nível", "pontos")),
+                                         ("exit", ("validade", "datas", "período"))):
+                        if any(word in message for word in words):
+                            remote_errors[field] = str(error)
                 if dialog.winfo_exists():
                     dialog.deiconify()
                     dialog.grab_set()
                     dialog.lift()
-                messagebox.showwarning(
-                    "Edição não confirmada",
-                    str(error) + "\n\nConfira a reserva e o check-in no HikCentral "
-                    "antes de repetir. Nenhuma segunda escrita será disparada "
-                    "automaticamente.",
-                    parent=dialog if dialog.winfo_exists() else app)
+                    refresh_validation()
+                messagebox.showwarning("Cadastro não confirmado", str(error), parent=dialog if dialog.winfo_exists() else app)
                 return
             app.refresh_history()
-            note = (
-                " A confirmação do nível foi registrada nesta estação."
-                if result.get("access_receipt_saved") else
-                " A entrega da credencial ainda requer conferência.")
-            messagebox.showinfo(
-                "Cadastro atualizado",
-                "Dados do visitante e validade conferidos no HikCentral.\n"
+            if str(result.get("state") or "").casefold() == "failed":
+                # The data already exists under the new check-in. A correction
+                # must update it, never renew the previous visit a second time.
+                record.update(registration_record_id=str(result["confirmed_checkin_id"]),
+                              _original_checkin_id=str(result["confirmed_checkin_id"]),
+                              _update_record_id=str(result["confirmed_checkin_id"]),
+                              entry_at=payload["visitStartTime"], exit_at=payload["visitEndTime"],
+                              first=obj.first_name, last=obj.last_name, reservation=obj.reservation,
+                              group=new_group, checkin_state="check-in efetuado", _edit_operation="update")
+                record.pop("_selected_checkin_record", None)
+                record.pop("_selected_checkin_id", None)
+                selected_visit["raw"] = None
+                visit_choices.clear()
+                visit_var.set("")
+                visit_border.pack_forget()
+                requirements["require_appointment"] = False
+                requirements["require_operation"] = False
+                operation_var.set("Atualizar visita existente")
+                operation_border.pack_forget()
+                group_recovery = False
+                allowed_groups[:] = [new_group]
+                editor_groups.configure(values=allowed_groups)
+                remote_errors.clear()
+                doors = result.get("doors") or []
+                failed_photo = any(str(door.get("faceState") or "").casefold() == "failed"
+                                   for door in doors if isinstance(door, dict))
+                failed_card = any(str(door.get("credentialState") or "").casefold() == "failed"
+                                  for door in doors if isinstance(door, dict))
+                if not failed_photo and not failed_card:
+                    failed_photo, failed_card = bool(obj.photo_jpeg), bool(obj.card_number)
+                if failed_photo:
+                    requirements["require_photo"] = True
+                    remote_errors["photo"] = "Foto recusada por um dispositivo. Selecione ou capture uma nova foto."
+                if failed_card:
+                    requirements["require_card"] = True
+                    remote_errors["card"] = "Pulseira recusada por um dispositivo. Confira e reinforme o número."
+                status.set("Dados gravados. Complete a credencial recusada para concluir a entrega.")
+                if dialog.winfo_exists():
+                    dialog.deiconify()
+                    dialog.grab_set()
+                    dialog.lift()
+                    refresh_validation()
+                messagebox.showwarning("Dados gravados; credencial recusada",
+                    "Os dados e a validade foram gravados no HikCentral. "
+                    "Complete a credencial destacada em vermelho e salve novamente. "
+                    "A próxima gravação corrigirá o check-in já criado.", parent=dialog)
+                return
+            renewed = result.get("operation") == "renew"
+            messagebox.showinfo("Renovação concluída" if renewed else "Cadastro atualizado",
+                ("Nova visita criada para o mesmo visitante; histórico anterior preservado.\n" if renewed else
+                 "Dados do visitante e validade conferidos no HikCentral.\n") +
                 "ID do check-in: " + str(result["confirmed_checkin_id"]) +
-                "\nEntrega: " + result["state"] + "." + note, parent=app)
+                "\nEntrega: " + result["state"] + ".", parent=app)
             if dialog.winfo_exists():
                 dialog.destroy()
         app.task(work, done)
-    save_button = ctk.CTkButton(body, text="Salvar e reenviar ao HikCentral",
-                                command=submit,
-                                state="disabled" if readonly else "normal")
+
+    save_button = ctk.CTkButton(body, text="Salvar e enviar ao HikCentral", command=submit, state="normal")
     dialog._save_edit_button = save_button
     save_button.pack(pady=12)
     ctk.CTkButton(body, text="Cancelar", command=dialog.destroy).pack(pady=6)
+    refresh_validation()

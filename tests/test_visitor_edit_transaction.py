@@ -1,4 +1,4 @@
-"""Edição de check-in ativo: dados/datas confirmados, sem exigir reserva auxiliar."""
+"""Edição de registros de qualquer estado: campos completos e confirmação remota."""
 from types import SimpleNamespace
 import pytest
 
@@ -15,6 +15,7 @@ NEW_END = "2099-11-08T23:59:59-03:00"
 def record():
     return {
         "visitor_id": "1654", "registration_record_id": "check-old",
+        "appointment_id": "booking-old",
         "entry_at": OLD_START, "exit_at": OLD_END,
         "group": "Hóspedes Vale", "access_names": ["VISITANTE_VALE"],
     }
@@ -29,10 +30,12 @@ def payload():
 
 
 class API:
-    def __init__(self, *, new_record="check-new", returned_id="check-new"):
+    def __init__(self, *, new_record="check-new", returned_id="check-new",
+                 old_status="0", new_status="0"):
         self.new_record = new_record
         self.returned_id = returned_id
         self.old_record = "check-old"
+        self.old_status, self.new_status = old_status, new_status
         self.remote_group = "Hóspedes Vale"
         self.remote_card = "3631506494"
         self.original_group = "Hóspedes Vale"
@@ -43,24 +46,26 @@ class API:
         self.new_reads = []
         self.reads = []
         self.updates = []
+        self.renewals = []
+        self.renewal_appointments = []
         self.applies = []
         self.assignments = []
 
-    def find_registration_record(self, visitor, start, end, *, active_only=True):
+    def find_registration_record(self, visitor, start, end, *, active_only=False, record_id=""):
         assert visitor == "1654"
-        assert active_only is True
-        self.reads.append((visitor, start, end, active_only))
+        self.reads.append((visitor, start, end, active_only, record_id))
         if (start, end) == (OLD_START, OLD_END):
-            record_id, group = self.old_record, self.original_group
+            assert active_only is False
+            found_id, group, status = self.old_record, self.original_group, self.old_status
         elif (start, end) == (NEW_START, NEW_END):
-            record_id = self.new_reads.pop(0) if self.new_reads else self.new_record
-            group = self.remote_group
+            found_id = self.new_reads.pop(0) if self.new_reads else self.new_record
+            group, status = self.remote_group, self.new_status
         else:
             return None
-        if not record_id:
+        if not found_id or (record_id and record_id != found_id) or (active_only and status != "0"):
             return None
         return {
-            "recordId": record_id, "visitorStatus": "0",
+            "recordId": found_id, "visitorStatus": status,
             "visitorCardInfo": {"cardNumber": self.remote_card},
             "visitorBaseInfo": {
                 "visitorId": visitor, "visitStartTime": start, "visitEndTime": end,
@@ -69,11 +74,17 @@ class API:
         }
 
     def find_existing_registration(self, visitor, start, end):
-        row = self.find_registration_record(visitor, start, end, active_only=True)
+        row = self.find_registration_record(visitor, start, end, active_only=False)
         return row["recordId"] if row else None
 
     def update_registered_visitor(self, record_id, vid, info, levels):
         self.updates.append((record_id, vid, info, levels))
+        return self.returned_id
+
+    def register_existing_visitor(self, visitor_id, info, levels, *, appointment_id=""):
+        assert appointment_id
+        self.renewals.append((visitor_id, info, levels))
+        self.renewal_appointments.append(appointment_id)
         return self.returned_id
 
     def post(self, *args, **kwargs):
@@ -131,7 +142,9 @@ def test_edit_active_checkin_without_reservation_updates_data_and_dates(monkeypa
     written, status = use_mocks(monkeypatch)
     api = API()
     journal = tmp_path / "edit.json"
-    response = call(api, journal)
+    item = record()
+    item.pop("appointment_id")
+    response = call(api, journal, item=item)
     assert response["confirmed_checkin_id"] == "check-new"
     assert not response.get("confirmed_appointment_id")
     assert len(api.updates) == 1
@@ -226,7 +239,7 @@ def test_original_checkin_changed_blocks_before_write(monkeypatch, tmp_path):
     api = API()
     api.old_record = "another-checkin"
     journal = tmp_path / "edit.json"
-    with pytest.raises(ValueError, match="Check-in original"):
+    with pytest.raises(ValueError, match="[Cc]heck-in original"):
         call(api, journal)
     assert not api.updates and not written
     assert not journal.exists()
@@ -236,7 +249,6 @@ def test_original_checkin_changed_blocks_before_write(monkeypatch, tmp_path):
     ("detail_first", "NOME ANTIGO"),
     ("detail_last", "SOBRENOME ANTIGO"),
     ("detail_reservation", "RESERVA ANTIGA"),
-    ("detail_visitor", "outra-pessoa"),
     ("remote_card", "PULSEIRA-ANTIGA"),
 ])
 def test_unpersisted_person_data_never_reports_success(monkeypatch, tmp_path, field, value):
@@ -249,6 +261,19 @@ def test_unpersisted_person_data_never_reports_success(monkeypatch, tmp_path, fi
     assert len(api.updates) == 1
     assert not written and not api.applies and not api.assignments
     assert journal.exists()
+
+
+def test_wrong_person_detail_is_rejected_before_any_write(monkeypatch, tmp_path):
+    written, _ = use_mocks(monkeypatch)
+    from edit_errors import EditorFieldError
+    api = API()
+    api.detail_visitor = "outra-pessoa"
+    journal = tmp_path / "edit.json"
+    with pytest.raises(EditorFieldError) as error:
+        call(api, journal)
+    assert "visit" in error.value.fields
+    assert not api.updates and not api.renewals and not written
+    assert not api.applies and not api.assignments and not journal.exists()
 
 
 def test_remote_post_exception_preserves_journal_and_never_sends_again(monkeypatch, tmp_path):
@@ -340,3 +365,122 @@ def test_update_refusal_128_checks_both_dates_without_second_post(monkeypatch, t
     with pytest.raises(ValueError, match="resultado incerto"):
         call(api, journal)
     assert len(sent) == 1
+
+
+@pytest.mark.parametrize("old_status", ["1", "2", "3", "4"],
+                         ids=["checked-out", "auto-out", "terminal-out", "late-out"])
+def test_closed_registration_renews_same_person_with_complete_fields(monkeypatch, tmp_path, old_status):
+    written, _ = use_mocks(monkeypatch)
+    api = API(old_status=old_status, new_status="0")
+    item = {**record(), "checkin_state": "check-out"}
+    result = call(api, tmp_path / "edit.json", item=item)
+    assert result["confirmed_checkin_id"] == "check-new"
+    assert result["operation"] == "renew"
+    assert not api.updates and len(api.renewals) == 1
+    assert api.renewal_appointments == ["booking-old"]
+    visitor_id, sent, _ = api.renewals[0]
+    assert visitor_id == "1654"
+    info = sent["visitorInfoList"][0]["VisitorInfo"]
+    assert (info["visitorGivenName"], info["visitorFamilyName"], info["remark"]) == ("TESTE", "TESTE3", "123")
+    assert info["cards"][0]["cardNo"] == "3631506494"
+    assert (sent["visitStartTime"], sent["visitEndTime"]) == (NEW_START, NEW_END)
+    assert written[-1]["visitor_id"] == "1654"
+    assert api.reads[0][3] is False and api.reads[0][4] == "check-old"
+
+
+def test_renewal_must_confirm_an_active_visit_before_success(monkeypatch, tmp_path):
+    written, _ = use_mocks(monkeypatch)
+    api = API(old_status="1", new_status="1")
+    with pytest.raises(ValueError):
+        call(api, tmp_path / "edit.json")
+    assert not api.updates and len(api.renewals) == 1
+    assert not written and not api.assignments and not api.applies
+
+
+def test_renewal_refusal_never_retries_or_falls_back_to_update(monkeypatch, tmp_path):
+    written, _ = use_mocks(monkeypatch)
+    api = API(old_status="1", new_record=None)
+    sent = []
+
+    def reject(*args, **kwargs):
+        sent.append((args, kwargs))
+        raise HikError("recusa de renovação: código 128")
+
+    api.register_existing_visitor = reject
+    journal = tmp_path / "edit.json"
+    with pytest.raises(HikError, match="128"):
+        call(api, journal)
+    assert len(sent) == 1 and not api.updates and not written
+    assert journal.exists()
+    with pytest.raises(ValueError):
+        call(api, journal)
+    assert len(sent) == 1
+
+
+def test_missing_registration_id_is_recovered_by_unique_remote_record_before_write(monkeypatch, tmp_path):
+    use_mocks(monkeypatch)
+    api = API()
+    item = {**record(), "registration_record_id": ""}
+    result = call(api, tmp_path / "edit.json", item=item)
+    assert result["confirmed_checkin_id"] == "check-new"
+    assert len(api.updates) == 1 and api.updates[0][0] == "check-old"
+    assert api.reads[0][4] == ""
+
+
+def test_missing_group_can_use_operator_explicit_selection(monkeypatch, tmp_path):
+    written, _ = use_mocks(monkeypatch)
+    api = API()
+    item = {**record(), "group": "", "_operator_selected_group": True}
+    result = call(api, tmp_path / "edit.json", item=item)
+    assert result["confirmed_group"] == "Hóspedes Vale"
+    assert len(api.updates) == 1
+    assert written[-1]["group"] == "Hóspedes Vale"
+
+
+@pytest.mark.parametrize("missing", [
+    "visitorInfoList", "visitorGivenName", "visitorFamilyName", "visitorGroupName",
+    "visitStartTime", "visitEndTime", "credentials",
+])
+def test_missing_required_request_fields_never_reach_any_remote_call(monkeypatch, tmp_path, missing):
+    use_mocks(monkeypatch)
+    api = API()
+    requested = payload()
+    if missing in ("visitStartTime", "visitEndTime", "visitorInfoList"):
+        requested.pop(missing)
+    elif missing == "credentials":
+        requested["visitorInfoList"][0]["VisitorInfo"].pop("cards")
+    else:
+        requested["visitorInfoList"][0]["VisitorInfo"].pop(missing)
+    with pytest.raises(ValueError):
+        tx.update_existing_visit(
+            api, record(), requested,
+            [{"id": "10", "name": "VISITANTE_VALE"}], ["door-a"],
+            SimpleNamespace(first_name="TESTE", last_name="TESTE3", reservation="123",
+                            photo_jpeg=b"jpeg", card_number="3631506494"),
+            "Hóspedes Vale", ["VISITANTE_VALE"], journal_path=tmp_path / "edit.json")
+    assert not api.reads and not api.updates and not api.renewals
+
+
+def test_renewal_preserves_verified_original_booking_for_future_edits(monkeypatch, tmp_path):
+    written, _ = use_mocks(monkeypatch)
+    api = API(old_status="1", new_status="0")
+    item = {**record(), "appointment_id": "old-booking", "_original_appointment_id": "old-booking"}
+    result = call(api, tmp_path / "edit.json", item=item)
+    assert result["operation"] == "renew"
+    assert result["confirmed_appointment_id"] == "old-booking"
+    assert written[-1].get("appointment_id") == "old-booking"
+    assert not api.updates and len(api.renewals) == 1
+
+
+def test_closed_visit_missing_booking_requires_operator_selection_before_write(monkeypatch, tmp_path):
+    use_mocks(monkeypatch)
+    from edit_errors import EditorFieldError
+    api = API(old_status="1")
+    item = record()
+    item.pop("appointment_id")
+    journal = tmp_path / "edit.json"
+    with pytest.raises(EditorFieldError) as error:
+        call(api, journal, item=item)
+    assert "appointment" in error.value.fields
+    assert not api.updates and not api.renewals
+    assert not journal.exists()
