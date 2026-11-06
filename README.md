@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.51` (prévia técnica; ainda não homologada em catraca física).
+Versão atual: `1.0.0-preview.52` (prévia técnica; ainda não homologada em catraca física).
 
 Aplicativo Windows para check-in de visitantes diretamente no HikCentral Professional na rede interna. Sem sincronização online/offline e sem servidor intermediário.
 
@@ -529,3 +529,13 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - O cabeçalho da listagem informa explicitamente que é **histórico de check-ins**, não a base de pessoas ativas. Registros de check-out podem permanecer na API de histórico mesmo após exclusão de Visitor Information; a aplicação não apaga dados históricos de auditoria.
 - Filtros Nome + De/Até e a distinção entre validade e horário de cadastro permanecem. Nada é alterado automaticamente no HikCentral por esta atualização.
 - Regressões Windows simulam um computador limitado a Day use editando visitante previamente validado como Hóspedes Vale; e bloqueiam divergência entre grupo do check-in e grupo da consulta detalhada. A entrega física permanece sujeita à homologação na instalação real.
+
+
+## Preview.52 — edição futura, loading do salvamento e diagnóstico do erro 128
+
+- **Reservas futuras já com check-in confirmado:** quando a verificação da OpenAPI comprovou o mesmo Visitor ID, check-in ativo e nível Visitor, mas a lista de reservas omitiu `appointRecordId`, a tela passa a **permitir editar as datas**. Na confirmação, o aplicativo consulta de novo a reserva e exige seu ID único antes de qualquer POST. Se o vínculo continuar ausente ou ambíguo, não grava nem cria outra pessoa/reserva. Uma reserva futura ainda sem check-in efetivo continua exigindo outro fluxo (atualização da reserva, não edição de check-in).
+- **Loading:** após aceitar a confirmação da edição, abre modal visível com barra indeterminada e aviso para aguardar; o editor fica oculto e o botão não pode disparar outra operação. Fecha o modal tanto no sucesso quanto no erro, e reexibe os dados digitados em caso de falha.
+- **Erro 128 / `registerment/update`:** HTTP 200 não implica sucesso. Se o HikCentral devolver erro, executar apenas consultas dos check-ins nas datas originais e solicitadas, sem nenhum segundo POST, e incluir no alerta se cada período foi encontrado. `visitor_edit_inflight.json` mantém a tentativa para conciliação; ausência de resultado imediato não garante que o servidor não tenha aplicado a mudança. A mensagem não atribui significado específico ao código 128 sem o log de aplicação do HikCentral.
+- O modo de edição não pode ultrapassar check-out, grupo divergente, check-in inexistente, ID de reserva não encontrado ou outra operação incerta. Nestes casos, permitir preparar datas não significa autorizar gravação insegura.
+- Foram acrescentados testes de UI Windows para preparação de datas futuras e loading persistente, e regressões transacionais com erros 128 e recuperação segura de vínculo.
+- **Limitação de homologação:** não há acesso ao banco/log protegido do HikCentral da instalação. É necessário confirmar por testes reais a aceitação de updates na versão instalada. Não foram executadas operações remotas.
