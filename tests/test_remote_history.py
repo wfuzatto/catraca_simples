@@ -401,3 +401,74 @@ def test_offline_date_name_accepts_normalized_accents_but_not_bare_register_time
     ]
     assert [x["visitor_id"] for x in filter_local_history_by_entry_date(
         rows, start, end, "joao de sa")] == ["1"]
+
+
+def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monkeypatch):
+    """Integração offline do controller: nome+De/Até, sem consultar Visitor Information."""
+    from types import SimpleNamespace
+    import app
+    import modern_ui
+    import remote_history
+
+    current = example_record(
+        visitor="1654", record="250", name="TESTE TOALHEIRO 1")
+    current["visitorBaseInfo"]["visitStartTime"] = "2026-11-05T00:00:00-03:00"
+    current["visitorBaseInfo"]["visitEndTime"] = "2026-11-05T23:59:59-03:00"
+    next_day = example_record(
+        visitor="1655", record="251", name="TESTE TOALHEIRO 2")
+    next_day["visitorBaseInfo"]["visitStartTime"] = "2026-11-06T00:00:00-03:00"
+    next_day["visitorBaseInfo"]["visitEndTime"] = "2026-11-06T23:59:59-03:00"
+    # Simula API com semântica de sobreposição, que devolve também 06/11.
+    # O app precisa filtrar novamente para cumprir exatamente o recorte.
+    client = FakeClient({"code": "0", "data": {
+        "list": [current, next_day], "totalNum": 2}})
+    monkeypatch.setattr(app, "list_history", lambda: [
+        {"visitor_id": "1655", "entry_at": "2026-11-06T00:00:00-03:00",
+         "registered_at": "2026-11-05T14:15:00-03:00",
+         "first": "TESTE", "last": "TOALHEIRO 2"}])
+    monkeypatch.setattr(remote_history, "search_visitor_directory",
+                        lambda *args, **kwargs: pytest.fail(
+                            "Visitor Information nao deve fazer parte da lista"))
+    monkeypatch.setattr(modern_ui, "start_history_loading", lambda *a, **kw: None)
+    monkeypatch.setattr(modern_ui, "stop_history_loading", lambda *a, **kw: None)
+
+    class Value:
+        def __init__(self, value=""):
+            self.value = value
+        def get(self):
+            return self.value
+        def set(self, value):
+            self.value = value
+
+    class Control:
+        def configure(self, **kwargs):
+            self.params = kwargs
+
+    ui = SimpleNamespace(
+        key="fake-key", secret="fake-secret", busy=False,
+        _history_page=1,
+        history_start=Value("05/11/2026"),
+        history_end=Value("05/11/2026"),
+        history_name=Value("TOALHEIRO"),
+        history_page_size=Value("10"),
+        history_status=Value(), history_page_label=Value(),
+        history_previous_button=Control(), history_next_button=Control(),
+    )
+    captured = {}
+    ui.client = lambda: client
+    ui._show_history_rows = lambda rows, label: captured.update(
+        rows=rows, label=label)
+    ui._load_history_passages = lambda rows, label: captured.update(
+        passages=rows)
+    ui.task = lambda action, finish: finish(action(), None)
+    app.ValeApp.refresh_history(ui)
+    assert [r["visitor_id"] for r in captured["rows"]] == ["1654"]
+    assert [r["visitor_id"] for r in captured["passages"]] == ["1654"]
+    assert "descartado" in captured["label"]
+    assert len(client.calls) == 1
+    path, payload, options = client.calls[0]
+    assert path == CHECKINS_PATH
+    assert payload["visitorName"] == "TOALHEIRO"
+    assert payload["visitStartTime"] == "2026-11-05T00:00:00-03:00"
+    assert payload["visitEndTime"] == "2026-11-06T00:00:00-03:00"
+    assert options == {}
