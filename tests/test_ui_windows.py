@@ -452,7 +452,7 @@ def test_new_history_tab_keeps_registration_and_settings_intact(monkeypatch):
         root.book.select(root.history_tab)
         root.update()
         assert root.history_table.winfo_exists()
-        assert "Atualizar lista" in root.history_status.get()
+        assert "Buscar" in root.history_status.get()
         assert root.register_button.winfo_manager() == ""
         root.book.select(root.registration_tab)
         root.update()
@@ -598,6 +598,21 @@ def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monke
         assert root.history_previous_button.winfo_exists()
         assert root.history_next_button.winfo_exists()
         assert root.history_loading_frame.winfo_exists()
+        def displayed_texts(widget):
+            result = []
+            for child in widget.winfo_children():
+                try:
+                    value = child.cget("text")
+                except Exception:
+                    value = ""
+                if isinstance(value, str):
+                    result.append(value)
+                result.extend(displayed_texts(child))
+            return result
+        labels = displayed_texts(root.history_tab)
+        assert "Buscar" in labels
+        assert "Atualizar lista" not in labels
+        assert all(label in labels for label in ("De", "Até", "Nome", "Anterior", "Próxima"))
     finally:
         root.destroy()
 
@@ -800,7 +815,7 @@ def test_history_is_lazy_and_never_autofetches_on_tab_change(monkeypatch):
         root.update()
         assert root._history_ui_built is True
         tree = root.history_table
-        assert "Atualizar lista" in root.history_status.get()
+        assert "Buscar" in root.history_status.get()
         root.book.select(root.registration_tab)
         root.update()
         root.book.select(root.history_tab)
@@ -836,7 +851,7 @@ def test_history_today_default_and_page_size_selection_do_not_autofetch(monkeypa
             root.history_page_size.set(size)
             root.history_page_size_changed()
             assert root._history_page == 1
-            assert "Atualizar lista" in root.history_status.get()
+            assert "Buscar" in root.history_status.get()
     finally:
         root.destroy()
 
