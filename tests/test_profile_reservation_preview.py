@@ -5,7 +5,31 @@ import pytest
 import reservation_replacement as replacement
 from hikcentral import HikCentral, HikError
 from remote_history import DETAIL_PATH, APPOINTMENTS_PATH
-from visitor_profile import PERSON_INFO, PERSON_UPDATE, update_profile
+from edit_errors import EditorFieldError
+from visitor_profile import (PERSON_INFO, PERSON_UPDATE, read_visitor_remark, update_profile,
+                             validate_visitor_remark)
+
+
+def test_apartment_uses_visitor_information_and_does_not_write():
+    calls = []
+
+    def post(path, payload):
+        calls.append((path, payload))
+        return {"data": {"VisitorInfo": {"visitorId": "1865", "remark": " 321 "}}}
+
+    assert read_visitor_remark(SimpleNamespace(post=post), "1865") == "321"
+    assert calls == [(DETAIL_PATH, {"visitorId": "1865"})]
+    with pytest.raises(HikError, match="Visitor ID"):
+        read_visitor_remark(SimpleNamespace(post=post), "1999")
+
+
+def test_apartment_validates_the_visitor_api_limit():
+    assert validate_visitor_remark(" 321 ") == "321"
+    assert validate_visitor_remark(" ") == ""
+    assert len(validate_visitor_remark("ã" * 128)) == 128
+    with pytest.raises(EditorFieldError) as exc:
+        validate_visitor_remark("A" * 129)
+    assert "reservation" in exc.value.fields
 
 
 def test_profile_updates_name_and_card_without_touching_visit_or_booking():

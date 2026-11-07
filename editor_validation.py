@@ -69,8 +69,8 @@ def validate_editor_fields(values, settings, available_groups, *, photo_bytes=b"
             errors[key] = f"Informe o {label} (mínimo de 2 caracteres)."
         elif len(text[key]) > 64:
             errors[key] = f"O {label} deve ter no máximo 64 caracteres."
-    if len(text.get("reservation", "")) > 255:
-        errors["reservation"] = "Reserva/apartamento deve ter no máximo 255 caracteres."
+    if len(text.get("reservation", "")) > 128:
+        errors["reservation"] = "Apartamento/Remark deve ter no máximo 128 caracteres no HikCentral."
     group = text.get("group", "")
     if not group or group not in available_groups or group not in VALE_VISITOR_LEVELS:
         errors["group"] = "Selecione explicitamente um grupo válido de visitantes."

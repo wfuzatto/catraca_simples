@@ -1144,6 +1144,132 @@ def test_editor_save_shows_loading_until_operation_finishes(monkeypatch):
         root.destroy()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Fluxo do editor exige Windows Tk")
+def test_editing_reservation_dates_uses_single_save_and_same_visitor_replacement(monkeypatch, tmp_path):
+    import io
+    import app
+    import visitor_editor
+    import visitor_profile
+    import native_booking_bridge
+    import ordered_reservation_change
+    import customtkinter as ctk
+    from PIL import Image
+    from core import default_settings
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
+
+    original_photo = io.BytesIO()
+    Image.new("RGB", (80, 80), "white").save(original_photo, "JPEG")
+    replacement = tmp_path / "replacement.jpg"
+    Image.new("RGB", (80, 80), "gray").save(replacement, "JPEG")
+    monkeypatch.setattr(visitor_editor.filedialog, "askopenfilename", lambda **k: str(replacement))
+
+    events, captured, submissions = [], {}, []
+
+    class FakeBridge:
+        def __enter__(self):
+            events.append("web-client-preflight")
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def prepare(self, visitor_id, start, end, selected, **kwargs):
+            captured.update(visitor_id=visitor_id, start=start, end=end,
+                            selected=selected, **kwargs)
+            events.append("prepare-reservation")
+            return lambda: None
+
+    class FakeClient:
+        def visitor_groups(self):
+            return ["Hóspedes Vale"]
+
+        def resolve_levels(self, _names):
+            return [{"id": "7", "name": "VISITANTE_VALE"}], ["57", "64", "89"]
+
+    root = app.ValeApp()
+    root.connected_groups = ["Hóspedes Vale"]
+    root.client = lambda: FakeClient()
+    root.refresh_history = lambda: None
+    root.task = lambda work, done, **kw: submissions.append((work, done))
+    updates = []
+    def update_profile(_client, visitor_id, first, last, **kwargs):
+        updates.append({"visitor_id": visitor_id, "first": first, "last": last, **kwargs})
+        events.append("profile-update")
+        return ["nome", "pulseira", "foto"]
+    monkeypatch.setattr(visitor_profile, "update_profile", update_profile)
+    monkeypatch.setattr(native_booking_bridge, "open_booking_bridge",
+                        lambda *_a, **_kw: FakeBridge())
+
+    def replace(_client, record, payload, selected, doors, visitor, group, requested_level,
+                *, prepare_creation):
+        assert record["visitor_id"] == "1649"
+        assert selected == [{"id": "7", "name": "VISITANTE_VALE"}]
+        assert doors == ["57", "64", "89"]
+        assert group == "Hóspedes Vale"
+        assert requested_level == ["VISITANTE_VALE"]
+        create = prepare_creation({"appointID": "appt1649", "appointCode": "23"}, payload)
+        assert callable(create)
+        events.append("ordered-transaction")
+        return {"state": "confirmed", "doors": [], "rebooking_completed": True,
+                "automatic_checkin": False, "confirmed_appointment_id": "newappt",
+                "confirmed_checkin_id": "newcheckin", "confirmed_group": group,
+                "reservation_period": {"state": "matched", "code": "24",
+                    "appointment_id": "newappt", "entry_at": payload["visitStartTime"],
+                    "exit_at": payload["visitEndTime"]}}
+
+    monkeypatch.setattr(ordered_reservation_change, "change_reservation_dates", replace)
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
+    record = {"visitor_id": "1649", "registration_record_id": "check1649",
+        "appointment_id": "appt1649", "origin": "HikCentral", "checkin_state": "check-in efetuado",
+        "first": "Nome original", "last": "Sobrenome original", "group": "Hóspedes Vale",
+        "entry_at": "2099-11-06T00:00:00-03:00", "exit_at": "2099-11-06T23:59:59-03:00",
+        "expect_face": True, "expect_card": True, "card_number": "11112222",
+        "_reservation_period": {"state": "matched", "appointment_id": "appt1649",
+            "entry_at": "2099-11-06T00:00:00-03:00", "exit_at": "2099-11-06T23:59:59-03:00"}}
+    try:
+        visitor_editor.open_visitor_editor(root, record, initial_photo=original_photo.getvalue(),
+            remote_details={"visitorId": "1649", "visitorGroupName": "Hóspedes Vale",
+                "visitorGivenName": "Nome original", "visitorFamilyName": "Sobrenome original",
+                "remark": "101", "cards": [{"cardNo": "11112222"}]})
+        root.update_idletasks()
+        popup = next(x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel))
+        assert popup._save_edit_button.cget("text") == "Salvar alterações"
+        popup._editor_field_vars["first"].set("Nome teste")
+        popup._editor_field_vars["last"].set("Sobrenome teste")
+        popup._editor_field_vars["reservation"].set("321")
+        popup._editor_field_vars["card"].set("12345678")
+        popup._editor_field_vars["entry"].set("07/11/2099")
+        popup._editor_field_vars["exit"].set("08/11/2099")
+        popup._editor_photo_button.invoke()
+        popup._save_edit_button.invoke()
+        assert len(submissions) == 1
+        result = submissions[0][0]()
+        assert events == ["web-client-preflight", "prepare-reservation", "profile-update", "ordered-transaction"]
+        assert captured["visitor_id"] == "1649"
+        assert captured["expected_booking_id"] == "appt1649"
+        assert captured["first_name"] == "Nome teste"
+        assert captured["last_name"] == "Sobrenome teste"
+        assert captured["remark"] == "321"
+        assert captured["start"].startswith("2099-11-07T00:00:00")
+        assert captured["end"].startswith("2099-11-08T23:59:59")
+        assert updates[0]["first"] == "Nome teste"
+        assert updates[0]["last"] == "Sobrenome teste"
+        assert updates[0]["card"] == "12345678"
+        assert updates[0]["new_photo"]
+        submissions[0][1](result, None)
+        assert record["appointment_id"] == "newappt"
+        assert record["registration_record_id"] == "newcheckin"
+        assert not popup.winfo_exists()
+    finally:
+        root.destroy()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Campos reais do editor exigem Windows Tk")
 def test_closed_visit_photo_error_marks_required_fields_and_accepts_completion(monkeypatch, tmp_path):
     import app
