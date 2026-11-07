@@ -363,6 +363,20 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     dialog._editor_camera_button = camera_button
     ctk.CTkLabel(body, textvariable=status).pack()
 
+    def select_confirmed_active_visit():
+        """A new confirmed check-in is now the visit to correct on the next save."""
+        record.pop("_selected_checkin_record", None)
+        record.pop("_selected_checkin_id", None)
+        selected_visit["raw"] = None
+        visit_choices.clear()
+        visit_var.set("")
+        visit_border.pack_forget()
+        operation_var.set("Atualizar visita existente")
+        requirements["require_operation"] = False
+        requirements["require_appointment"] = False
+        operation_border.pack_forget()
+        appointment_border.pack_forget()
+
     def submit():
         if getattr(dialog, "_edit_submitting", False):
             return
@@ -603,6 +617,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                               last=obj.last_name.strip(), reservation=obj.reservation.strip(), group=new_group,
                               checkin_state="check-in efetuado", _edit_operation="update",
                               _reservation_period=booking_period)
+                select_confirmed_active_visit()
                 appointment_var.set(new_appointment)
                 baseline_dates["entry"] = fields["entry"].get().strip()
                 baseline_dates["exit"] = fields["exit"].get().strip()
@@ -674,6 +689,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                               entry_at=result.get("visit_start_at") or record.get("entry_at"),
                               exit_at=result.get("visit_end_at") or record.get("exit_at"),
                               checkin_state="check-in efetuado", _edit_operation="update")
+                select_confirmed_active_visit()
                 remote_errors.clear()
                 doors_result = result.get("doors") or []
                 failed_photo = any(str(row.get("faceState") or "").casefold() == "failed"
