@@ -182,9 +182,12 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         ctk.CTkLabel(body, text="A foto não foi recuperada. Selecione uma nova imagem ou use a câmera.",
                      wraplength=590, justify="left", text_color="#64748B").pack(fill="x", pady=(0, 5))
 
+    booking_period = record.get("_reservation_period") or {}
+
     def formatted_visit_time(field):
         try:
-            return datetime.fromisoformat(record.get(field) or "").astimezone(TZ).strftime("%d/%m/%Y")
+            value = booking_period.get(field) if booking_period.get("state") in {"matched", "different"} else None
+            return datetime.fromisoformat(value or record.get(field) or "").astimezone(TZ).strftime("%d/%m/%Y")
         except (ValueError, TypeError):
             return ""
 
@@ -195,9 +198,10 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         "entry": formatted_visit_time("entry_at"), "exit": formatted_visit_time("exit_at"),
         "card": card_number,
     }
+    baseline_dates = {key: initial[key] for key in ("entry", "exit")}
     for field, label in (("first", "Nome"), ("last", "Sobrenome"),
-                         ("reservation", "Reserva / apartamento"),
-                         ("entry", "Entrada da visita (DD/MM/AAAA)"), ("exit", "Saída da visita (DD/MM/AAAA)"),
+                         ("reservation", "Apartamento (Remark)"),
+                         ("entry", "Entrada da reserva (DD/MM/AAAA)"), ("exit", "Saída da reserva (DD/MM/AAAA)"),
                          ("card", "Pulseira/NFC")):
         ctk.CTkLabel(body, text=label, anchor="w").pack(fill="x", pady=(7, 2))
         fields[field] = tk.StringVar(value=initial[field] or "")
@@ -208,7 +212,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         error_labels[field].pack(fill="x")
 
     appointment_var = tk.StringVar(value=str(record.get("appointment_id") or
-                                            record.get("_original_appointment_id") or ""))
+                                            record.get("_original_appointment_id") or
+                                            booking_period.get("appointment_id") or ""))
     fields["appointment"] = appointment_var
     appointment_border = ctk.CTkFrame(body, border_width=2, border_color="#9CA3AF")
     ctk.CTkLabel(appointment_border, text="Reserva vinculada no HikCentral (ID)",
@@ -259,8 +264,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
 
     level_status = tk.StringVar()
     ctk.CTkLabel(body, textvariable=level_status, wraplength=590, justify="left").pack(fill="x", pady=(4, 5))
-    period_notice = reservation_period_notice(record.get("_reservation_period"), record.get("entry_at"), record.get("exit_at"))
-    period_label = ctk.CTkLabel(body, text=period_notice, wraplength=590, justify="left", text_color="#9A3412")
+    period_notice = "\n".join(reservation_period_notice(
+        booking_period, record.get("entry_at"), record.get("exit_at")).splitlines()[:2])
+    period_label = ctk.CTkLabel(body, text=period_notice, wraplength=590, justify="left", text_color="#64748B")
     if period_notice:
         period_label.pack(fill="x", pady=(4, 5))
     dialog._reservation_period_label = period_label
@@ -357,102 +363,21 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     dialog._editor_camera_button = camera_button
     ctk.CTkLabel(body, textvariable=status).pack()
 
-    def save_profile():
-        if app.busy:
-            status.set("Aguarde a operação atual terminar.")
-            return
-        from visitor_profile import update_profile
+    def select_confirmed_active_visit():
+        """A new confirmed check-in is now the visit to correct on the next save."""
+        record.pop("_selected_checkin_record", None)
+        record.pop("_selected_checkin_id", None)
+        selected_visit["raw"] = None
+        visit_choices.clear()
+        visit_var.set("")
+        visit_border.pack_forget()
+        operation_var.set("Atualizar visita existente")
+        requirements["require_operation"] = False
+        requirements["require_appointment"] = False
+        operation_border.pack_forget()
+        appointment_border.pack_forget()
 
-        vid = str(record.get("visitor_id") or "")
-        first, last = fields["first"].get(), fields["last"].get()
-        card = fields["card"].get()
-        photo = chosen_photo["bytes"] if chosen_photo.get("changed") else b""
-        profile_button.configure(state="disabled")
-        status.set("Conferindo os dados no perfil do visitante...")
-
-        def work():
-            client = app.client()
-            changed = update_profile(client, vid, first, last, card=card, new_photo=photo)
-            delivery = ""
-            if ("foto" in changed or "pulseira" in changed) and record.get("entry_at") and record.get("exit_at"):
-                try:
-                    active = client.find_registration_record(
-                        vid, record["entry_at"], record["exit_at"], active_only=True)
-                    if active:
-                        level = selected_editor_access(
-                            (active.get("visitorBaseInfo") or {}).get("visitorGroup"),
-                            client.visitor_groups(), app.settings)
-                        selected, doors = client.resolve_levels(level)
-                        verify_visitor_access_plan(selected, doors, level)
-                        client.apply(vid, doors)
-                        delivery = client.delivery_report(vid, doors, expect_face="foto" in changed,
-                                                          expect_card="pulseira" in changed)["message"]
-                except (ValueError, RuntimeError) as exc:
-                    delivery = "Perfil salvo. Entrega nas catracas precisa ser conferida. " + str(exc)
-            return changed, delivery
-
-        def done(result, error):
-            if not dialog.winfo_exists():
-                return
-            profile_button.configure(state="normal")
-            if error:
-                remote_errors.update(getattr(error, "fields", {}))
-                refresh_validation()
-                status.set("Confira o resultado no perfil antes de reenviar.")
-                messagebox.showwarning("Perfil do visitante", str(error), parent=dialog)
-                return
-            changed, delivery = result
-            if photo:
-                chosen_photo["changed"] = False
-            record.update(first=first.strip(), last=last.strip())
-            app.refresh_history()
-            status.set("Dados conferidos em Visitor Information.")
-            text = ", ".join(changed) if changed else "Os dados já estavam gravados."
-            if delivery:
-                text += "\n" + delivery
-            messagebox.showinfo("Perfil do visitante conferido", text, parent=dialog)
-
-        app.task(work, done)
-
-    profile_button = ctk.CTkButton(body, text="Salvar nome, foto e pulseira no perfil",
-                                   command=save_profile)
-    profile_button.pack(pady=(12, 2))
-    ctk.CTkLabel(body, text="Esta ação salva nome, sobrenome e as credenciais informadas em Visitor Information.",
-                 wraplength=580).pack(pady=(0, 4))
-
-    replacement_var = tk.StringVar()
-
-    def open_rebooking():
-        import webbrowser
-        from urllib.parse import urlsplit
-
-        if refresh_validation():
-            messagebox.showerror("Dados para trocar a reserva", "Complete os campos em vermelho.", parent=dialog)
-            return
-        if not appointment_var.get().strip():
-            messagebox.showerror("Dados para trocar a reserva", "Confirme a reserva original antes de criar a substituta.", parent=dialog)
-            return
-        try:
-            start, end = visitor_period_from_dates(fields["entry"].get(), fields["exit"].get(), app.settings)
-            level = selected_editor_access(group_var.get(), allowed_groups, app.settings)[0]
-            host = app.settings["host"].strip()
-            if ":" in host and not host.startswith("["):
-                host = "[" + host + "]"
-            url = f"https://{host}:{int(app.settings['port'])}/#/portal"
-            origin = urlsplit(url)
-            if not origin.hostname or origin.username or origin.path != "/":
-                raise ValueError("Confira o endereço do HikCentral em Configurações.")
-            if messagebox.askyesno("Nova reserva para o mesmo visitante",
-                    f"No HikCentral, abra Visitor Information e selecione Reserve Again no Visitor ID "
-                    f"{record.get('visitor_id')}. Use {start:%d/%m/%Y %H:%M:%S} a {end:%d/%m/%Y %H:%M:%S} "
-                    f"e o nível {level}. Copie o código da nova reserva e volte a este formulário. "
-                    "A troca pode afetar a visita ativa. Mantenha a foto e a pulseira disponíveis "
-                    "até a confirmação da entrega nas catracas. Abrir o HikCentral?", parent=dialog):
-                webbrowser.open(url)
-        except (KeyError, TypeError, ValueError) as exc:
-            messagebox.showerror("HikCentral", str(exc), parent=dialog)
-
-    def submit(replace_booking=False):
+    def submit():
         if getattr(dialog, "_edit_submitting", False):
             return
         if app.busy:
@@ -461,8 +386,11 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         errors = refresh_validation()
         if errors:
             first_error = next(iter(errors))
-            widgets[first_error].focus_set()
-            messagebox.showerror("Complete os campos indicados", "\n".join(dict.fromkeys(errors.values())), parent=dialog)
+            target = widgets.get(first_error)
+            if target is not None:
+                target.focus_set()
+            messagebox.showerror("Complete os campos indicados",
+                                 "\n".join(dict.fromkeys(errors.values())), parent=dialog)
             return
         try:
             new_group = group_var.get().strip()
@@ -472,53 +400,68 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                           chosen_photo["bytes"], fields["card"].get().strip(),
                           visit_start, visit_end, fields["reservation"].get())
             payload = registration_payload(obj, 0, editing=True)
-            selected_profile_photo = chosen_photo["bytes"] if chosen_photo.get("changed") else b""
-            new_booking_code = replacement_var.get().strip() if replace_booking else ""
-            if replace_booking and not new_booking_code:
-                replacement_entry.focus_set()
-                messagebox.showerror("Código da nova reserva", "Informe o código que o HikCentral gerou.", parent=dialog)
+            date_changed = any(
+                datetime.strptime(fields[key].get().strip(), "%d/%m/%Y").date() !=
+                datetime.strptime(baseline_dates[key], "%d/%m/%Y").date()
+                for key in ("entry", "exit")
+            )
+            if date_changed and not appointment_var.get().strip():
+                requirements["require_appointment"] = True
+                remote_errors["appointment"] = "Confirme o ID da reserva original no HikCentral antes de alterar as datas."
+                refresh_validation()
+                appointment_selector.focus_set()
+                messagebox.showerror("Reserva original necessária",
+                    "O campo Reserva vinculada ficou vermelho. Selecione ou informe o ID da reserva original para continuar.",
+                    parent=dialog)
                 return
-            if replace_booking:
-                prompt = (f"Conferir a nova reserva {new_booking_code} para o Visitor ID {record.get('visitor_id')}, "
-                          "atualizar a visita e excluir a reserva anterior depois da entrega confirmada nas catracas?")
-                if not messagebox.askyesno("Confirmar troca da reserva", prompt, parent=dialog):
-                    return
             operation = EDIT_OPERATIONS.get(operation_var.get()) or record.get("_edit_operation")
-            if operation == "renew":
-                action = ("Visita encerrada: salvar abrirá uma NOVA VISITA para o MESMO visitante, "
-                          "preservando o histórico encerrado.")
-            elif operation != "update":
-                action = ("Se esta visita estiver encerrada, salvar abrirá uma nova visita para o mesmo "
-                          "visitante, preservando o histórico anterior.")
+            if date_changed:
+                summary_text = (
+                    f"Visitante ID: {record.get('visitor_id') or ''}\n"
+                    f"Reserva original: {appointment_var.get().strip()}\n"
+                    f"Novas datas: {visit_start:%d/%m/%Y %H:%M:%S} a {visit_end:%d/%m/%Y %H:%M:%S}\n\n"
+                    "A troca seguirá esta ordem no HikCentral:\n"
+                    "1. Fazer checkout da visita atual.\n"
+                    "2. Excluir a reserva original.\n"
+                    "3. Criar outra reserva para o mesmo Visitor ID.\n"
+                    "4. Confirmar o check-in, se o HikCentral não o fizer automaticamente.\n\n"
+                    "O Edge abrirá para você entrar no Web Client. O checkout só começa depois que a sessão e as permissões forem confirmadas."
+                )
+                if not messagebox.askyesno("Confirmar troca de datas", summary_text, parent=dialog):
+                    return
             else:
-                action = "O cadastro da visita existente será atualizado para o mesmo visitante."
-            if not replace_booking and not messagebox.askyesno("Confirmar cadastro do visitante",
-                    "Visitante ID: " + str(record.get("visitor_id") or "") +
-                    "\nGrupo: " + new_group + "\nNível Visitor: " + requested_level[0] +
-                    f"\nValidade: {visit_start:%d/%m/%Y %H:%M:%S} a {visit_end:%d/%m/%Y %H:%M:%S}.\n\n" +
-                    action + ("\n\n" + period_notice if period_notice else "") +
-                    "\n\nAs datas editadas são as da visita em Visitor Check-In/Out. "
-                    "A reserva original será consultada separadamente.\n\nConfirma o envio dos dados preenchidos?", parent=dialog):
-                return
+                summary_text = (
+                    "Os dados preenchidos serão conferidos em Visitor Information.\n"
+                    "As datas atuais da reserva não foram alteradas. A visita mantém o período já registrado.\n\n"
+                    + (period_notice + "\n\n" if period_notice else "")
+                    + "Confirma o envio dos dados?"
+                )
+                if not messagebox.askyesno("Confirmar edição do cadastro", summary_text, parent=dialog):
+                    return
         except Exception as exc:
             messagebox.showerror("Dados do cadastro", str(exc), parent=dialog)
             return
 
+        selected_profile_photo = chosen_photo["bytes"] if chosen_photo.get("changed") else b""
+        appointment_id = appointment_var.get().strip()
+        operation_value = EDIT_OPERATIONS.get(operation_var.get(), "")
+        operator_selected_group = bool(group_recovery)
+        chosen_visit = selected_visit["raw"]
         dialog._edit_submitting = True
         dialog.grab_release()
         dialog.withdraw()
         loading = ctk.CTkToplevel(app)
         loading.withdraw()
         loading.title("Salvando cadastro")
-        loading.geometry("425x155")
+        loading.geometry("445x160")
         loading.resizable(False, False)
         loading.transient(app)
         loading.protocol("WM_DELETE_WINDOW", lambda: None)
         frame = ctk.CTkFrame(loading, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=22, pady=18)
-        ctk.CTkLabel(frame, text="Salvando dados no HikCentral...", font=("Segoe UI", 15, "bold")).pack(pady=(4, 7))
-        ctk.CTkLabel(frame, text="Conferindo dados, validade e permissões. Aguarde.", font=("Segoe UI", 12)).pack(pady=(0, 10))
-        progress = ctk.CTkProgressBar(frame, mode="indeterminate", width=360)
+        ctk.CTkLabel(frame, text="Salvando alterações no HikCentral...", font=("Segoe UI", 15, "bold")).pack(pady=(4, 7))
+        ctk.CTkLabel(frame, text="Conferindo cadastro, reserva e permissões. Aguarde.", font=("Segoe UI", 12)).pack(pady=(0, 10))
+        progress = ctk.CTkProgressBar(frame, mode="indeterminate", width=380)
         progress.pack(fill="x")
         progress.start()
         loading.deiconify()
@@ -546,21 +489,48 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             selected, doors = client.resolve_levels(requested_level)
             verify_visitor_access_plan(selected, doors, requested_level)
             edit_record = dict(record)
-            edit_record["_operator_selected_group"] = bool(group_recovery)
-            edit_record["appointment_id"] = appointment_var.get().strip()
-            edit_record["_operator_edit_operation"] = EDIT_OPERATIONS.get(operation_var.get(), "")
-            if selected_visit["raw"] is not None:
-                edit_record["_selected_checkin_record"] = selected_visit["raw"]
-                edit_record["_selected_checkin_id"] = str(selected_visit["raw"].get("recordId") or "")
+            edit_record["_operator_selected_group"] = operator_selected_group
+            edit_record["appointment_id"] = appointment_id
+            edit_record["_operator_edit_operation"] = operation_value
+            if chosen_visit is not None:
+                edit_record["_selected_checkin_record"] = chosen_visit
+                edit_record["_selected_checkin_id"] = str(chosen_visit.get("recordId") or "")
             from visitor_profile import update_profile
+            if date_changed:
+                from contextlib import ExitStack
+                from native_booking_bridge import open_booking_bridge
+                from ordered_reservation_change import change_reservation_dates
+                from remote_history import original_appointment_identifier
+                with ExitStack() as stack:
+                    def prepare_creation(original, target_payload):
+                        bridge = stack.enter_context(open_booking_bridge(
+                            app.settings["host"], app.settings["port"], timeout_seconds=180,
+                            cert_pin_sha256=app.settings.get("cert_pin_sha256", "")))
+                        return bridge.prepare(
+                            str(record["visitor_id"]), target_payload["visitStartTime"],
+                            target_payload["visitEndTime"], selected,
+                            expected_booking_id=original_appointment_identifier(original) if original else None,
+                            first_name=obj.first_name, last_name=obj.last_name, remark=obj.reservation,
+                            purpose_type=target_payload.get("visitPurposeType", 4),
+                            purpose_detail=target_payload.get("visitPurpose", ""))
+                    def prepare_and_save_profile(original, target_payload):
+                        create = prepare_creation(original, target_payload)
+                        update_profile(client, str(record["visitor_id"]), obj.first_name, obj.last_name,
+                                       card=obj.card_number, new_photo=selected_profile_photo)
+                        return create
+                    return change_reservation_dates(
+                        client, edit_record, payload, selected, doors, obj, new_group, requested_level,
+                        prepare_creation=prepare_and_save_profile)
             update_profile(client, str(record["visitor_id"]), obj.first_name, obj.last_name,
                            card=obj.card_number, new_photo=selected_profile_photo)
-            if replace_booking:
-                from reservation_replacement import finish_replacement
-                return finish_replacement(client, edit_record, new_booking_code, payload,
-                                          selected, doors, obj, new_group, requested_level)
+            from copy import deepcopy
             from visitor_edit_transaction import update_existing_visit
-            return update_existing_visit(client, edit_record, payload, selected, doors, obj, new_group, requested_level)
+            visit_payload = deepcopy(payload)
+            if record.get("entry_at") and record.get("exit_at"):
+                visit_payload["visitStartTime"] = record["entry_at"]
+                visit_payload["visitEndTime"] = record["exit_at"]
+            return update_existing_visit(client, edit_record, visit_payload,
+                                         selected, doors, obj, new_group, requested_level)
 
         def done(result, error):
             nonlocal group_recovery, period_notice
@@ -631,113 +601,130 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     dialog.grab_set()
                     dialog.lift()
                     refresh_validation()
-                message = str(error)
-                if replace_booking and getattr(error, "fields", {}).get("replacement_code"):
-                    replacement_entry.configure(border_color="#B91C1C")
-                    message = error.fields["replacement_code"]
-                messagebox.showwarning("Cadastro não confirmado", message, parent=dialog if dialog.winfo_exists() else app)
+                messagebox.showwarning("Não foi possível concluir todas as etapas",
+                    str(error) + "\n\nConfira os campos destacados e salve novamente. O aplicativo consulta a situação da reserva antes de repetir uma etapa.",
+                    parent=dialog if dialog.winfo_exists() else app)
                 return
+
             app.refresh_history()
-            booking_period = result.get("reservation_period") or {}
-            if replace_booking:
-                if result["replacement_state"] == "confirmed":
-                    messagebox.showinfo("Reserva substituída",
-                        f"Reserva {new_booking_code} confirmada nas datas informadas. "
-                        "O HikCentral confirmou o check-in e a remoção da reserva anterior.", parent=app)
-                    dialog.destroy()
-                else:
-                    record.update(registration_record_id=result["confirmed_checkin_id"],
-                                  entry_at=payload["visitStartTime"], exit_at=payload["visitEndTime"],
-                                  checkin_state="check-in efetuado", _edit_operation="update")
+            if result.get("rebooking_completed"):
+                new_appointment = str(result.get("confirmed_appointment_id") or "")
+                new_checkin = str(result.get("confirmed_checkin_id") or "")
+                booking_period = result.get("reservation_period") or {}
+                record.update(appointment_id=new_appointment, _original_appointment_id=new_appointment,
+                              registration_record_id=new_checkin, entry_at=payload["visitStartTime"],
+                              exit_at=payload["visitEndTime"], first=obj.first_name.strip(),
+                              last=obj.last_name.strip(), reservation=obj.reservation.strip(), group=new_group,
+                              checkin_state="check-in efetuado", _edit_operation="update",
+                              _reservation_period=booking_period)
+                select_confirmed_active_visit()
+                appointment_var.set(new_appointment)
+                baseline_dates["entry"] = fields["entry"].get().strip()
+                baseline_dates["exit"] = fields["exit"].get().strip()
+                if selected_profile_photo:
+                    chosen_photo["changed"] = False
+                booking_note = reservation_period_notice(
+                    booking_period, payload["visitStartTime"], payload["visitEndTime"])
+                if booking_note:
+                    period_notice = booking_note
+                    period_label.configure(text=booking_note, text_color="#64748B")
+                    period_label.pack(fill="x", pady=(4, 5), before=summary_label)
+                doors_result = result.get("doors") or []
+                failed_photo = any(str(row.get("faceState") or "").casefold() == "failed"
+                                   for row in doors_result if isinstance(row, dict))
+                failed_card = any(str(row.get("credentialState") or "").casefold() == "failed"
+                                  for row in doors_result if isinstance(row, dict))
+                if not failed_photo and not failed_card and result.get("state") == "failed":
+                    failed_photo, failed_card = bool(obj.photo_jpeg), bool(obj.card_number)
+                remote_errors.clear()
+                if failed_photo:
+                    requirements["require_photo"] = True
+                    remote_errors["photo"] = "Foto recusada por uma catraca. Selecione ou capture outra foto."
+                if failed_card:
+                    requirements["require_card"] = True
+                    remote_errors["card"] = "Pulseira recusada por uma catraca. Confira e informe novamente o número."
+                if result.get("state") == "confirmed":
+                    messagebox.showinfo("Reserva e check-in confirmados",
+                        f"A reserva {booking_period.get('code') or new_appointment} foi criada para o mesmo visitante.\n"
+                        + ("O HikCentral fez o check-in automaticamente." if result.get("automatic_checkin")
+                           else "O aplicativo confirmou o check-in após criar a reserva.")
+                        + "\nAs datas e o apartamento foram conferidos no HikCentral.", parent=app)
+                    if dialog.winfo_exists():
+                        dialog.destroy()
+                    return
+                detail = str(result.get("message") or "A entrega nas catracas ainda precisa ser confirmada.")
+                status.set("Reserva e check-in confirmados; confira a entrega indicada em vermelho.")
+                if dialog.winfo_exists():
                     dialog.deiconify()
                     dialog.grab_set()
                     dialog.lift()
-                    status.set("Nova reserva conferida. Entrega nas catracas pendente.")
-                    note = ("A reserva anterior já foi removida e o check-in foi conferido. "
-                            if result["replacement_state"] == "pending_after_delete" else
-                            "A reserva anterior será removida após a entrega. ")
-                    messagebox.showwarning("Troca aguardando entrega", note +
-                        "Confira a foto e a pulseira nas catracas e volte a concluir com o mesmo código.",
-                        parent=dialog)
+                    refresh_validation()
+                messagebox.showwarning("Reserva criada; entrega pendente",
+                    f"A reserva {booking_period.get('code') or new_appointment} e o check-in foram confirmados.\n"
+                    + detail + "\n\nCorrija a credencial destacada e salve novamente. A reserva não será recriada.",
+                    parent=dialog if dialog.winfo_exists() else app)
                 return
-            booking_note = reservation_period_notice(booking_period, payload["visitStartTime"], payload["visitEndTime"])
+
+            booking_period = result.get("reservation_period") or {}
+            booking_note = reservation_period_notice(
+                booking_period, result.get("visit_start_at") or record.get("entry_at", ""),
+                result.get("visit_end_at") or record.get("exit_at", ""))
+            if booking_period:
+                record["_reservation_period"] = booking_period
+                if booking_period.get("appointment_id"):
+                    record["appointment_id"] = booking_period["appointment_id"]
+                    appointment_var.set(str(booking_period["appointment_id"]))
+            record.update(first=obj.first_name.strip(), last=obj.last_name.strip(),
+                          reservation=obj.reservation.strip(), group=new_group)
+            if selected_profile_photo:
+                chosen_photo["changed"] = False
             if booking_note:
                 period_notice = booking_note
-                record["_reservation_period"] = booking_period
-                period_label.configure(text=booking_note)
+                period_label.configure(text=booking_note, text_color="#64748B")
                 period_label.pack(fill="x", pady=(4, 5), before=summary_label)
             if str(result.get("state") or "").casefold() == "failed":
-                # The data already exists under the new check-in. A correction
-                # must update it, never renew the previous visit a second time.
                 record.update(registration_record_id=str(result["confirmed_checkin_id"]),
                               _original_checkin_id=str(result["confirmed_checkin_id"]),
                               _update_record_id=str(result["confirmed_checkin_id"]),
-                              entry_at=payload["visitStartTime"], exit_at=payload["visitEndTime"],
-                              first=obj.first_name, last=obj.last_name, reservation=obj.reservation,
-                              group=new_group, checkin_state="check-in efetuado", _edit_operation="update")
-                record.pop("_selected_checkin_record", None)
-                record.pop("_selected_checkin_id", None)
-                selected_visit["raw"] = None
-                visit_choices.clear()
-                visit_var.set("")
-                visit_border.pack_forget()
-                requirements["require_appointment"] = False
-                requirements["require_operation"] = False
-                operation_var.set("Atualizar visita existente")
-                operation_border.pack_forget()
-                group_recovery = False
-                allowed_groups[:] = [new_group]
-                editor_groups.configure(values=allowed_groups)
+                              entry_at=result.get("visit_start_at") or record.get("entry_at"),
+                              exit_at=result.get("visit_end_at") or record.get("exit_at"),
+                              checkin_state="check-in efetuado", _edit_operation="update")
+                select_confirmed_active_visit()
                 remote_errors.clear()
-                doors = result.get("doors") or []
-                failed_photo = any(str(door.get("faceState") or "").casefold() == "failed"
-                                   for door in doors if isinstance(door, dict))
-                failed_card = any(str(door.get("credentialState") or "").casefold() == "failed"
-                                  for door in doors if isinstance(door, dict))
-                if not failed_photo and not failed_card:
-                    failed_photo, failed_card = bool(obj.photo_jpeg), bool(obj.card_number)
+                doors_result = result.get("doors") or []
+                failed_photo = any(str(row.get("faceState") or "").casefold() == "failed"
+                                   for row in doors_result if isinstance(row, dict))
+                failed_card = any(str(row.get("credentialState") or "").casefold() == "failed"
+                                  for row in doors_result if isinstance(row, dict))
                 if failed_photo:
                     requirements["require_photo"] = True
-                    remote_errors["photo"] = "Foto recusada por um dispositivo. Selecione ou capture uma nova foto."
+                    remote_errors["photo"] = "Foto recusada por uma catraca. Selecione ou capture outra foto."
                 if failed_card:
                     requirements["require_card"] = True
-                    remote_errors["card"] = "Pulseira recusada por um dispositivo. Confira e reinforme o número."
-                status.set("Dados gravados. Complete a credencial recusada para concluir a entrega.")
+                    remote_errors["card"] = "Pulseira recusada por uma catraca. Confira e informe novamente o número."
+                status.set("Dados gravados no perfil e na visita. Corrija a credencial recusada em vermelho.")
                 if dialog.winfo_exists():
                     dialog.deiconify()
                     dialog.grab_set()
                     dialog.lift()
                     refresh_validation()
                 messagebox.showwarning("Dados gravados; credencial recusada",
-                    "Os dados e o período da visita foram gravados em Visitor Check-In/Out. "
-                    "Complete a credencial destacada em vermelho e salve novamente. "
-                    "A próxima gravação corrigirá o check-in já criado." +
-                    ("\n\n" + booking_note if booking_note else ""), parent=dialog)
+                    "Nome, sobrenome, apartamento e período da visita foram gravados.\n"
+                    "O HikCentral recusou uma credencial em uma ou mais catracas.\n"
+                    "Corrija o campo indicado e salve novamente. A visita existente será corrigida sem criar outra reserva."
+                    + ("\n\n" + booking_note if booking_note else ""), parent=dialog)
                 return
-            renewed = result.get("operation") == "renew"
-            notify = messagebox.showwarning if booking_period.get("state") == "different" else messagebox.showinfo
-            title = "Visita atualizada; reserva com datas diferentes" if booking_period.get("state") == "different" else (
-                "Renovação concluída" if renewed else "Visita atualizada")
-            notify(title,
-                ("Nova visita criada para o mesmo visitante; histórico anterior preservado.\n" if renewed else
-                 "Dados e período da visita conferidos em Visitor Check-In/Out.\n") +
-                "ID do check-in: " + str(result["confirmed_checkin_id"]) +
-                "\nEntrega: " + result["state"] + "." +
-                ("\n\n" + booking_note if booking_note else ""), parent=app)
+            messagebox.showinfo("Edição conferida",
+                "Nome, sobrenome, apartamento, credenciais e visita foram conferidos em Visitor Information.\n"
+                "As datas da reserva não foram alteradas."
+                + ("\n\n" + booking_note if booking_note else ""), parent=app)
             if dialog.winfo_exists():
                 dialog.destroy()
+
         app.task(work, done)
 
-    save_button = ctk.CTkButton(body, text="Salvar validade e dados da visita", command=submit, state="normal")
+    save_button = ctk.CTkButton(body, text="Salvar alterações", command=submit, state="normal")
     dialog._save_edit_button = save_button
     save_button.pack(pady=12)
-    ctk.CTkButton(body, text="Abrir HikCentral para criar reserva substituta",
-                  command=open_rebooking).pack(pady=(4, 5))
-    ctk.CTkLabel(body, text="Código da nova reserva").pack()
-    replacement_entry = ctk.CTkEntry(body, textvariable=replacement_var, width=240)
-    replacement_entry.pack(pady=3)
-    replacement_var.trace_add("write", lambda *_: replacement_entry.configure(border_color="#9CA3AF"))
-    ctk.CTkButton(body, text="Concluir troca da reserva",
-                  command=lambda: submit(True)).pack(pady=(3, 12))
     ctk.CTkButton(body, text="Cancelar", command=dialog.destroy).pack(pady=6)
     refresh_validation()

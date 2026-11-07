@@ -16,6 +16,23 @@ PERSON_UPDATE = "/artemis/api/resource/v1/person/single/update"
 FACE_UPDATE = "/artemis/api/resource/v1/person/face/update"
 
 
+def validate_visitor_remark(value):
+    """Return the apartment text accepted by the Visitor endpoints."""
+    remark = str(value or "").strip()
+    if len(remark) > 128:
+        raise EditorFieldError({"reservation": "Informe até 128 caracteres em reserva/apartamento."})
+    return remark
+
+
+def read_visitor_remark(client, visitor_id):
+    """Read Visitor Remark, which differs from the Person API's remark field."""
+    details = visitor_details(client, visitor_id)
+    visitor = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    if not isinstance(visitor, dict) or str(visitor.get("visitorId")) != visitor_id:
+        raise HikError("O HikCentral não confirmou o Visitor ID ao consultar o apartamento.")
+    return str(visitor.get("remark") or "").strip()
+
+
 def read_profile(client, visitor_id):
     details = visitor_details(client, visitor_id)
     visitor = details.get("VisitorInfo") or details.get("visitorInfo") or details

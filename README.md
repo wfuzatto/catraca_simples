@@ -1,10 +1,12 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.57` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.58` (prévia técnica para testes).
 
-Em **Cadastros efetuados**, abra o visitante e use **Salvar nome, foto e pulseira no perfil** para gravar os dados em Visitor Information. Uma foto escolhida ou capturada substitui a atual. A pulseira em branco mantém a cadastrada.
+Em **Cadastros efetuados**, abra o visitante, corrija os campos e use **Salvar alterações**. Nome, sobrenome, foto e pulseira são gravados em Visitor Information; Apartamento é gravado como Remark no perfil e na reserva.
 
-Para trocar as datas de uma reserva, use **Abrir HikCentral para criar reserva substituta**. Em Visitor Information, use **Reserve Again** para o mesmo visitante, com as novas datas e o nível Visitor original. Volte ao aplicativo, informe o novo código e use **Concluir troca da reserva**. O aplicativo confere o vínculo, ajusta a visita quando necessário e só exclui a reserva antiga após confirmar as credenciais nas catracas. Se a entrega ficar pendente, volte com o mesmo código para conferir.
+Quando uma data da reserva for alterada, o aplicativo abre uma janela isolada do Microsoft Edge. Entre no HikCentral; o aplicativo confere a sessão, a permissão para criar reserva, o visitante e o nível original. A troca segue a ordem confirmada: (1) checkout da visita atual, (2) exclusão da reserva original, (3) criação de reserva para o mesmo Visitor ID, (4) check-in manual se o HikCentral não o tiver feito automaticamente. O aplicativo confirma cada resultado e guarda as etapas para retomar com segurança se a conexão cair. A senha do Web Client não é armazenada.
+
+Se as datas da reserva não forem alteradas, o aplicativo atualiza os dados do perfil e a visita existente, preservando o período já registrado. Se uma credencial for recusada por uma catraca depois da troca, a tela mantém os dados e permite corrigir a foto ou a pulseira sem criar outra reserva.
 
 Na Preview 56, o editor confere separadamente as datas da visita (Visitor Check-In/Out) e da reserva original (Visitor Reservation). Uma divergência aparece com os dois períodos e não é apresentada como sincronização concluída. A edição da visita continua disponível quando a consulta da reserva não responde. O leitor de níveis também aceita o formato `accessLevelList.accessLevel[].baseinfo` retornado nesta instalação do HikCentral.
 
