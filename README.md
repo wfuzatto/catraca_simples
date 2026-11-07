@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.58` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.59` (prévia técnica para testes).
 
 Em **Cadastros efetuados**, abra o visitante, corrija os campos e use **Salvar alterações**. Nome, sobrenome, foto e pulseira são gravados em Visitor Information; Apartamento é gravado como Remark no perfil e na reserva.
 

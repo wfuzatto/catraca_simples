@@ -3,7 +3,43 @@ from copy import deepcopy
 import pytest
 
 from edit_errors import EditorFieldError
-from native_booking_bridge import build_appointment_request
+from native_booking_bridge import BookingBridge, _same_origin, build_appointment_request
+
+
+@pytest.mark.parametrize("request_url,expected_url,allowed", [
+    ("https://192.168.102.100/#/portal", "https://192.168.102.100:443", True),
+    ("https://192.168.102.100:443/#/portal", "https://192.168.102.100", True),
+    ("https://192.168.102.100:8443/#/portal", "https://192.168.102.100:443", False),
+    ("http://192.168.102.100/#/portal", "https://192.168.102.100:443", False),
+    ("https://other.example/#/portal", "https://192.168.102.100:443", False),
+    ("https://evil192.168.102.100/#/portal", "https://192.168.102.100:443", False),
+])
+def test_same_origin_allows_normalized_default_port_without_opening_external_hosts(
+        request_url, expected_url, allowed):
+    assert _same_origin(request_url, expected_url) is allowed
+
+
+def test_route_handler_allows_hikcentral_request_when_edge_omits_https_443():
+    class Request:
+        url = "https://192.168.102.100/#/portal"
+
+    class Route:
+        request = Request()
+        continued = False
+        aborted = False
+
+        def continue_(self):
+            self.continued = True
+
+        def abort(self):
+            self.aborted = True
+
+    bridge = BookingBridge("192.168.102.100", 443, cert_pin_sha256="")
+    bridge._origin = "https://192.168.102.100:443"
+    route = Route()
+    bridge._route_same_origin(route)
+    assert route.continued is True
+    assert route.aborted is False
 
 
 @pytest.fixture

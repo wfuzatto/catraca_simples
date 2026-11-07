@@ -21,6 +21,20 @@ PERMISSION_PATH = "/ISAPI/Bumblebee/Platform/V1/Permission/Security/UserPermissi
 CREATE_PERMISSION = "623"  # VISITOR.VISITOR_APPOINT_REVIEW.ADD in the HikCentral Web Client.
 
 
+def _same_origin(request_url, expected_url):
+    """Compare normalized origins, including implicit HTTPS/HTTP default ports."""
+    requested = urlsplit(str(request_url or ""))
+    expected = urlsplit(str(expected_url or ""))
+    if requested.scheme.casefold() != expected.scheme.casefold():
+        return False
+    if not requested.hostname or requested.hostname.casefold() != (expected.hostname or "").casefold():
+        return False
+    default_ports = {"https": 443, "http": 80}
+    requested_port = requested.port or default_ports.get(requested.scheme.casefold())
+    expected_port = expected.port or default_ports.get(expected.scheme.casefold())
+    return requested_port is not None and requested_port == expected_port
+
+
 def build_appointment_request(profile, original, visitor_id, start, end, selected_levels,
                               first_name, last_name, remark, encrypt, *,
                               purpose_type=4, purpose_detail=""):
@@ -267,9 +281,7 @@ class BookingBridge(AbstractContextManager):
 
     def _route_same_origin(self, route):
         try:
-            requested = urlsplit(route.request.url)
-            expected = urlsplit(self._origin)
-            if requested.scheme == expected.scheme and requested.netloc.casefold() == expected.netloc.casefold():
+            if _same_origin(route.request.url, self._origin):
                 route.continue_()
             else:
                 route.abort()
