@@ -1085,6 +1085,9 @@ def test_second_edit_legacy_confirmed_visit_has_no_missing_operation(monkeypatch
         notice = popup._reservation_period_label.cget("text")
         assert "Visita (Check-In/Out): 07/11/2026" in notice
         assert "Reserva original 3911: 06/11/2026" in notice
+        assert popup._editor_field_vars["entry"].get() == "07/11/2026"
+        assert popup._editor_field_vars["exit"].get() == "08/11/2026"
+        assert "Salvar vai substituir a reserva" in notice
         popup.destroy()
     finally:
         root.destroy()
@@ -1341,7 +1344,7 @@ def test_closed_visit_photo_error_marks_required_fields_and_accepts_completion(m
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Correção de entrega no editor exige Windows Tk")
-@pytest.mark.parametrize("rejected_field", ["photo", "card"])
+@pytest.mark.parametrize("rejected_field", ["photo", "card", "unknown"])
 def test_failed_delivery_keeps_form_and_corrects_new_checkin_without_second_renewal(monkeypatch, tmp_path, rejected_field):
     import io
     import app
@@ -1394,22 +1397,28 @@ def test_failed_delivery_keeps_form_and_corrects_new_checkin_without_second_rene
         popup = next(x for x in root.winfo_children() if isinstance(x, ctk.CTkToplevel))
         popup._save_edit_button.invoke()
         assert len(submissions) == 1
+        if rejected_field == "photo":
+            door_result = {"faceState": "failed", "credentialState": "confirmed"}
+        elif rejected_field == "card":
+            door_result = {"faceState": "confirmed", "credentialState": "failed"}
+        else:
+            door_result = {"faceState": "queued", "credentialState": "queued"}
         submissions[0][1]({
             "state": "failed", "operation": "renew", "confirmed_checkin_id": "new-checkin",
-            "doors": [{"faceState": "failed" if rejected_field == "photo" else "confirmed",
-                       "credentialState": "failed" if rejected_field == "card" else "confirmed"}]}, None)
+            "doors": [door_result]}, None)
         root.update_idletasks()
         assert warnings and popup.winfo_viewable()
         assert popup._edit_submitting is False
         assert popup._save_edit_button.cget("state") == "normal"
-        assert set(popup._editor_field_errors) == {rejected_field}
+        expected_errors = {rejected_field} if rejected_field in {"photo", "card"} else {"photo", "card"}
+        assert set(popup._editor_field_errors) == expected_errors
         assert record["registration_record_id"] == "new-checkin"
         assert record["checkin_state"] == "check-in efetuado"
         assert record["_edit_operation"] == "update"
         assert popup._editor_operation_selector.get() == "Atualizar visita existente"
-        if rejected_field == "photo":
+        if "photo" in expected_errors:
             popup._editor_photo_button.invoke()
-        else:
+        if "card" in expected_errors:
             popup._editor_field_vars["card"].set("87654321")
         assert not popup._editor_field_errors
         popup._save_edit_button.invoke()

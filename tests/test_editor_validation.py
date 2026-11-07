@@ -5,7 +5,7 @@ from PIL import Image
 import pytest
 
 from core import TZ, default_settings
-from editor_validation import (editor_requirements, infer_edit_operation,
+from editor_validation import (editor_requirements, infer_edit_operation, reservation_edit_dates,
                                validate_editor_fields)
 
 
@@ -114,3 +114,28 @@ def test_successfully_saved_active_visit_does_not_require_hidden_operation(state
     fields = values()
     fields["operation"] = ""
     assert "operation" not in validate(fields, **requirements)
+
+
+def test_active_visit_mismatch_shows_visit_dates_and_keeps_old_reservation_as_baseline():
+    displayed, baseline = reservation_edit_dates({
+        "checkin_state": "check-in efetuado",
+        "entry_at": "2026-11-07T00:00:00-03:00",
+        "exit_at": "2026-11-08T23:59:59-03:00",
+        "_reservation_period": {"state": "different",
+            "entry_at": "2026-11-07T00:00:00-03:00",
+            "exit_at": "2026-11-07T23:59:59-03:00"},
+    })
+    assert displayed == {"entry": "07/11/2026", "exit": "08/11/2026"}
+    assert baseline == {"entry": "07/11/2026", "exit": "07/11/2026"}
+
+
+def test_closed_historical_mismatch_keeps_reservation_dates_as_safe_defaults():
+    displayed, baseline = reservation_edit_dates({
+        "checkin_state": "check-out",
+        "entry_at": "2026-11-07T00:00:00-03:00",
+        "exit_at": "2026-11-08T23:59:59-03:00",
+        "_reservation_period": {"state": "different",
+            "entry_at": "2026-11-07T00:00:00-03:00",
+            "exit_at": "2026-11-07T23:59:59-03:00"},
+    })
+    assert displayed == baseline == {"entry": "07/11/2026", "exit": "07/11/2026"}
