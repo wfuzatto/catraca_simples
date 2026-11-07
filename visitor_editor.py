@@ -472,6 +472,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                           chosen_photo["bytes"], fields["card"].get().strip(),
                           visit_start, visit_end, fields["reservation"].get())
             payload = registration_payload(obj, 0, editing=True)
+            selected_profile_photo = chosen_photo["bytes"] if chosen_photo.get("changed") else b""
             new_booking_code = replacement_var.get().strip() if replace_booking else ""
             if replace_booking and not new_booking_code:
                 replacement_entry.focus_set()
@@ -551,6 +552,9 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             if selected_visit["raw"] is not None:
                 edit_record["_selected_checkin_record"] = selected_visit["raw"]
                 edit_record["_selected_checkin_id"] = str(selected_visit["raw"].get("recordId") or "")
+            from visitor_profile import update_profile
+            update_profile(client, str(record["visitor_id"]), obj.first_name, obj.last_name,
+                           card=obj.card_number, new_photo=selected_profile_photo)
             if replace_booking:
                 from reservation_replacement import finish_replacement
                 return finish_replacement(client, edit_record, new_booking_code, payload,
