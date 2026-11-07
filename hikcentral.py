@@ -519,6 +519,8 @@ class HikCentral:
                 "sortField": "visitingTime", "orderType": "0",
             }).get("data") or {}
             rows = data.get("list")
+            if "list" not in data and str(data.get("totalNum")) == "0":
+                rows = []
             if not isinstance(rows, list):
                 raise HikError("Consulta de registros retornou formato inesperado.")
             for row in rows:

@@ -1221,6 +1221,7 @@ def test_failed_delivery_keeps_form_and_corrects_new_checkin_without_second_rene
     import app
     import visitor_editor
     import visitor_edit_transaction
+    import visitor_profile
     import customtkinter as ctk
     from PIL import Image
     from core import default_settings
@@ -1259,6 +1260,7 @@ def test_failed_delivery_keeps_form_and_corrects_new_checkin_without_second_rene
         sent_records.append(item)
         return {"state": "confirmed", "operation": "update", "confirmed_checkin_id": "new-checkin"}
     monkeypatch.setattr(visitor_edit_transaction, "update_existing_visit", update)
+    monkeypatch.setattr(visitor_profile, "update_profile", lambda *_args, **_kwargs: [])
     try:
         root.connected_groups = ["Hóspedes Serra"]
         visitor_editor.open_visitor_editor(root, record, initial_photo=stream.getvalue())
