@@ -1,4 +1,4 @@
-"""Editor de registros Visitor já existentes. Nunca cria pessoa/reserva."""
+"""Editor de perfis e visitas já existentes no HikCentral."""
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -328,6 +328,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         if path:
             try:
                 chosen_photo["bytes"] = prepare_face_jpeg(Path(path).read_bytes())
+                chosen_photo["changed"] = True
                 status.set("Foto selecionada")
                 update_photo_preview(chosen_photo["bytes"])
             except Exception as exc:
@@ -335,6 +336,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
 
     def use_camera_photo(stream):
         chosen_photo["bytes"] = prepare_face_jpeg(stream.read())
+        chosen_photo["changed"] = True
         status.set("Foto capturada pela câmera")
         update_photo_preview(chosen_photo["bytes"])
         return True
@@ -355,7 +357,102 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     dialog._editor_camera_button = camera_button
     ctk.CTkLabel(body, textvariable=status).pack()
 
-    def submit():
+    def save_profile():
+        if app.busy:
+            status.set("Aguarde a operação atual terminar.")
+            return
+        from visitor_profile import update_profile
+
+        vid = str(record.get("visitor_id") or "")
+        first, last = fields["first"].get(), fields["last"].get()
+        card = fields["card"].get()
+        photo = chosen_photo["bytes"] if chosen_photo.get("changed") else b""
+        profile_button.configure(state="disabled")
+        status.set("Conferindo os dados no perfil do visitante...")
+
+        def work():
+            client = app.client()
+            changed = update_profile(client, vid, first, last, card=card, new_photo=photo)
+            delivery = ""
+            if ("foto" in changed or "pulseira" in changed) and record.get("entry_at") and record.get("exit_at"):
+                try:
+                    active = client.find_registration_record(
+                        vid, record["entry_at"], record["exit_at"], active_only=True)
+                    if active:
+                        level = selected_editor_access(
+                            (active.get("visitorBaseInfo") or {}).get("visitorGroup"),
+                            client.visitor_groups(), app.settings)
+                        selected, doors = client.resolve_levels(level)
+                        verify_visitor_access_plan(selected, doors, level)
+                        client.apply(vid, doors)
+                        delivery = client.delivery_report(vid, doors, expect_face="foto" in changed,
+                                                          expect_card="pulseira" in changed)["message"]
+                except (ValueError, RuntimeError) as exc:
+                    delivery = "Perfil salvo. Entrega nas catracas precisa ser conferida. " + str(exc)
+            return changed, delivery
+
+        def done(result, error):
+            if not dialog.winfo_exists():
+                return
+            profile_button.configure(state="normal")
+            if error:
+                remote_errors.update(getattr(error, "fields", {}))
+                refresh_validation()
+                status.set("Confira o resultado no perfil antes de reenviar.")
+                messagebox.showwarning("Perfil do visitante", str(error), parent=dialog)
+                return
+            changed, delivery = result
+            if photo:
+                chosen_photo["changed"] = False
+            record.update(first=first.strip(), last=last.strip())
+            app.refresh_history()
+            status.set("Dados conferidos em Visitor Information.")
+            text = ", ".join(changed) if changed else "Os dados já estavam gravados."
+            if delivery:
+                text += "\n" + delivery
+            messagebox.showinfo("Perfil do visitante conferido", text, parent=dialog)
+
+        app.task(work, done)
+
+    profile_button = ctk.CTkButton(body, text="Salvar nome, foto e pulseira no perfil",
+                                   command=save_profile)
+    profile_button.pack(pady=(12, 2))
+    ctk.CTkLabel(body, text="Esta ação salva nome, sobrenome e as credenciais informadas em Visitor Information.",
+                 wraplength=580).pack(pady=(0, 4))
+
+    replacement_var = tk.StringVar()
+
+    def open_rebooking():
+        import webbrowser
+        from urllib.parse import urlsplit
+
+        if refresh_validation():
+            messagebox.showerror("Dados para trocar a reserva", "Complete os campos em vermelho.", parent=dialog)
+            return
+        if not appointment_var.get().strip():
+            messagebox.showerror("Dados para trocar a reserva", "Confirme a reserva original antes de criar a substituta.", parent=dialog)
+            return
+        try:
+            start, end = visitor_period_from_dates(fields["entry"].get(), fields["exit"].get(), app.settings)
+            level = selected_editor_access(group_var.get(), allowed_groups, app.settings)[0]
+            host = app.settings["host"].strip()
+            if ":" in host and not host.startswith("["):
+                host = "[" + host + "]"
+            url = f"https://{host}:{int(app.settings['port'])}/#/portal"
+            origin = urlsplit(url)
+            if not origin.hostname or origin.username or origin.path != "/":
+                raise ValueError("Confira o endereço do HikCentral em Configurações.")
+            if messagebox.askyesno("Nova reserva para o mesmo visitante",
+                    f"No HikCentral, abra Visitor Information e selecione Reserve Again no Visitor ID "
+                    f"{record.get('visitor_id')}. Use {start:%d/%m/%Y %H:%M:%S} a {end:%d/%m/%Y %H:%M:%S} "
+                    f"e o nível {level}. Copie o código da nova reserva e volte a este formulário. "
+                    "A troca pode afetar a visita ativa. Mantenha a foto e a pulseira disponíveis "
+                    "até a confirmação da entrega nas catracas. Abrir o HikCentral?", parent=dialog):
+                webbrowser.open(url)
+        except (KeyError, TypeError, ValueError) as exc:
+            messagebox.showerror("HikCentral", str(exc), parent=dialog)
+
+    def submit(replace_booking=False):
         if getattr(dialog, "_edit_submitting", False):
             return
         if app.busy:
@@ -375,6 +472,16 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                           chosen_photo["bytes"], fields["card"].get().strip(),
                           visit_start, visit_end, fields["reservation"].get())
             payload = registration_payload(obj, 0, editing=True)
+            new_booking_code = replacement_var.get().strip() if replace_booking else ""
+            if replace_booking and not new_booking_code:
+                replacement_entry.focus_set()
+                messagebox.showerror("Código da nova reserva", "Informe o código que o HikCentral gerou.", parent=dialog)
+                return
+            if replace_booking:
+                prompt = (f"Conferir a nova reserva {new_booking_code} para o Visitor ID {record.get('visitor_id')}, "
+                          "atualizar a visita e excluir a reserva anterior depois da entrega confirmada nas catracas?")
+                if not messagebox.askyesno("Confirmar troca da reserva", prompt, parent=dialog):
+                    return
             operation = EDIT_OPERATIONS.get(operation_var.get()) or record.get("_edit_operation")
             if operation == "renew":
                 action = ("Visita encerrada: salvar abrirá uma NOVA VISITA para o MESMO visitante, "
@@ -384,7 +491,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                           "visitante, preservando o histórico anterior.")
             else:
                 action = "O cadastro da visita existente será atualizado para o mesmo visitante."
-            if not messagebox.askyesno("Confirmar cadastro do visitante",
+            if not replace_booking and not messagebox.askyesno("Confirmar cadastro do visitante",
                     "Visitante ID: " + str(record.get("visitor_id") or "") +
                     "\nGrupo: " + new_group + "\nNível Visitor: " + requested_level[0] +
                     f"\nValidade: {visit_start:%d/%m/%Y %H:%M:%S} a {visit_end:%d/%m/%Y %H:%M:%S}.\n\n" +
@@ -444,6 +551,10 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             if selected_visit["raw"] is not None:
                 edit_record["_selected_checkin_record"] = selected_visit["raw"]
                 edit_record["_selected_checkin_id"] = str(selected_visit["raw"].get("recordId") or "")
+            if replace_booking:
+                from reservation_replacement import finish_replacement
+                return finish_replacement(client, edit_record, new_booking_code, payload,
+                                          selected, doors, obj, new_group, requested_level)
             from visitor_edit_transaction import update_existing_visit
             return update_existing_visit(client, edit_record, payload, selected, doors, obj, new_group, requested_level)
 
@@ -516,10 +627,35 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     dialog.grab_set()
                     dialog.lift()
                     refresh_validation()
-                messagebox.showwarning("Cadastro não confirmado", str(error), parent=dialog if dialog.winfo_exists() else app)
+                message = str(error)
+                if replace_booking and getattr(error, "fields", {}).get("replacement_code"):
+                    replacement_entry.configure(border_color="#B91C1C")
+                    message = error.fields["replacement_code"]
+                messagebox.showwarning("Cadastro não confirmado", message, parent=dialog if dialog.winfo_exists() else app)
                 return
             app.refresh_history()
             booking_period = result.get("reservation_period") or {}
+            if replace_booking:
+                if result["replacement_state"] == "confirmed":
+                    messagebox.showinfo("Reserva substituída",
+                        f"Reserva {new_booking_code} confirmada nas datas informadas. "
+                        "O HikCentral confirmou o check-in e a remoção da reserva anterior.", parent=app)
+                    dialog.destroy()
+                else:
+                    record.update(registration_record_id=result["confirmed_checkin_id"],
+                                  entry_at=payload["visitStartTime"], exit_at=payload["visitEndTime"],
+                                  checkin_state="check-in efetuado", _edit_operation="update")
+                    dialog.deiconify()
+                    dialog.grab_set()
+                    dialog.lift()
+                    status.set("Nova reserva conferida. Entrega nas catracas pendente.")
+                    note = ("A reserva anterior já foi removida e o check-in foi conferido. "
+                            if result["replacement_state"] == "pending_after_delete" else
+                            "A reserva anterior será removida após a entrega. ")
+                    messagebox.showwarning("Troca aguardando entrega", note +
+                        "Confira a foto e a pulseira nas catracas e volte a concluir com o mesmo código.",
+                        parent=dialog)
+                return
             booking_note = reservation_period_notice(booking_period, payload["visitStartTime"], payload["visitEndTime"])
             if booking_note:
                 period_notice = booking_note
@@ -588,8 +724,16 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 dialog.destroy()
         app.task(work, done)
 
-    save_button = ctk.CTkButton(body, text="Salvar e enviar ao HikCentral", command=submit, state="normal")
+    save_button = ctk.CTkButton(body, text="Salvar validade e dados da visita", command=submit, state="normal")
     dialog._save_edit_button = save_button
     save_button.pack(pady=12)
+    ctk.CTkButton(body, text="Abrir HikCentral para criar reserva substituta",
+                  command=open_rebooking).pack(pady=(4, 5))
+    ctk.CTkLabel(body, text="Código da nova reserva").pack()
+    replacement_entry = ctk.CTkEntry(body, textvariable=replacement_var, width=240)
+    replacement_entry.pack(pady=3)
+    replacement_var.trace_add("write", lambda *_: replacement_entry.configure(border_color="#9CA3AF"))
+    ctk.CTkButton(body, text="Concluir troca da reserva",
+                  command=lambda: submit(True)).pack(pady=(3, 12))
     ctk.CTkButton(body, text="Cancelar", command=dialog.destroy).pack(pady=6)
     refresh_validation()
