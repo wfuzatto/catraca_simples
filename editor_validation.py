@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import datetime
 import re
 
 from PIL import Image
-from core import VALE_VISITOR_LEVELS, parse_visit_date, visitor_period_from_dates
+from core import TZ, VALE_VISITOR_LEVELS, parse_visit_date, visitor_period_from_dates
 
 CREDENTIAL_MODES = {"Somente foto": (True, False),
                     "Somente pulseira": (False, True),
@@ -30,6 +31,47 @@ def infer_edit_operation(record):
     if state in CLOSED_VISIT_STATES:
         return "renew"
     return ""
+
+
+def reservation_edit_dates(record):
+    """Choose the displayed and baseline dates for an edit form.
+
+    When an active check-in and its reservation disagree, show the dates that
+    are actually on the visit and keep the reservation dates as the baseline.
+    Saving then offers the replacement flow instead of silently preserving the
+    stale reservation period. Closed historical visits keep the reservation
+    dates as defaults so a metadata-only correction never tries to renew an
+    expired booking.
+    """
+    booking = record.get("_reservation_period") or {}
+    period_known = booking.get("state") in {"matched", "different"}
+    selected = record.get("_selected_checkin_record")
+    if isinstance(selected, dict):
+        active = str(selected.get("visitorStatus") or "") == "0"
+    else:
+        active = str(record.get("checkin_state") or "").strip().casefold() in {
+            "check-in efetuado", "confirmado"}
+
+    def format_day(value):
+        try:
+            parsed = datetime.fromisoformat(str(value or ""))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=TZ)
+            else:
+                parsed = parsed.astimezone(TZ)
+            return parsed.strftime("%d/%m/%Y")
+        except (TypeError, ValueError):
+            return ""
+
+    displayed, baseline = {}, {}
+    for field in ("entry", "exit"):
+        key = "entry_at" if field == "entry" else "exit_at"
+        booking_day = format_day(booking.get(key) if period_known else record.get(key))
+        visit_day = format_day(record.get(key))
+        baseline[field] = booking_day or visit_day
+        displayed[field] = (visit_day if booking.get("state") == "different" and active and visit_day
+                            else baseline[field])
+    return displayed, baseline
 
 
 def editor_requirements(record, visitor=None, *, photo_error="", photo_loaded=False):

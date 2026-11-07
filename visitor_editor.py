@@ -74,7 +74,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     """Keep the form editable; require the operator to complete missing data."""
     from editor_validation import (CREDENTIAL_MODES, EDIT_OPERATIONS,
                                    editor_requirements, infer_edit_operation,
-                                   validate_editor_fields)
+                                   reservation_edit_dates, validate_editor_fields)
     from hikcentral import normalize
 
     active = getattr(app, "_active_visitor_editor", None)
@@ -183,22 +183,15 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                      wraplength=590, justify="left", text_color="#64748B").pack(fill="x", pady=(0, 5))
 
     booking_period = record.get("_reservation_period") or {}
-
-    def formatted_visit_time(field):
-        try:
-            value = booking_period.get(field) if booking_period.get("state") in {"matched", "different"} else None
-            return datetime.fromisoformat(value or record.get(field) or "").astimezone(TZ).strftime("%d/%m/%Y")
-        except (ValueError, TypeError):
-            return ""
+    initial_dates, baseline_dates = reservation_edit_dates(record)
 
     initial = {
         "first": visitor.get("visitorGivenName", record.get("first", "")),
         "last": visitor.get("visitorFamilyName", record.get("last", "")),
         "reservation": visitor.get("remark", record.get("reservation", "")),
-        "entry": formatted_visit_time("entry_at"), "exit": formatted_visit_time("exit_at"),
+        "entry": initial_dates["entry"], "exit": initial_dates["exit"],
         "card": card_number,
     }
-    baseline_dates = {key: initial[key] for key in ("entry", "exit")}
     for field, label in (("first", "Nome"), ("last", "Sobrenome"),
                          ("reservation", "Apartamento (Remark)"),
                          ("entry", "Entrada da reserva (DD/MM/AAAA)"), ("exit", "Saída da reserva (DD/MM/AAAA)"),
@@ -266,6 +259,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
     ctk.CTkLabel(body, textvariable=level_status, wraplength=590, justify="left").pack(fill="x", pady=(4, 5))
     period_notice = "\n".join(reservation_period_notice(
         booking_period, record.get("entry_at"), record.get("exit_at")).splitlines()[:2])
+    if booking_period.get("state") == "different" and initial_dates != baseline_dates:
+        period_notice += "\nAs datas do check-in foram carregadas. Salvar vai substituir a reserva para usar esse período."
     period_label = ctk.CTkLabel(body, text=period_notice, wraplength=590, justify="left", text_color="#64748B")
     if period_notice:
         period_label.pack(fill="x", pady=(4, 5))
@@ -376,6 +371,33 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
         requirements["require_appointment"] = False
         operation_border.pack_forget()
         appointment_border.pack_forget()
+
+    def flag_delivery_refusal(result, visitor_obj):
+        """Highlight a rejected credential, or require a fresh choice if unknown."""
+        rows = result.get("doors") or []
+        face_states = [str(row.get("faceState") or "").casefold()
+                       for row in rows if isinstance(row, dict)]
+        card_states = [str(row.get("credentialState") or "").casefold()
+                       for row in rows if isinstance(row, dict)]
+        failed_photo = "failed" in face_states
+        failed_card = "failed" in card_states
+        if str(result.get("state") or "").casefold() == "failed" and not (failed_photo or failed_card):
+            failed_photo = bool(requirements.get("require_photo") or visitor_obj.photo_jpeg) and (
+                not face_states or any(state != "confirmed" for state in face_states))
+            failed_card = bool(requirements.get("require_card") or visitor_obj.card_number) and (
+                not card_states or any(state != "confirmed" for state in card_states))
+            if not (failed_photo or failed_card):
+                mode_var.set("")
+                remote_errors["credential_mode"] = (
+                    "O HikCentral confirmou os dados, mas não aplicou o acesso. "
+                    "Selecione novamente a modalidade de credencial para repetir a entrega.")
+        if failed_photo:
+            requirements["require_photo"] = True
+            remote_errors["photo"] = "Foto recusada ou não confirmada. Selecione uma nova foto de rosto."
+        if failed_card:
+            requirements["require_card"] = True
+            remote_errors["card"] = "Pulseira recusada ou não confirmada. Confira e informe o número novamente."
+        return failed_photo, failed_card
 
     def submit():
         if getattr(dialog, "_edit_submitting", False):
@@ -629,20 +651,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     period_notice = booking_note
                     period_label.configure(text=booking_note, text_color="#64748B")
                     period_label.pack(fill="x", pady=(4, 5), before=summary_label)
-                doors_result = result.get("doors") or []
-                failed_photo = any(str(row.get("faceState") or "").casefold() == "failed"
-                                   for row in doors_result if isinstance(row, dict))
-                failed_card = any(str(row.get("credentialState") or "").casefold() == "failed"
-                                  for row in doors_result if isinstance(row, dict))
-                if not failed_photo and not failed_card and result.get("state") == "failed":
-                    failed_photo, failed_card = bool(obj.photo_jpeg), bool(obj.card_number)
                 remote_errors.clear()
-                if failed_photo:
-                    requirements["require_photo"] = True
-                    remote_errors["photo"] = "Foto recusada por uma catraca. Selecione ou capture outra foto."
-                if failed_card:
-                    requirements["require_card"] = True
-                    remote_errors["card"] = "Pulseira recusada por uma catraca. Confira e informe novamente o número."
+                flag_delivery_refusal(result, obj)
                 if result.get("state") == "confirmed":
                     messagebox.showinfo("Reserva e check-in confirmados",
                         f"A reserva {booking_period.get('code') or new_appointment} foi criada para o mesmo visitante.\n"
@@ -691,17 +701,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                               checkin_state="check-in efetuado", _edit_operation="update")
                 select_confirmed_active_visit()
                 remote_errors.clear()
-                doors_result = result.get("doors") or []
-                failed_photo = any(str(row.get("faceState") or "").casefold() == "failed"
-                                   for row in doors_result if isinstance(row, dict))
-                failed_card = any(str(row.get("credentialState") or "").casefold() == "failed"
-                                  for row in doors_result if isinstance(row, dict))
-                if failed_photo:
-                    requirements["require_photo"] = True
-                    remote_errors["photo"] = "Foto recusada por uma catraca. Selecione ou capture outra foto."
-                if failed_card:
-                    requirements["require_card"] = True
-                    remote_errors["card"] = "Pulseira recusada por uma catraca. Confira e informe novamente o número."
+                flag_delivery_refusal(result, obj)
                 status.set("Dados gravados no perfil e na visita. Corrija a credencial recusada em vermelho.")
                 if dialog.winfo_exists():
                     dialog.deiconify()
