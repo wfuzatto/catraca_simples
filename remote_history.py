@@ -527,6 +527,10 @@ def find_original_appointment(client, record, *, max_pages=10):
             "appointEndTime": (query_end + timedelta(days=1)).isoformat(timespec="seconds"),
             "appointState": -1, "sortField": "VisitingTime", "orderType": 1,
         }
+        search_name = str(record.get("first") or
+                          str(record.get("full_name") or "").partition(" ")[0]).strip()
+        if search_name:
+            payload["visitorName"] = search_name
         data = client.post(APPOINTMENTS_PATH, payload).get("data") or {}
         if not isinstance(data, dict):
             raise HikError("A consulta de reservas não retornou lista válida.")
@@ -608,7 +612,7 @@ def reservation_period_report(client, record, start_iso, end_iso):
         return {"state": "unavailable", "message": "Datas da reserva original não confirmadas pela consulta."}
 
 
-def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso, end_iso):
+def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso, end_iso, name=""):
     """Attach live reservation dates to check-ins using a verified reservation link.
 
     The check-in's visitStartTime/visitEndTime remain intact for editing and
@@ -656,6 +660,8 @@ def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso
                     "appointEndTime": query_end.isoformat(timespec="seconds"),
                     "sortField": "VisitingTime", "orderType": 1,
                 }
+                if str(name or "").strip():
+                    params["visitorName"] = str(name).strip()
                 data = client.post(APPOINTMENTS_PATH, params).get("data") or {}
                 if not isinstance(data, dict):
                     raise HikError("A consulta de reservas não retornou dados legíveis.")

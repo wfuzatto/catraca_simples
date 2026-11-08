@@ -1078,7 +1078,8 @@ class ValeApp(tk.Tk):
             result = fetch(client, start_iso, end_iso, page, name, page_size=page_size)
             if not reservation_only:
                 result["rows"] = enrich_checkins_with_reservation_periods(
-                    client, result["rows"], local_source_rows, start_iso, end_iso)
+                    client, result["rows"], local_source_rows, start_iso, end_iso,
+                    name=name)
             return result
 
         def finish(result, error):

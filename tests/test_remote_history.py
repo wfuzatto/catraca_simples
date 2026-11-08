@@ -649,6 +649,7 @@ def test_history_finds_unique_reservation_by_visitor_when_checkin_has_no_link():
     source = example_record(visitor="1923", record="checkin-1923")
     source["visitorStatus"] = "1"  # saída/checkout
     source["visitorBaseInfo"].update(
+        fullName="Wesley1 Nascimento2",
         visitStartTime="2026-11-07T00:00:00-03:00",
         visitEndTime="2026-11-08T23:59:59-03:00")
     checkin = normalize_checkin(source)
@@ -661,13 +662,15 @@ def test_history_finds_unique_reservation_by_visitor_when_checkin_has_no_link():
     client = FakeClient({"data": {"list": [booking], "total": 1}})
 
     result = enrich_checkins_with_reservation_periods(
-        client, [checkin], [], "2026-11-07T00:00:00-03:00", "2026-11-10T00:00:00-03:00")
+        client, [checkin], [], "2026-11-07T00:00:00-03:00", "2026-11-10T00:00:00-03:00",
+        name="wes")
 
     assert result[0]["reservation_entry_at"] == booking["appointStartTime"]
     assert result[0]["reservation_exit_at"] == booking["appointEndTime"]
     assert result[0]["reservation_code"] == "8738"
     assert result[0]["appointment_id"] == "booking-8738"
     assert client.calls[0][0] == APPOINTMENTS_PATH
+    assert client.calls[0][1]["visitorName"] == "wes"
 
 
 def test_closed_checkin_can_find_its_unique_overlapping_reservation_for_edit():
@@ -682,10 +685,11 @@ def test_closed_checkin_can_find_its_unique_overlapping_reservation_for_edit():
     record = {
         "visitor_id": "1923", "entry_at": "2026-11-07T00:00:00-03:00",
         "exit_at": "2026-11-08T23:59:59-03:00", "group": "Hóspedes Vale",
-        "checkin_state": "check-out",
+        "checkin_state": "check-out", "first": "Wesley1",
     }
     client = FakeClient({"data": {"list": [booking], "total": 1}})
     assert find_original_appointment(client, record) == booking
+    assert client.calls[0][1]["visitorName"] == "Wesley1"
 
 
 def test_history_leaves_reservation_dates_blank_when_same_visitor_has_two_possible_bookings():
