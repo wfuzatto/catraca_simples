@@ -1397,15 +1397,75 @@ class ValeApp(tk.Tk):
             messagebox.showinfo("Reenvio", "Solicitação enviada ao visitante existente. Entrega: " + result["state"])
         self.task(work, finish)
 
+    def edit_history_visitor_information(self, record):
+        from visitor_editor import open_visitor_information_editor
+
+        record = dict(record)
+        if self.busy:
+            self.history_status.set("Aguarde a operação atual terminar antes de abrir Visitor Information.")
+            return
+        if not self.key or not self.secret:
+            open_visitor_information_editor(
+                self, record, photo_error="Configure a conexão HikCentral para consultar a foto e salvar.")
+            return
+        self.history_status.set("Carregando Visitor Information e foto do perfil...")
+        modern_ui.start_history_loading(
+            self, "Carregando Visitor Information...", phase="editor")
+
+        def work():
+            client = self.client()
+            detail, photo, issue = {}, b"", ""
+            try:
+                detail = visitor_details(client, record["visitor_id"])
+            except Exception as exc:
+                issue = str(exc)
+            try:
+                photo = fetch_visitor_photo(
+                    client, record["visitor_id"], record.get("photo_url", ""), details=detail)
+            except Exception as exc:
+                issue = (issue + "\n" if issue else "") + str(exc)
+            return detail, photo, issue
+
+        def finish(result, error):
+            modern_ui.stop_history_loading(self, phase="editor")
+            if error:
+                detail, photo, issue = {}, b"", str(error)
+            else:
+                detail, photo, issue = result
+            open_visitor_information_editor(
+                self, record, remote_details=detail, initial_photo=photo, photo_error=issue)
+            self.history_status.set("Visitor Information aberto; datas e apartamento continuam na reserva.")
+
+        self.task(work, finish)
+
     def view_history_selection(self, _event=None):
+        action = None
+        if _event is not None and getattr(_event, "widget", None) is self.history_table:
+            region = self.history_table.identify_region(_event.x, _event.y)
+            if region != "cell":
+                return
+            iid = self.history_table.identify_row(_event.y)
+            if not iid:
+                return "break"
+            column = self.history_table.identify_column(_event.x)
+            action = {"#2": "reservation", "#3": "reservation", "#4": "profile"}.get(column)
+            if action is None:
+                return "break"
+            self.history_table.selection_set(iid)
+            self.history_table.focus(iid)
         record = self._selected_history()
         if not record:
             return
         record = dict(record)
+        if action == "profile":
+            self.edit_history_visitor_information(record)
+            return "break"
         if record.get("_reservation_only"):
+            if _event is not None and action != "reservation":
+                return "break"
             from visitor_editor import open_unregistered_reservation_editor
             open_unregistered_reservation_editor(self, record)
-            return
+            return "break" if _event is not None else None
         from editor_validation import infer_edit_operation
         record["_edit_operation"] = infer_edit_operation(record)
         # O histórico local guarda o último cadastro da pessoa. Só aproveitar

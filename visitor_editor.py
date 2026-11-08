@@ -177,6 +177,194 @@ def open_editor_camera(dialog, settings, on_accept):
         raise
 
 
+def open_visitor_information_editor(app, record, *, remote_details=None,
+                                   initial_photo=b"", photo_error=""):
+    """Edit only Visitor Information fields, never dates or reservation Remark."""
+    import re
+
+    from visitor_profile import update_profile
+
+    active = getattr(app, "_active_visitor_editor", None)
+    if active is not None and active.winfo_exists():
+        active.lift()
+        active.focus_force()
+        return
+
+    details = remote_details if isinstance(remote_details, dict) else {}
+    visitor = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    if not isinstance(visitor, dict):
+        visitor = {}
+    visitor_id = str(record.get("visitor_id") or visitor.get("visitorId") or "").strip()
+    first = str(visitor.get("visitorGivenName") or record.get("first") or "")
+    last = str(visitor.get("visitorFamilyName") or record.get("last") or "")
+    cards = visitor.get("cards") or []
+    card = next((str(item.get("cardNo") or "") for item in cards
+                 if isinstance(item, dict) and item.get("cardNo")), "")
+    card = card or str(record.get("card_number") or "")
+    group = str(visitor.get("visitorGroupName") or visitor.get("visitorGroup") or
+                record.get("group") or "").strip()
+
+    dialog = ctk.CTkToplevel(app)
+    app._active_visitor_editor = dialog
+    dialog.title(f"Editar Visitor Information — {visitor_id or 'visitante'}")
+    dialog.geometry("560x700")
+    dialog.transient(app)
+    dialog.grab_set()
+    body = ctk.CTkScrollableFrame(dialog)
+    body.pack(fill="both", expand=True, padx=14, pady=12)
+    ctk.CTkLabel(body, text="Visitor Information", font=("Segoe UI", 17, "bold")).pack(
+        anchor="w", pady=(0, 5))
+    ctk.CTkLabel(
+        body,
+        text="Esta tela altera nome, sobrenome, foto e pulseira do perfil. "
+             "Datas e apartamento da reserva ficam no editor de reserva.",
+        wraplength=500, justify="left", text_color="#64748B").pack(fill="x", pady=(0, 10))
+    if group:
+        ctk.CTkLabel(body, text=f"Grupo atual preservado: {group}", anchor="w",
+                     text_color="#64748B").pack(fill="x", pady=(0, 8))
+
+    fields, entries, errors = {}, {}, {}
+    for key, label, value in (("first", "Nome", first), ("last", "Sobrenome", last),
+                              ("card", "Pulseira/NFC", card)):
+        ctk.CTkLabel(body, text=label, anchor="w").pack(fill="x", pady=(7, 2))
+        variable = tk.StringVar(value=value)
+        entry = ctk.CTkEntry(body, textvariable=variable, border_width=2)
+        entry.pack(fill="x")
+        error_label = ctk.CTkLabel(body, text="", text_color="#B91C1C",
+                                   wraplength=500, justify="left")
+        error_label.pack(fill="x")
+        fields[key], entries[key], errors[key] = variable, entry, error_label
+
+    preview = ctk.CTkLabel(body, text="Foto original não disponível", width=220, height=200,
+                           fg_color=("#E9EEF5", "#243043"))
+    preview.pack(pady=(10, 4))
+    chosen_photo = {"bytes": b"", "changed": False}
+    if initial_photo:
+        try:
+            chosen_photo["bytes"] = prepare_face_jpeg(initial_photo)
+            with Image.open(BytesIO(chosen_photo["bytes"])) as image:
+                image.thumbnail((220, 220), Image.Resampling.LANCZOS)
+                image_preview = ImageTk.PhotoImage(image.copy())
+            preview.configure(image=image_preview, text="")
+            preview.image = image_preview
+        except Exception:
+            chosen_photo["bytes"] = b""
+
+    status = tk.StringVar(value=photo_error or
+                          ("Foto original carregada; selecione outra para substituir."
+                           if chosen_photo["bytes"] else "Nenhuma foto selecionada."))
+    ctk.CTkLabel(body, textvariable=status, wraplength=500, justify="left",
+                 text_color="#64748B").pack(fill="x", pady=(2, 6))
+    photo_buttons = ctk.CTkFrame(body, fg_color="transparent")
+    photo_buttons.pack(pady=5)
+
+    def show_photo(data, label):
+        try:
+            prepared = prepare_face_jpeg(data)
+            with Image.open(BytesIO(prepared)) as image:
+                image.thumbnail((220, 220), Image.Resampling.LANCZOS)
+                frame = ImageTk.PhotoImage(image.copy())
+            preview.configure(image=frame, text="")
+            preview.image = frame
+            chosen_photo.update(bytes=prepared, changed=True)
+            status.set(label)
+        except Exception as exc:
+            messagebox.showerror("Foto", str(exc), parent=dialog)
+
+    def select_photo():
+        path = filedialog.askopenfilename(
+            parent=dialog, filetypes=[("Fotos", "*.jpg *.jpeg *.png *.bmp")])
+        if path:
+            try:
+                show_photo(Path(path).read_bytes(), "Foto selecionada para Visitor Information.")
+            except OSError as exc:
+                messagebox.showerror("Foto", str(exc), parent=dialog)
+
+    def capture_photo():
+        try:
+            open_editor_camera(dialog, app.settings,
+                              lambda stream: (show_photo(stream.read(), "Foto capturada."), True)[1])
+        except Exception as exc:
+            messagebox.showerror("Webcam", str(exc), parent=dialog)
+
+    ctk.CTkButton(photo_buttons, text="Selecionar foto", command=select_photo).pack(
+        side="left", padx=5)
+    ctk.CTkButton(photo_buttons, text="Abrir câmera", command=capture_photo).pack(
+        side="left", padx=5)
+    if photo_error:
+        ctk.CTkLabel(body, text="A foto não foi recuperada. Se quiser alterá-la, selecione uma nova foto.",
+                     wraplength=500, justify="left", text_color="#64748B").pack(fill="x", pady=4)
+
+    def validate():
+        result = {}
+        for key in ("first", "last"):
+            value = fields[key].get().strip()
+            if not 2 <= len(value) <= 64 or any(char in value for char in "'/\\:*?\"<>|"):
+                result[key] = "Informe de 2 a 64 caracteres válidos."
+        card_value = fields["card"].get().strip()
+        if card_value and not re.fullmatch(r"[A-Za-z0-9]{1,32}", card_value):
+            result["card"] = "A pulseira deve ter de 1 a 32 caracteres alfanuméricos."
+        for key, entry in entries.items():
+            entry.configure(border_color="#DC2626" if key in result else "#9CA3AF")
+            errors[key].configure(text=result.get(key, ""))
+        return result
+
+    def done(changed, error):
+        save_button.configure(state="normal")
+        cancel_button.configure(state="normal")
+        if error:
+            supplied = getattr(error, "fields", {}) or {}
+            for key, message in supplied.items():
+                if key in errors:
+                    entries[key].configure(border_color="#DC2626")
+                    errors[key].configure(text=str(message))
+            status.set(str(error))
+            messagebox.showerror("Visitor Information não confirmado", str(error), parent=dialog)
+            return
+        app.refresh_history()
+        dialog.destroy()
+        summary = ", ".join(changed) if changed else "nenhuma alteração necessária"
+        messagebox.showinfo("Visitor Information atualizado",
+                            "Perfil atualizado: " + summary + ".", parent=app)
+
+    def save():
+        validation_errors = validate()
+        if validation_errors:
+            key = next(iter(validation_errors))
+            entries[key].focus_set()
+            messagebox.showerror("Confira os campos", "\n".join(validation_errors.values()), parent=dialog)
+            return
+        if app.busy:
+            status.set("Aguarde a operação atual terminar.")
+            return
+        if not messagebox.askyesno(
+                "Salvar Visitor Information",
+                "Confirma as alterações de nome, sobrenome, foto e pulseira? "
+                "A reserva, o apartamento e as datas não serão alterados.", parent=dialog):
+            return
+        save_button.configure(state="disabled")
+        cancel_button.configure(state="disabled")
+        status.set("Salvando e conferindo os dados no Visitor Information...")
+
+        def work():
+            client = app.client()
+            return update_profile(
+                client, visitor_id, fields["first"].get(), fields["last"].get(),
+                card=fields["card"].get().strip(),
+                new_photo=chosen_photo["bytes"] if chosen_photo["changed"] else b"")
+
+        app.task(work, done)
+
+    buttons = ctk.CTkFrame(body, fg_color="transparent")
+    buttons.pack(pady=(12, 4))
+    save_button = ctk.CTkButton(buttons, text="Salvar Visitor Information", command=save)
+    save_button.pack(side="left", padx=5)
+    cancel_button = ctk.CTkButton(buttons, text="Cancelar", command=dialog.destroy)
+    cancel_button.pack(side="left", padx=5)
+    dialog._visitor_information_fields = fields
+    dialog._visitor_information_save_button = save_button
+
+
 def selected_editor_access(group, available_groups, settings):
     """Select the operator-approved mapping; never infer actual existing rights.
 
