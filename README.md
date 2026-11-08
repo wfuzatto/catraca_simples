@@ -1,8 +1,10 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.66` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.67` (prévia técnica para testes).
 
 No **Histórico de check-ins**, as colunas **Início da reserva** e **Término da reserva** vêm diretamente da Visitor Reservation. Quando o HikCentral omite o ID da reserva no check-in, a aplicação procura um vínculo único pelo Visitor ID, grupo e período; se houver mais de uma possibilidade, não inventa as datas. O status e as passagens continuam vinculados ao check-in.
+
+Na Preview 67, a edição de datas confirma a reserva pelo código, inclusive quando a lista geral do HikCentral omite reservas já registradas ou encerradas. A confirmação usa o ID devolvido pela API e aceita o estado retornado para uma reserva existente. Na lista do aplicativo, nome e sobrenome vêm dos campos próprios quando o HikCentral devolve o nome de exibição concatenado.
 
 Na Preview 66, a consulta também tenta resolver o vínculo ausente antes de deixar as datas em branco. O editor aceita a reserva única e sobreposta do mesmo visitante mesmo depois do check-out; se houver várias reservas possíveis, permite escolher pelo código e período.
 

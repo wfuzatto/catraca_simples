@@ -265,8 +265,10 @@ def _normalize_unchecked_reservation(item):
         return None
     first = str(info.get("visitorGivenName") or info.get("firstName") or "").strip()
     last = str(info.get("visitorFamilyName") or info.get("lastName") or "").strip()
-    full_name = str(info.get("visitorName") or info.get("fullName")
-                    or " ".join(filter(None, (first, last)))).strip()
+    # Some HikCentral versions return visitorName without a separator even
+    # though the canonical given/family fields are separate and correct.
+    full_name = (" ".join(filter(None, (first, last))) if first or last else
+                 str(info.get("visitorName") or info.get("fullName") or "").strip())
     if not first and not last:
         first, _, last = full_name.partition(" ")
     levels = parse_access_levels(item)
