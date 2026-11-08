@@ -799,3 +799,23 @@ def test_reservation_display_uses_given_and_family_names_when_server_joins_them(
 
     assert (row["first"], row["last"]) == ("WESLEYN1", "TESTE2")
     assert row["full_name"] == "WESLEYN1 TESTE2"
+
+
+def test_reservation_without_group_keeps_its_single_visitor_access_level():
+    from remote_history import _normalize_unchecked_reservation
+
+    appointment = {
+        "appointID": "774759018718560256", "appointCode": "2899", "appointStatus": "0",
+        "appointStartTime": "2026-11-08T19:15:13-03:00",
+        "appointEndTime": "2026-11-08T23:59:59-03:00",
+        "visitorInfo": {"visitorId": "2114", "visitorGivenName": "Wesley",
+                        "visitorFamilyName": "Teste", "remark": "123"},
+        "accessInfo": {"accessLevelList": [{"accessLevel": {
+            "id": 1, "baseInfo": {"name": "ENTRADA ACQUAVALE"}}}]},
+    }
+
+    row = _normalize_unchecked_reservation(appointment)
+
+    assert row["group"] == ""
+    assert row["access_names"] == ["ENTRADA ACQUAVALE"]
+    assert row["access_level_ids"] == ["1"]

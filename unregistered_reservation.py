@@ -129,12 +129,29 @@ def reschedule_unregistered_reservation(client, record, start, end, remark, sele
     if any(record.get(field) for field in ("registration_record_id", "_selected_checkin_id", "_selected_checkin_record")):
         raise EditorFieldError({"appointment": "Esta visita já tem check-in. Abra a visita no histórico."})
     if len(selected) != 1 or not selected[0].get("id"):
-        raise EditorFieldError({"group": "Confirme o grupo e o nível Visitor originais."})
+        raise EditorFieldError({"group": "Confirme o nível Visitor original da reserva."})
     level = {"id": str(selected[0]["id"]), "name": selected[0].get("name")}
     group = next((name for name, access in VALE_VISITOR_LEVELS.items() if access == level["name"]), "")
     record_group = str(record.get("group") or "").strip()
-    if not group or (record_group and normalize(group) != normalize(record_group)):
-        raise EditorFieldError({"group": "Confirme o grupo e o nível Visitor originais."})
+    if group and record_group and normalize(group) != normalize(record_group):
+        raise EditorFieldError({"group": "O grupo e o nível Visitor da reserva divergem."})
+    if not group:
+        # Algumas reservas legítimas retornam somente um nível type=2
+        # (por exemplo, ENTRADA ACQUAVALE), sem nome de grupo Visitor.
+        # Permitir a edição apenas quando ID e nome enviados pelo histórico
+        # confirmam que o nível escolhido é exatamente o da reserva original.
+        original_names = record.get("access_names") or []
+        original_ids = record.get("access_level_ids") or []
+        exact_original = (
+            len(original_names) == 1 and len(original_ids) == 1 and
+            normalize(str(original_names[0])) == normalize(str(level["name"])) and
+            str(original_ids[0]) == str(level["id"]))
+        if not exact_original:
+            raise EditorFieldError({
+                "group": "O nível não tem grupo Visitor mapeado e não foi possível "
+                        "confirmar o mesmo ID e nome da reserva original."
+            })
+        group = record_group
     start, end = _period(start, end)
     old_start, old_end = _period(record.get("entry_at"), record.get("exit_at"))
     remark = validate_visitor_remark(remark)

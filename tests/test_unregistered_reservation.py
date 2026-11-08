@@ -134,6 +134,37 @@ def test_keeps_verified_access_level_when_server_omits_group(lab):
     assert result["confirmed_visitor_id"] == VISITOR
 
 
+def test_preserves_unmapped_visitor_level_when_reservation_confirms_exact_id_and_name(lab):
+    server, record, journal = lab
+    level = {"id": "1", "name": "ENTRADA ACQUAVALE"}
+    server.booking["visitorInfo"].pop("visitorGroupName")
+    server.profile.pop("visitorGroupName")
+    server.booking["accessInfo"] = server.access_info([level])
+    record.update(group="", access_names=[level["name"]], access_level_ids=[level["id"]])
+
+    result = reschedule_unregistered_reservation(
+        server, record, NEW_START, NEW_END, "321-A", [level], journal=journal)
+
+    body, = server.writes
+    assert body["accessInfo"] == server.access_info([level])
+    assert "visitorGroupName" not in body["visitorInfoList"][0]["VisitorInfo"]
+    assert result["confirmed_appointment_id"] == NEW_APPOINTMENT
+    assert not journal.exists()
+
+
+def test_does_not_replace_unmapped_level_when_original_id_was_not_confirmed(lab):
+    server, record, journal = lab
+    level = {"id": "2", "name": "ENTRADA ACQUAVALE"}
+    record.update(group="", access_names=[level["name"]], access_level_ids=["1"])
+
+    with pytest.raises(EditorFieldError, match="mesmo ID e nome"):
+        reschedule_unregistered_reservation(
+            server, record, NEW_START, NEW_END, "321-A", [level], journal=journal)
+
+    assert not server.writes
+    assert not journal.exists()
+
+
 @pytest.mark.parametrize("reason", ["status", "linked", "stale", "other_visitor", "local_checkin"])
 def test_refuses_invalid_target_before_any_mutation(lab, reason):
     server, record, journal = lab

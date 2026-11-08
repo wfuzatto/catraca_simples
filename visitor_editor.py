@@ -10,6 +10,7 @@ from core import (Visitor, TZ, visitor_period_from_dates, registration_payload,
                   prepare_face_jpeg, load_pending, app_dir, _write_json_atomic,
                   verify_visitor_access_plan, visitor_levels_for_group,
                   VALE_VISITOR_LEVELS)
+from edit_errors import EditorFieldError
 from visitor_history import save_registration, set_history_status
 from access_receipt import make_access_receipt
 from remote_history import reservation_period_notice
@@ -18,7 +19,6 @@ from remote_history import reservation_period_notice
 
 def open_unregistered_reservation_editor(app, record):
     from core import parse_visit_date
-    from edit_errors import EditorFieldError
     from editor_validation import reservation_edit_dates
     from unregistered_reservation import reschedule_unregistered_reservation
     from visitor_profile import validate_visitor_remark
@@ -36,7 +36,10 @@ def open_unregistered_reservation_editor(app, record):
     body = ctk.CTkFrame(dialog)
     body.pack(fill="both", expand=True, padx=14, pady=14)
     level_names = record.get("access_names") or []
-    access_label = record.get("group") or ", ".join(level_names)
+    group_name = str(record.get("group") or "").strip()
+    access_label = (f"{group_name} • nível {', '.join(level_names)}" if group_name and level_names
+                    else group_name or (f"Nível Visitor preservado: {', '.join(level_names)}" if level_names
+                                        else "Nível Visitor precisa ser confirmado"))
     ctk.CTkLabel(body, text=f"{record['first']} {record['last']}  •  {access_label}").pack(padx=12, pady=8)
     dates, _ = reservation_edit_dates(record)
     initial = {**dates, "reservation": record.get("reservation", "")}
@@ -98,17 +101,32 @@ def open_unregistered_reservation_editor(app, record):
 
         def work():
             client = app.client()
-            group = record.get("group")
-            if not group:
-                # Some OpenAPI versions omit group names from reservation rows.
-                # Use the existing level to locate the hotel's configuration.
-                groups = [name for name, level in VALE_VISITOR_LEVELS.items() if level_names == [level]]
-                if len(groups) != 1:
-                    raise EditorFieldError({"group": "O HikCentral não confirmou um único nível Visitor nesta reserva."})
-                group = groups[0]
-            level = selected_editor_access(group, client.visitor_groups(), app.settings)
-            selected, doors = client.resolve_levels(level)
-            verify_visitor_access_plan(selected, doors, level)
+            # A reserva é a fonte do nível já concedido. HikCentral pode
+            # omitir o grupo Visitor e retornar um nível type=2 válido como
+            # ENTRADA ACQUAVALE; ele deve ser preservado pelo ID original,
+            # sem forçá-lo a um mapeamento de grupo de novos cadastros.
+            if len(level_names) == 1:
+                requested = [str(level_names[0]).strip()]
+            else:
+                group = str(record.get("group") or "").strip()
+                approved = VALE_VISITOR_LEVELS.get(group)
+                if not approved:
+                    raise EditorFieldError({
+                        "group": "A reserva não retornou um nível Visitor único. "
+                                "Selecione o nível original antes de salvar."
+                    })
+                requested = [approved]
+            try:
+                selected, doors = client.resolve_levels(requested)
+                verify_visitor_access_plan(selected, doors, requested)
+            except Exception as exc:
+                raise EditorFieldError({"group": str(exc)}) from exc
+            original_ids = record.get("access_level_ids") or []
+            if original_ids and (len(original_ids) != 1 or
+                                 str(selected[0].get("id")) != str(original_ids[0])):
+                raise EditorFieldError({
+                    "group": "O nível de acesso retornado mudou. Confira o HikCentral antes de salvar."
+                })
             return reschedule_unregistered_reservation(client, record, start.isoformat(timespec="seconds"),
                                                         end.isoformat(timespec="seconds"), remark, selected)
 

@@ -1421,15 +1421,16 @@ def test_save_reservation_without_checkin_keeps_same_profile_and_original_time(m
 
     class FakeClient:
         def visitor_groups(self):
-            return ["Hóspedes Vale"]
+            pytest.fail("Edição sem check-in deve preservar o nível retornado pela reserva")
 
         def resolve_levels(self, names):
-            assert names == ["VISITANTE_VALE"]
-            return [{"id": "7", "name": "VISITANTE_VALE"}], ["57", "64", "89"]
+            assert names == ["ENTRADA ACQUAVALE"]
+            return [{"id": "1", "name": "ENTRADA ACQUAVALE"}], ["57", "64", "89", "90"]
 
     root.client = FakeClient
-    record = {"visitor_id": "2024", "appointment_id": "74167", "reservation_code": "1467",
-              "first": "Teste", "last": "Sintético", "group": "", "access_names": ["VISITANTE_VALE"],
+    record = {"visitor_id": "2114", "appointment_id": "774759018718560256", "reservation_code": "2899",
+              "first": "Wesley", "last": "Teste", "group": "", "access_names": ["ENTRADA ACQUAVALE"],
+              "access_level_ids": ["1"],
               "entry_at": "2030-11-14T08:30:00-03:00", "exit_at": "2030-11-14T23:59:59-03:00",
               "reservation": "123", "_reservation_only": True}
 
@@ -1438,7 +1439,7 @@ def test_save_reservation_without_checkin_keeps_same_profile_and_original_time(m
         assert start == record["entry_at"]
         assert end.startswith("2030-11-15T")
         assert remark == "321"
-        assert selected == [{"id": "7", "name": "VISITANTE_VALE"}]
+        assert selected == [{"id": "1", "name": "ENTRADA ACQUAVALE"}]
         return {"state": "confirmed"}
 
     monkeypatch.setattr(unregistered_reservation, "reschedule_unregistered_reservation", verify)
