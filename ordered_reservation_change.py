@@ -5,7 +5,6 @@ import json
 import os
 import re
 
-from access_receipt import make_access_receipt
 from core import _write_json_atomic, VALE_VISITOR_LEVELS, TZ, verify_visitor_access_plan
 from edit_errors import EditorFieldError
 from edit_journal import select_edit_journal
@@ -308,12 +307,6 @@ def _replace(client, record, payload, selected, doors, visitor, requested_level,
         raise EditorFieldError({"photo": "A foto no perfil ainda difere da foto informada para a nova visita."})
 
     if plan["stage"] in {"checked_in", "apply_inflight"}:
-        recovering_apply = plan["stage"] == "apply_inflight"
-        if recovering_apply:
-            previous_report = client.delivery_report(
-                vid, doors, expect_face=bool(visitor.photo_jpeg), expect_card=bool(visitor.card_number))
-            if previous_report.get("state") == "confirmed":
-                save("applied")
         if plan["stage"] != "applied":
             save("apply_inflight")
             current_levels = parse_access_levels(visitor_details(client, vid))
@@ -323,24 +316,22 @@ def _replace(client, record, payload, selected, doors, visitor, requested_level,
             client.apply(vid, doors)
             save("applied")
     if plan["stage"] != "applied":
-        raise HikError("Reserva e check-in confirmados. Confira a entrega das credenciais nas catracas.")
-    report = client.delivery_report(vid, doors, expect_face=bool(visitor.photo_jpeg),
-                                    expect_card=bool(visitor.card_number))
+        raise HikError("Reserva e check-in confirmados, mas o HikCentral não aceitou a solicitação de acesso.")
     history = {"visitor_id": vid, "appointment_id": new_id, "registration_record_id": rid,
                "reservation_code": code, "reservation_entry_at": start, "reservation_exit_at": end,
                "entry_at": start, "exit_at": end, "group": group,
                "first": visitor.first_name, "last": visitor.last_name, "reservation": visitor.reservation,
                "door_ids": list(doors), "access_names": list(requested_level),
                "expect_face": bool(visitor.photo_jpeg), "expect_card": bool(visitor.card_number),
-               "checkin_state": "check-in efetuado", "state": report["state"]}
-    if report["state"] == "confirmed":
-        history["access_receipt"] = make_access_receipt(history, level_id=level["id"], door_ids=doors)
+               "checkin_state": "check-in efetuado", "state": "submitted"}
     save_registration(history)
     journal.unlink()
-    return {**report, "operation": "replace", "rebooking_completed": True,
+    return {"state": "submitted",
+            "message": "O HikCentral recebeu a solicitação de acesso e controla a distribuição.",
+            "operation": "replace", "rebooking_completed": True, "operation_completed": True,
             "automatic_checkin": bool(plan.get("automatic_checkin")), "confirmed_appointment_id": new_id,
             "confirmed_checkin_id": rid, "confirmed_group": group, "reservation_period": period,
-            "access_receipt_saved": "access_receipt" in history}
+            "access_receipt_saved": False}
 
 
 def _old_visit(client, plan):

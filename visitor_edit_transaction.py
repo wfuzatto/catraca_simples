@@ -16,7 +16,6 @@ from edit_journal import select_edit_journal
 from edit_errors import EditorFieldError
 from edit_request import validate_edit_request, preserve_visitor_metadata
 from visitor_history import save_registration, set_history_status
-from access_receipt import make_access_receipt
 from hikcentral import HikError
 
 
@@ -198,7 +197,7 @@ def update_existing_visit(client, record: dict, payload: dict,
         "door_ids": list(doors),
         "expect_face": bool(visitor.photo_jpeg),
         "expect_card": bool(visitor.card_number),
-        "state": "reaplicação pendente",
+        "state": "aplicação solicitada",
         # The readback above proved visitorStatus=0. Persist the actual state,
         # so opening this same record again does not demand a hidden operation.
         "checkin_state": "check-in efetuado",
@@ -215,23 +214,16 @@ def update_existing_visit(client, record: dict, payload: dict,
         "confirmed_checkin_id": str(actual_checkin)})
 
     client.apply(vid, doors)
-    report = client.delivery_report(
-        vid, doors,
-        expect_face=bool(visitor.photo_jpeg),
-        expect_card=bool(visitor.card_number))
-    set_history_status(vid, state=report["state"], checkin_state="check-in efetuado")
-    report["access_receipt_saved"] = False
-    if str(report.get("state") or "").casefold() == "confirmed":
-        receipt = make_access_receipt(
-            {**verified, "state": report["state"]},
-            level_id=selected[0]["id"], door_ids=doors)
-        save_registration({
-            **verified, "state": report["state"], "access_receipt": receipt})
-        report["access_receipt_saved"] = True
-    report["operation"] = operation
-    report["confirmed_appointment_id"] = actual_appointment
-    report["confirmed_checkin_id"] = str(actual_checkin)
-    report["confirmed_group"] = original_group
-    report["reservation_period"] = reservation_period
+    set_history_status(vid, state="submitted", checkin_state="check-in efetuado")
     journal.unlink(missing_ok=True)
-    return report
+    return {
+        "state": "submitted",
+        "message": "O HikCentral recebeu a solicitação de acesso e controla a distribuição.",
+        "operation": operation,
+        "operation_completed": True,
+        "access_receipt_saved": False,
+        "confirmed_appointment_id": actual_appointment,
+        "confirmed_checkin_id": str(actual_checkin),
+        "confirmed_group": original_group,
+        "reservation_period": reservation_period,
+    }

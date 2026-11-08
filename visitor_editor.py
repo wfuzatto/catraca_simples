@@ -791,34 +791,13 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     period_label.configure(text=booking_note, text_color="#64748B")
                     period_label.pack(fill="x", pady=(4, 5), before=summary_label)
                 remote_errors.clear()
-                flag_delivery_refusal(result, obj)
-                if result.get("state") == "confirmed":
-                    messagebox.showinfo("Reserva e check-in confirmados",
-                        f"A reserva {booking_period.get('code') or new_appointment} foi criada para o mesmo visitante.\n"
-                        + ("O HikCentral fez o check-in automaticamente." if result.get("automatic_checkin")
-                           else "O aplicativo confirmou o check-in após criar a reserva.")
-                        + "\nAs datas e o apartamento foram conferidos no HikCentral.", parent=app)
-                    if dialog.winfo_exists():
-                        dialog.destroy()
-                    return
-                detail = str(result.get("message") or "A entrega nas catracas ainda precisa ser confirmada.")
-                if result.get("state") != "failed":
-                    messagebox.showwarning("Reserva e check-in confirmados",
-                        f"A reserva {booking_period.get('code') or new_appointment} e o check-in foram conferidos.\n"
-                        + detail, parent=app)
-                    if dialog.winfo_exists():
-                        dialog.destroy()
-                    return
-                status.set("Reserva e check-in confirmados; confira a entrega indicada em vermelho.")
-                if dialog.winfo_exists():
-                    dialog.deiconify()
-                    dialog.grab_set()
-                    dialog.lift()
-                    refresh_validation()
-                messagebox.showwarning("Reserva criada; entrega pendente",
+                messagebox.showinfo("Edição concluída",
                     f"A reserva {booking_period.get('code') or new_appointment} e o check-in foram confirmados.\n"
-                    + detail + "\n\nCorrija a credencial destacada e salve novamente. A reserva não será recriada.",
-                    parent=dialog if dialog.winfo_exists() else app)
+                    + ("O HikCentral fez o check-in automaticamente.\n" if result.get("automatic_checkin")
+                       else "O check-in foi confirmado após criar a reserva.\n")
+                    + "O HikCentral recebeu a solicitação de acesso e controla a distribuição.", parent=app)
+                if dialog.winfo_exists():
+                    dialog.destroy()
                 return
 
             booking_period = result.get("reservation_period") or {}
@@ -862,7 +841,7 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 return
             messagebox.showinfo("Edição conferida",
                 "Nome, sobrenome, apartamento, credenciais e visita foram conferidos em Visitor Information.\n"
-                "As datas da reserva não foram alteradas."
+                "As datas da reserva não foram alteradas. O HikCentral controla a distribuição do acesso."
                 + ("\n\n" + booking_note if booking_note else ""), parent=app)
             if dialog.winfo_exists():
                 dialog.destroy()

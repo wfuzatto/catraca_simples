@@ -82,7 +82,6 @@ def planned_replacement(monkeypatch, tmp_path):
 
     class Client:
         writes = []
-        delivery = "queued"
         keep_old = False
 
         def post(self, path, payload):
@@ -99,7 +98,7 @@ def planned_replacement(monkeypatch, tmp_path):
             return {"recordId": "visit-new"} if entry == start else None
 
         def delivery_report(self, *_args, **_kwargs):
-            return {"state": self.delivery}
+            raise AssertionError("A troca de reserva não deve esperar o relatório de cada catraca")
 
     client = Client()
     monkeypatch.setattr(replacement, "find_original_appointment", lambda *_args: old)
@@ -123,16 +122,16 @@ def planned_replacement(monkeypatch, tmp_path):
     return client, bookings, history, finish
 
 
-def test_replacement_waits_for_access_then_verifies_deletion(planned_replacement):
+def test_replacement_finishes_after_checkin_without_waiting_for_each_door(planned_replacement):
     client, bookings, history, finish = planned_replacement
-    assert finish()["replacement_state"] == "pending_access"
-    assert client.writes == []
-    assert "2502" in bookings
-    client.delivery = "confirmed"
-    assert finish()["replacement_state"] == "confirmed"
+    result = finish()
+    assert result["replacement_state"] == "confirmed"
+    assert result["state"] == "submitted"
+    assert result["operation_completed"] is True
     assert client.writes == [{"appointRecordId": "1000"}]
     assert "2502" not in bookings
     assert history[0]["appointment_id"] == "2000"
+    assert history[0]["state"] == "submitted"
 
 
 def test_replacement_rejects_other_visitor_before_deletion(planned_replacement):

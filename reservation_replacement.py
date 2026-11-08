@@ -113,12 +113,6 @@ def finish_replacement(client, record, code, payload, selected, doors, visitor, 
         if client.find_registration_record(vid, record["entry_at"], record["exit_at"],
                                            active_only=True, record_id=original_checkin):
             raise HikError("O HikCentral ainda mostra outra visita ativa para este visitante.")
-    report = client.delivery_report(vid, doors, expect_face=bool(visitor.photo_jpeg),
-                                    expect_card=bool(visitor.card_number))
-    report.update(confirmed_checkin_id=rid, reservation_period=period, replacement_state="pending_access")
-    if report["state"] != "confirmed":
-        return report
-
     old = _booking_by_code(client, plan["old_code"], plan["old_start"], plan["old_end"], vid)
     if old and plan["stage"] == "delete_inflight":
         raise HikError("A exclusão anterior ainda não foi confirmada. Confira o resultado no HikCentral.")
@@ -153,18 +147,17 @@ def finish_replacement(client, record, code, payload, selected, doors, visitor, 
     _confirmed_edit(client, vid, payload, visitor, group, rid)
     if visitor.photo_jpeg and not same_photo(visitor.photo_jpeg, fetch_visitor_photo(client, vid)):
         raise HikError("A foto precisa ser conferida após a troca.")
-    after = client.delivery_report(vid, doors, expect_face=bool(visitor.photo_jpeg),
-                                   expect_card=bool(visitor.card_number))
-    if after["state"] != "confirmed":
-        return {**report, **after, "replacement_state": "pending_after_delete"}
     save_registration({
         "visitor_id": vid, "appointment_id": new_id, "reservation_code": code,
         "reservation_entry_at": start, "reservation_exit_at": end,
         "registration_record_id": rid, "entry_at": start, "exit_at": end,
         "first": visitor.first_name, "last": visitor.last_name, "group": group,
         "reservation": visitor.reservation, "checkin_state": "check-in efetuado",
-        "state": report["state"], "door_ids": list(doors), "access_names": list(requested_level),
+        "state": "submitted", "door_ids": list(doors), "access_names": list(requested_level),
         "expect_face": bool(visitor.photo_jpeg), "expect_card": bool(visitor.card_number),
     })
     journal.unlink()
-    return {**report, "replacement_state": "confirmed"}
+    return {"state": "submitted", "message": "O HikCentral controla a distribuição do acesso.",
+            "confirmed_checkin_id": rid, "reservation_period": period,
+            "replacement_state": "confirmed", "operation_completed": True,
+            "access_receipt_saved": False}

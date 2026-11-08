@@ -104,7 +104,7 @@ class API:
         self.applies.append((visitor, doors))
 
     def delivery_report(self, visitor, doors, *, expect_face, expect_card):
-        return {"state": "confirmed", "message": "simulado", "doors": []}
+        raise AssertionError("Edição não deve consultar confirmação individual das catracas")
 
 
 def use_mocks(monkeypatch):
@@ -128,10 +128,6 @@ def use_mocks(monkeypatch):
         "Reserva auxiliar ausente não pode impedir edição de check-in ativo."), raising=False)
     if hasattr(tx, "time"):
         monkeypatch.setattr(tx.time, "sleep", lambda _delay: None)
-    monkeypatch.setattr(tx, "make_access_receipt",
-                        lambda row, *, level_id, door_ids: {
-                            "confirmed_at": "2099-11-07T09:00:00-03:00",
-                            "level_id": level_id, "doors": door_ids})
     return written, status
 
 
@@ -153,6 +149,9 @@ def test_edit_active_checkin_without_reservation_updates_data_and_dates(monkeypa
     item.pop("appointment_id")
     response = call(api, journal, item=item)
     assert response["confirmed_checkin_id"] == "check-new"
+    assert response["state"] == "submitted"
+    assert response["operation_completed"] is True
+    assert response["access_receipt_saved"] is False
     assert not response.get("confirmed_appointment_id")
     assert len(api.updates) == 1
     # registerment/update edita o registro ativo verificado, não uma reserva auxiliar.
@@ -178,6 +177,7 @@ def test_update_response_id_optional_and_reconciled_with_checkin(monkeypatch, tm
     api = API(returned_id=returned_id)
     response = call(api, tmp_path / "edit.json")
     assert response["confirmed_checkin_id"] == "check-new"
+    assert response["state"] == "submitted"
     assert written[-1]["registration_record_id"] == "check-new"
     assert len(api.updates) == 1
 
@@ -187,6 +187,7 @@ def test_known_booking_id_is_preserved_and_not_replaced_by_checkin_id(monkeypatc
     item = {**record(), "appointment_id": "booking-original"}
     result = call(API(), tmp_path / "edit.json", item=item)
     assert result.get("confirmed_appointment_id") == "booking-original"
+    assert result["state"] == "submitted"
     assert written[-1]["appointment_id"] == "booking-original"
     assert written[-1]["registration_record_id"] == "check-new"
 
@@ -212,6 +213,7 @@ def test_unavailable_booking_does_not_prevent_edit_or_claim_dates_match(monkeypa
     result = call(api, tmp_path / "edit.json")
     assert result["reservation_period"]["state"] == "unavailable"
     assert result["confirmed_checkin_id"] == "check-new"
+    assert result["state"] == "submitted"
 
 
 def test_delayed_checkin_readback_retries_reads_without_another_update(monkeypatch, tmp_path):
