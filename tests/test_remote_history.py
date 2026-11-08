@@ -521,6 +521,7 @@ def test_original_appointment_identifier_not_checkin_id_or_reservation_code():
     assert original_appointment_identifier({"appointRecordId": "appt-7155",
                                             "reservationCode": "7155"}) == "appt-7155"
     assert original_appointment_identifier({"appointID": "appt-legacy"}) == "appt-legacy"
+    assert original_appointment_identifier({"appointId": "appt-camel"}) == "appt-camel"
     assert original_appointment_identifier({"recordId": "check-1654",
                                             "reservationCode": "7155"}) == ""
     with pytest.raises(HikError, match="divergentes"):
@@ -639,7 +640,77 @@ def test_checkin_history_does_not_guess_reservation_without_exact_link():
     assert result[0]["reservation_entry_at"] == ""
     assert result[0]["reservation_exit_at"] == ""
     assert result[0]["_reservation_period"]["state"] == "unavailable"
-    assert client.calls == []
+    assert len(client.calls) == 1  # tenta resolver a reserva pela OpenAPI
+
+
+def test_history_finds_unique_reservation_by_visitor_when_checkin_has_no_link():
+    from remote_history import APPOINTMENTS_PATH, enrich_checkins_with_reservation_periods
+
+    source = example_record(visitor="1923", record="checkin-1923")
+    source["visitorStatus"] = "1"  # saída/checkout
+    source["visitorBaseInfo"].update(
+        visitStartTime="2026-11-07T00:00:00-03:00",
+        visitEndTime="2026-11-08T23:59:59-03:00")
+    checkin = normalize_checkin(source)
+    booking = {
+        "appointId": "booking-8738", "appointCode": "8738", "appointStatus": "3",
+        "appointStartTime": "2026-11-07T00:00:00-03:00",
+        "appointEndTime": "2026-11-09T23:59:59-03:00",
+        "VisitorInfo": {"visitorId": "1923", "visitorGroupName": "Hóspedes Vale"},
+    }
+    client = FakeClient({"data": {"list": [booking], "total": 1}})
+
+    result = enrich_checkins_with_reservation_periods(
+        client, [checkin], [], "2026-11-07T00:00:00-03:00", "2026-11-10T00:00:00-03:00")
+
+    assert result[0]["reservation_entry_at"] == booking["appointStartTime"]
+    assert result[0]["reservation_exit_at"] == booking["appointEndTime"]
+    assert result[0]["reservation_code"] == "8738"
+    assert result[0]["appointment_id"] == "booking-8738"
+    assert client.calls[0][0] == APPOINTMENTS_PATH
+
+
+def test_closed_checkin_can_find_its_unique_overlapping_reservation_for_edit():
+    from remote_history import find_original_appointment
+
+    booking = {
+        "appointId": "booking-8738", "appointCode": "8738", "appointStatus": "3",
+        "appointStartTime": "2026-11-07T00:00:00-03:00",
+        "appointEndTime": "2026-11-09T23:59:59-03:00",
+        "VisitorInfo": {"visitorId": "1923", "visitorGroupName": "Hóspedes Vale"},
+    }
+    record = {
+        "visitor_id": "1923", "entry_at": "2026-11-07T00:00:00-03:00",
+        "exit_at": "2026-11-08T23:59:59-03:00", "group": "Hóspedes Vale",
+        "checkin_state": "check-out",
+    }
+    client = FakeClient({"data": {"list": [booking], "total": 1}})
+    assert find_original_appointment(client, record) == booking
+
+
+def test_history_leaves_reservation_dates_blank_when_same_visitor_has_two_possible_bookings():
+    from remote_history import enrich_checkins_with_reservation_periods
+
+    source = example_record(visitor="1923", record="checkin-1923")
+    source["visitorBaseInfo"].update(
+        visitStartTime="2026-11-07T00:00:00-03:00",
+        visitEndTime="2026-11-08T23:59:59-03:00")
+    checkin = normalize_checkin(source)
+    bookings = [
+        {"appointID": f"booking-{index}", "appointCode": index, "appointStatus": "3",
+         "appointStartTime": "2026-11-07T00:00:00-03:00",
+         "appointEndTime": f"2026-11-{day}T23:59:59-03:00",
+         "visitorInfo": {"visitorId": "1923", "visitorGroupName": "Hóspedes Vale"}}
+        for index, day in ((1, "09"), (2, "10"))
+    ]
+    client = FakeClient({"data": {"list": bookings, "total": 2}})
+
+    result = enrich_checkins_with_reservation_periods(
+        client, [checkin], [], "2026-11-07T00:00:00-03:00", "2026-11-10T00:00:00-03:00")
+
+    assert result[0]["reservation_entry_at"] == ""
+    assert result[0]["reservation_exit_at"] == ""
+    assert result[0]["_reservation_period"]["state"] == "unavailable"
 
 
 def _test_appointment(aid, vid, *, status=0, code="6650"):
