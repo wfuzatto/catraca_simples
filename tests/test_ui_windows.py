@@ -1216,12 +1216,11 @@ def test_editor_save_shows_loading_until_operation_finishes(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Fluxo do editor exige Windows Tk")
-def test_editing_reservation_dates_uses_single_save_and_same_visitor_replacement(monkeypatch, tmp_path):
+def test_editing_reservation_dates_uses_single_save_and_openapi_transaction(monkeypatch, tmp_path):
     import io
     import app
     import visitor_editor
     import visitor_profile
-    import native_booking_bridge
     import ordered_reservation_change
     import customtkinter as ctk
     from PIL import Image
@@ -1246,20 +1245,6 @@ def test_editing_reservation_dates_uses_single_save_and_same_visitor_replacement
 
     events, captured, submissions = [], {}, []
 
-    class FakeBridge:
-        def __enter__(self):
-            events.append("web-client-preflight")
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def prepare(self, visitor_id, start, end, selected, **kwargs):
-            captured.update(visitor_id=visitor_id, start=start, end=end,
-                            selected=selected, **kwargs)
-            events.append("prepare-reservation")
-            return lambda: None
-
     class FakeClient:
         def visitor_groups(self):
             return ["Hóspedes Vale"]
@@ -1278,18 +1263,16 @@ def test_editing_reservation_dates_uses_single_save_and_same_visitor_replacement
         events.append("profile-update")
         return ["nome", "pulseira", "foto"]
     monkeypatch.setattr(visitor_profile, "update_profile", update_profile)
-    monkeypatch.setattr(native_booking_bridge, "open_booking_bridge",
-                        lambda *_a, **_kw: FakeBridge())
 
     def replace(_client, record, payload, selected, doors, visitor, group, requested_level,
-                *, prepare_creation):
+                *, journal=None, profile_update=None):
         assert record["visitor_id"] == "1649"
         assert selected == [{"id": "7", "name": "VISITANTE_VALE"}]
         assert doors == ["57", "64", "89"]
         assert group == "Hóspedes Vale"
         assert requested_level == ["VISITANTE_VALE"]
-        create = prepare_creation({"appointID": "appt1649", "appointCode": "23"}, payload)
-        assert callable(create)
+        captured.update(visitor_id=record["visitor_id"], payload=payload)
+        profile_update()
         events.append("ordered-transaction")
         return {"state": "submitted", "message": "HikCentral controla a distribuição.",
                 "rebooking_completed": True, "operation_completed": True,
@@ -1326,14 +1309,13 @@ def test_editing_reservation_dates_uses_single_save_and_same_visitor_replacement
         popup._save_edit_button.invoke()
         assert len(submissions) == 1
         result = submissions[0][0]()
-        assert events == ["web-client-preflight", "prepare-reservation", "profile-update", "ordered-transaction"]
+        assert events == ["profile-update", "ordered-transaction"]
         assert captured["visitor_id"] == "1649"
-        assert captured["expected_booking_id"] == "appt1649"
-        assert captured["first_name"] == "Nome teste"
-        assert captured["last_name"] == "Sobrenome teste"
-        assert captured["remark"] == "321"
-        assert captured["start"].startswith("2099-11-07T00:00:00")
-        assert captured["end"].startswith("2099-11-08T23:59:59")
+        assert captured["payload"]["visitorInfoList"][0]["VisitorInfo"]["visitorGivenName"] == "Nome teste"
+        assert captured["payload"]["visitorInfoList"][0]["VisitorInfo"]["visitorFamilyName"] == "Sobrenome teste"
+        assert captured["payload"]["visitorInfoList"][0]["VisitorInfo"]["remark"] == "321"
+        assert captured["payload"]["visitStartTime"].startswith("2099-11-07T00:00:00")
+        assert captured["payload"]["visitEndTime"].startswith("2099-11-08T23:59:59")
         assert updates[0]["first"] == "Nome teste"
         assert updates[0]["last"] == "Sobrenome teste"
         assert updates[0]["card"] == "12345678"

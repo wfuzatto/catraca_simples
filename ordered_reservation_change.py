@@ -1,5 +1,6 @@
-"""Replace the exact original booking in the operator's requested order."""
+"""Edit a linked reservation through HikCentral OpenAPI, preserving Visitor ID."""
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timedelta
 import json
 import os
@@ -8,23 +9,25 @@ import re
 from core import _write_json_atomic, VALE_VISITOR_LEVELS, TZ, verify_visitor_access_plan
 from edit_errors import EditorFieldError
 from edit_journal import select_edit_journal
-from edit_request import preserve_visitor_metadata, validate_edit_request
 from hikcentral import HikError, normalize
 from remote_history import (
     APPOINTMENTS_PATH, compare_reservation_period, fetch_visitor_photo,
     find_original_appointment, original_appointment_identifier, parse_access_levels, visitor_details,
 )
-from reservation_replacement import DELETE_BOOKING, _booking_by_code, _confirm_new_booking
+from reservation_replacement import _booking_by_code, _confirm_new_booking
 from visitor_edit_transaction import _confirmed_edit
 from visitor_history import save_registration
 from visitor_profile import same_photo
 
 
 CHECKOUT = "/artemis/api/visitor/v1/visitor/out"
+UPDATE_BOOKING = "/artemis/api/visitor/v2/appointment/update"
 CLOSED_STATES = {"1", "2", "3", "4"}
-STAGES = {"prepared", "checkout_inflight", "checked_out", "delete_inflight", "deleted",
-          "create_inflight", "created", "checkin_inflight", "checked_in", "apply_inflight",
-          "applied", "identity_conflict"}
+STAGES = {"prepared", "checkout_inflight", "checked_out", "profile_inflight", "profile_updated",
+          "update_inflight", "updated",
+          "checkin_inflight", "checked_in", "apply_inflight", "applied"}
+LEGACY_DESTRUCTIVE_STAGES = {"delete_inflight", "deleted", "create_inflight", "created",
+                             "identity_conflict"}
 
 
 @contextmanager
@@ -32,7 +35,7 @@ def _lock_transaction(path):
     """Release on process exit, without removing a lock file held by another instance."""
     lock_path = path.with_suffix(".lock")
     if lock_path.is_symlink():
-        raise HikError("O registro local da troca contém um vínculo inválido.")
+        raise HikError("O registro local da alteração contém um vínculo inválido.")
     with lock_path.open("a+b") as lock:
         lock.seek(0)
         if os.name == "nt":
@@ -46,7 +49,7 @@ def _lock_transaction(path):
         try:
             acquire()
         except OSError as exc:
-            raise HikError("Já existe uma troca em andamento para este visitante.") from exc
+            raise HikError("Já existe uma alteração em andamento para este visitante.") from exc
         try:
             yield
         finally:
@@ -58,18 +61,16 @@ def _id(value):
     return str(value or "").strip()
 
 
-def _remote_period_matches(start, end, target_start, target_end):
+def _write_once(action):
+    """A failed response is reconciled by a read before any retry."""
     try:
-        a, b = datetime.fromisoformat(start), datetime.fromisoformat(end)
-        return (a.tzinfo is not None and b.tzinfo is not None
-                and a == datetime.fromisoformat(target_start)
-                and b == datetime.fromisoformat(target_end))
-    except (TypeError, ValueError):
-        return False
+        return action(), None
+    except Exception as exc:
+        return None, exc
 
 
-def _target_booking(client, vid, start, end, old_id):
-    """Find a unique booking by identity and period when a create response was lost."""
+def _booking_at_period(client, visitor_id, start, end):
+    """Return the one exact visitor reservation at a period, or fail closed."""
     query = {
         "pageSize": 100, "appointState": -1, "sortField": "VisitingTime", "orderType": 1,
         "appointStartTime": (datetime.fromisoformat(start) - timedelta(days=1)).isoformat(),
@@ -78,44 +79,124 @@ def _target_booking(client, vid, start, end, old_id):
     matches = {}
     for page in range(1, 11):
         data = client.post(APPOINTMENTS_PATH, {**query, "pageNo": page}).get("data") or {}
+        if not isinstance(data, dict):
+            raise HikError("O HikCentral retornou uma resposta inválida ao consultar reservas.")
         rows = data.get("list")
         if rows is None and str(data.get("total")) == "0":
             rows = []
         if not isinstance(rows, list):
             raise HikError("O HikCentral não retornou uma lista válida de reservas.")
         for row in rows:
-            if (_id((row.get("visitorInfo") or {}).get("visitorId")) != vid
-                    or not _remote_period_matches(row.get("appointStartTime"), row.get("appointEndTime"), start, end)):
+            if _id((row.get("visitorInfo") or {}).get("visitorId")) != visitor_id:
                 continue
-            aid = original_appointment_identifier(row)
-            if not aid or (aid in matches and matches[aid] != row):
-                raise HikError("As consultas retornaram vínculos diferentes para a reserva nova.")
-            if aid != old_id:
-                matches[aid] = row
-        if len(rows) < 100 or int(data.get("total") or 0) in range(1, page * 100 + 1):
+            try:
+                if compare_reservation_period(row, start, end)["state"] != "matched":
+                    continue
+                aid = original_appointment_identifier(row)
+            except (TypeError, ValueError, KeyError):
+                continue
+            if not aid:
+                raise HikError("A reserva encontrada não tem um ID válido.")
+            if aid in matches and matches[aid] != row:
+                raise HikError("A consulta retornou dados divergentes para a mesma reserva.")
+            matches[aid] = row
+        total = int(data.get("total") or 0)
+        if len(rows) < 100 or (total and page * 100 >= total):
             break
     else:
-        raise HikError("Há reservas demais para confirmar a troca com segurança.")
+        raise HikError("Há reservas demais para confirmar as datas com segurança.")
     if len(matches) > 1:
-        raise HikError("O HikCentral encontrou mais de uma reserva no período solicitado.")
+        raise HikError("Há mais de uma reserva deste visitante nas datas solicitadas.")
     return next(iter(matches.values()), None)
 
 
-def _write_once(action):
-    """A timeout leaves the remote outcome uncertain. The next action must be a read."""
+def _confirm_original_period_moved(client, plan):
+    old = _booking_at_period(client, plan["visitor_id"],
+                             plan["old_booking_entry"], plan["old_booking_exit"])
+    if old:
+        raise HikError("O HikCentral mostrou as novas datas, mas também manteve a reserva antiga. "
+                       "A edição foi interrompida para evitar reservas duplicadas.")
+
+
+def _reservation_matches_request(row, payload, visitor_id):
+    saved = row.get("visitorInfo") or {}
+    desired = payload["visitorInfoList"][0]["VisitorInfo"]
+    if _id(saved.get("visitorId")) != visitor_id:
+        return False
+    keys = ["visitorGivenName", "visitorFamilyName", "remark"]
+    if desired.get("visitorGroupName"):
+        keys.append("visitorGroupName")
+    return all(str(saved.get(key) or "").strip() == str(desired.get(key) or "").strip()
+               for key in keys)
+
+
+def _reservation_update_body(client, original, payload, visitor_id, level):
+    """Build the documented v2 update payload without resending face/card data."""
     try:
-        return action(), None
-    except Exception as exc:
-        return None, exc
+        desired = deepcopy(payload["visitorInfoList"][0]["VisitorInfo"])
+        start, end = str(payload["visitStartTime"]), str(payload["visitEndTime"])
+    except (KeyError, IndexError, TypeError) as exc:
+        raise EditorFieldError({"visit": "Os campos obrigatórios da reserva estão incompletos."}) from exc
+    if not str(desired.get("visitorGivenName") or "").strip():
+        raise EditorFieldError({"first": "Informe o nome antes de atualizar a reserva."})
+    if not str(desired.get("visitorFamilyName") or "").strip():
+        raise EditorFieldError({"last": "Informe o sobrenome antes de atualizar a reserva."})
+    if not str(desired.get("remark") or "").strip():
+        raise EditorFieldError({"reservation": "Informe o apartamento/Remark antes de atualizar a reserva."})
+
+    saved = original.get("visitorInfo") or {}
+    details = visitor_details(client, visitor_id)
+    profile = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    if _id(profile.get("visitorId")) != visitor_id:
+        raise EditorFieldError({"appointment": "O HikCentral não confirmou o mesmo perfil da reserva."})
+    allowed = (
+        "visitorGivenName", "visitorFamilyName", "gender", "email", "phoneNo", "plateNo",
+        "companyName", "certificateType", "certificateNo", "customField", "additionalInfo",
+        "watchListInfo", "visitorGroupName",
+    )
+    info = {}
+    for key in allowed:
+        value = profile.get(key)
+        if key in saved and saved[key] is not None:
+            value = saved[key]
+        if key in desired and desired[key] is not None:
+            value = desired[key]
+        if value is not None:
+            info[key] = deepcopy(value)
+    if "customField" not in info:
+        custom_fields = desired.get("customFieldList") or saved.get("customFieldList") or profile.get("customFieldList")
+        if custom_fields:
+            info["customField"] = deepcopy(custom_fields)
+    info["visitorId"] = visitor_id
+    info["remark"] = str(desired["remark"]).strip()
+    info.setdefault("gender", 0)
+    info.pop("cards", None)
+    info.pop("faces", None)
+    info["accessInfo"] = {
+        "electrostaticDetectionType": (saved.get("accessInfo") or {}).get("electrostaticDetectionType", 0),
+        "qrCodeValidNum": (saved.get("accessInfo") or {}).get("qrCodeValidNum", 0),
+    }
+    receptionist = original.get("receptionistInfo") or {}
+    receptionist_id = original.get("receptionistId") or (
+        receptionist.get("receptionistId") if isinstance(receptionist, dict) else "")
+    reason_type = original.get("visitReasonType") or 4
+    reason_detail = original.get("visitReasonDetail") or (
+        "Ingresso diario" if str(reason_type) == "4" else "")
+    return {
+        "appointRecordId": original_appointment_identifier(original),
+        "receptionistId": str(receptionist_id or ""),
+        "appointStartTime": start,
+        "appointEndTime": end,
+        "visitReasonType": reason_type,
+        "visitReasonDetail": reason_detail,
+        "accessInfo": client.access_info([level]),
+        "visitorInfoList": [{"VisitorInfo": info}],
+    }
 
 
 def change_reservation_dates(client, record, payload, selected, doors, visitor, group, requested_level,
-                             *, prepare_creation=None, journal=None):
-    """Check out, remove the old reservation, create on the same ID, then confirm check-in.
-
-    prepare_creation(original_booking_or_none, payload) validates the Web Client and
-    returns a no-arg writer. On recovery after deletion, the old booking is absent.
-    """
+                             *, journal=None, profile_update=None):
+    """Check out if needed, update the linked reservation through OpenAPI, then check in."""
     validate_edit_request(payload)
     vid = _id(record.get("visitor_id"))
     if not re.fullmatch(r"\d{1,48}", vid):
@@ -143,14 +224,22 @@ def change_reservation_dates(client, record, payload, selected, doors, visitor, 
         visitor_info = details.get("VisitorInfo") or details.get("visitorInfo") or details
         if _id(visitor_info.get("visitorId")) != vid:
             raise EditorFieldError({"visit": "O HikCentral precisa confirmar o perfil do visitante."})
-        complete_payload = preserve_visitor_metadata(payload, details)
+        complete_payload = deepcopy(payload)
+        # Profile metadata has already been written by Visitor Information; retain
+        # its additional fields while allowing the operator's edits to take priority.
+        saved_info = visitor_info
+        desired_info = complete_payload["visitorInfoList"][0]["VisitorInfo"]
+        for key, value in saved_info.items():
+            if key not in desired_info and key not in {"cards", "faces"}:
+                desired_info[key] = deepcopy(value)
         validate_edit_request(complete_payload)
-        return _replace(client, record, complete_payload, selected, doors, visitor, requested_level,
-                        scope, level, journal, prepare_creation)
+        return _update_linked_reservation(client, record, complete_payload, selected, doors, visitor,
+                                          group, requested_level, scope, level, journal,
+                                          profile_update=profile_update)
 
 
-def _replace(client, record, payload, selected, doors, visitor, requested_level, scope, level,
-             journal, prepare_creation):
+def _update_linked_reservation(client, record, payload, selected, doors, visitor, group,
+                               requested_level, scope, level, journal, *, profile_update=None):
     vid, start, end, group = (scope[key] for key in ("visitor_id", "start", "end", "group"))
     old_checkin = _id(record.get("registration_record_id"))
     old_start, old_end = record.get("entry_at"), record.get("exit_at")
@@ -166,158 +255,170 @@ def _replace(client, record, payload, selected, doors, visitor, requested_level,
     if journal.exists():
         try:
             plan = json.loads(journal.read_text(encoding="utf-8"))
-            valid = (all(plan[k] == v for k, v in scope.items())
-                     and plan["stage"] in STAGES
-                     and plan["old_checkin"] in {old_checkin, plan.get("new_checkin")} or
-                     all(plan[k] == v for k, v in scope.items()) and
-                     plan["stage"] in STAGES and old_checkin == plan.get("new_checkin"))
-            valid = valid and bool(re.fullmatch(r"\d{1,64}", plan["old_id"])) and bool(
-                re.fullmatch(r"\d{1,8}", plan["old_code"]))
-        except (OSError, ValueError, TypeError, KeyError):
+        if plan.get("stage") in LEGACY_DESTRUCTIVE_STAGES:
+                raise HikError("Há uma tentativa antiga de excluir/recriar esta reserva. Confira o vínculo no HikCentral antes de continuar.")
+            valid = (all(plan.get(key) == value for key, value in scope.items())
+                     and plan.get("stage") in STAGES
+                     and plan.get("old_checkin") in {old_checkin, plan.get("new_checkin")}
+                     and bool(re.fullmatch(r"\d{1,64}", str(plan.get("old_id") or "")))
+                     and bool(re.fullmatch(r"\d{1,8}", str(plan.get("old_code") or ""))))
+        except (OSError, ValueError, TypeError):
             valid = False
-        if not valid or (original_id and original_id not in (plan["old_id"], plan.get("new_id"))):
-            raise HikError("Já existe uma troca pendente. Abra o mesmo visitante e informe as mesmas datas.")
+            plan = {}
+        if not valid or (original_id and original_id not in (plan["old_id"], plan.get("new_id", plan["old_id"]))):
+            raise HikError("Já existe uma alteração pendente. Reabra o mesmo visitante e informe os mesmos dados.")
     else:
         if datetime.fromisoformat(end) <= datetime.now(TZ):
-            raise EditorFieldError({"exit": "Para criar a nova reserva, informe uma saída que ainda não expirou."})
+            raise EditorFieldError({"exit": "Para alterar a reserva, informe uma saída que ainda não expirou."})
         if not old_checkin or not old_start or not old_end:
             raise EditorFieldError({"visit": "Selecione a visita anterior que será encerrada."})
         original = find_original_appointment(client, {
             **record, "entry_at": old_start, "exit_at": old_end, "appointment_id": original_id,
         })
-        old_period = compare_reservation_period(original, start, end)
+        old_period = compare_reservation_period(original, old_start, old_end)
         if (not re.fullmatch(r"\d{1,64}", old_period["appointment_id"])
                 or not re.fullmatch(r"\d{1,8}", old_period["code"])
                 or _id((original.get("visitorInfo") or {}).get("visitorId")) != vid):
             raise EditorFieldError({"appointment": "Confirme a reserva original vinculada ao mesmo visitante."})
-        if old_period["state"] == "matched" and _remote_period_matches(old_start, old_end, start, end):
-            raise EditorFieldError({"entry": "A visita e a reserva já estão nas datas solicitadas."})
+        if (old_period["entry_at"], old_period["exit_at"]) == (start, end):
+            raise EditorFieldError({"entry": "A reserva já está nas datas solicitadas."})
         if parse_access_levels(original) != [level]:
             raise EditorFieldError({"group": "O nível da reserva original difere do nível Visitor selecionado."})
-        plan = {**scope, "stage": "prepared", "old_checkin": old_checkin, "old_id": old_period["appointment_id"],
-                "old_code": old_period["code"], "old_entry": old_start, "old_exit": old_end,
-                "old_booking_entry": old_period["entry_at"], "old_booking_exit": old_period["exit_at"]}
-        row = _old_visit(client, plan)
-        if _target_booking(client, vid, start, end, plan["old_id"]):
-            raise EditorFieldError({"entry": "Já existe outra reserva deste visitante nas novas datas."})
+        existing_target = _booking_at_period(client, vid, start, end)
+        if existing_target:
+            raise EditorFieldError({"entry": "Já existe uma reserva deste visitante nas datas solicitadas."})
+        row = _old_visit(client, {"visitor_id": vid, "old_checkin": old_checkin,
+                                  "old_entry": old_start, "old_exit": old_end, "group": group})
         active = client.find_registration_record(vid, start, end, active_only=True)
-        if active and _id(active.get("recordId")) != old_checkin:
-            raise EditorFieldError({"visit": "Já existe outra visita ativa do visitante nessas datas."})
+        if active:
+            raise EditorFieldError({"visit": "Já existe uma visita ativa do visitante nas datas solicitadas."})
         if ((record.get("expect_card") or (row.get("visitorCardInfo") or {}).get("cardNumber"))
                 and not visitor.card_number):
-            raise EditorFieldError({"card": "Informe a pulseira antes de trocar as datas."})
+            raise EditorFieldError({"card": "Informe a pulseira antes de alterar as datas."})
         if record.get("expect_face") and not visitor.photo_jpeg:
-            raise EditorFieldError({"photo": "Informe a foto antes de trocar as datas."})
-        # Hold the verified Web Client session in the worker before any checkout.
-        create = _prepare_writer(prepare_creation, original, payload)
+            raise EditorFieldError({"photo": "Informe a foto antes de alterar as datas."})
+        plan = {**scope, "stage": "prepared", "old_checkin": old_checkin,
+                "old_id": old_period["appointment_id"], "old_code": old_period["code"],
+                "old_entry": old_start, "old_exit": old_end,
+                "old_booking_entry": old_period["entry_at"], "old_booking_exit": old_period["exit_at"],
+                "update_attempts": 0}
         _write_json_atomic(journal, plan)
 
     def save(stage, **extra):
         plan.update(stage=stage, **extra)
         _write_json_atomic(journal, plan)
 
-    if plan["stage"] == "identity_conflict":
-        raise HikError("O HikCentral retornou outro Visitor ID ao criar a reserva. Confira os cadastros antes de agir.")
-    create = locals().get("create")
-    failure = None
     if plan["stage"] == "prepared":
-        original = _old_booking(client, plan, require=True)
-        if create is None:
-            create = _prepare_writer(prepare_creation, original, payload)
+        _old_booking(client, plan, require=True)
         row = _old_visit(client, plan)
         if str(row["visitorStatus"]) == "0":
             save("checkout_inflight")
             _, failure = _write_once(lambda: client.post(CHECKOUT, {"appointRecordId": plan["old_checkin"]}))
         else:
             save("checked_out")
+            failure = None
+    else:
+        failure = None
     if plan["stage"] == "checkout_inflight":
         if str(_old_visit(client, plan)["visitorStatus"]) not in CLOSED_STATES:
-            raise HikError("Etapa 1: o HikCentral ainda não confirmou o checkout. Confira a visita anterior.") from failure
+            raise HikError("O HikCentral ainda não confirmou o checkout. Confira a visita antes de repetir.") from failure
         save("checked_out")
-    if plan["stage"] == "checked_out":
-        original = _old_booking(client, plan, require=True)
-        if create is None:
-            create = _prepare_writer(prepare_creation, original, payload)
+
+    if plan["stage"] in {"checked_out", "profile_inflight"}:
+        if profile_update:
+            save("profile_inflight")
+            profile_update()
+        save("profile_updated")
+
+    if plan["stage"] in {"profile_updated", "update_inflight"}:
         if str(_old_visit(client, plan)["visitorStatus"]) not in CLOSED_STATES:
-            raise HikError("Etapa 1: a visita anterior voltou a ficar ativa. Confira o checkout.")
-        save("delete_inflight")
-        _, failure = _write_once(lambda: client.post(DELETE_BOOKING, {"appointRecordId": plan["old_id"]}))
-    if plan["stage"] == "delete_inflight":
-        if _old_booking(client, plan):
-            raise HikError("Etapa 2: o HikCentral ainda mostra a reserva antiga. Confira a exclusão.") from failure
-        save("deleted")
-    if plan["stage"] == "deleted":
-        if _old_booking(client, plan):
-            raise HikError("Etapa 2: a reserva antiga reapareceu. Confira a exclusão.")
-        if _target_booking(client, vid, start, end, plan["old_id"]):
-            raise HikError("Etapa 3: já existe outra reserva nessas datas. Confira no HikCentral.")
-        if create is None:
-            create = _prepare_writer(prepare_creation, None, payload)
-        save("create_inflight")
-        result, failure = _write_once(create)
-        if isinstance(result, dict):
-            aid, code = _id(result.get("appointment_id")), _id(result.get("code"))
-            if (_id(result.get("visitor_id")) != vid or aid == plan["old_id"]
-                    or not re.fullmatch(r"\d{1,64}", aid) or not re.fullmatch(r"\d{1,8}", code)):
-                save("identity_conflict")
-                raise HikError("Etapa 3: o HikCentral devolveu um vínculo diferente para a reserva nova.")
-            save("create_inflight", new_id=aid, new_code=code)
+            raise HikError("A visita anterior ainda está ativa; a reserva não foi alterada.")
+        updated = _booking_at_period(client, vid, start, end)
+        if updated:
+            if plan["stage"] != "update_inflight":
+                raise HikError("Já existe uma reserva nas novas datas. Confira no HikCentral antes de continuar.")
+            _confirm_original_period_moved(client, plan)
+            observed_id = original_appointment_identifier(updated)
+            if not _reservation_matches_request(updated, payload, vid):
+                if parse_access_levels(updated) != [level]:
+                    raise HikError("A reserva encontrada nas novas datas tem outro nível de acesso.")
+                plan["new_id"] = observed_id
+                plan["new_code"] = _id(updated.get("appointCode"))
+                body = _reservation_update_body(client, updated, payload, vid, level)
+                save("update_inflight", new_id=plan["new_id"], new_code=plan["new_code"],
+                     update_attempts=int(plan.get("update_attempts") or 0) + 1)
+                _, failure = _write_once(lambda: client.post(UPDATE_BOOKING, body))
+                updated = _booking_at_period(client, vid, start, end)
+                if not updated or original_appointment_identifier(updated) != plan["new_id"]:
+                    raise HikError("A API não confirmou os campos da reserva atualizada; confira antes de repetir.") from failure
+                if not _reservation_matches_request(updated, payload, vid):
+                    raise HikError("O HikCentral ainda não confirmou o nome, sobrenome e apartamento informados.")
+            plan["new_id"] = original_appointment_identifier(updated)
+            plan["new_code"] = _id(updated.get("appointCode"))
+            if not re.fullmatch(r"\d{1,64}", plan["new_id"]) or not re.fullmatch(r"\d{1,8}", plan["new_code"]):
+                raise HikError("O HikCentral não retornou IDs válidos para a reserva atualizada.")
+            _confirm_new_booking(client, updated, start, end, [level])
+            save("updated")
+        else:
+            old = _booking_at_period(client, vid, plan["old_booking_entry"], plan["old_booking_exit"])
+            if not old or original_appointment_identifier(old) != plan["old_id"]:
+                raise HikError("A API não confirmou nem a reserva antiga nem as novas datas. Confira no HikCentral.") from failure
+            body = _reservation_update_body(client, old, payload, vid, level)
+            save("update_inflight", update_attempts=int(plan.get("update_attempts") or 0) + 1)
+            _, failure = _write_once(lambda: client.post(UPDATE_BOOKING, body))
+            updated = _booking_at_period(client, vid, start, end)
+            if not updated:
+                raise HikError("O HikCentral ainda não confirmou a atualização da reserva pela API. "
+                               "A reserva original foi preservada; tente salvar novamente.") from failure
+            _confirm_original_period_moved(client, plan)
+            plan["new_id"] = original_appointment_identifier(updated)
+            plan["new_code"] = _id(updated.get("appointCode"))
+            if not _reservation_matches_request(updated, payload, vid):
+                save("update_inflight", new_id=plan["new_id"], new_code=plan["new_code"])
+                raise HikError("A reserva foi atualizada, mas a API ainda não confirmou nome, sobrenome e apartamento.") from failure
+            if not re.fullmatch(r"\d{1,64}", plan["new_id"]) or not re.fullmatch(r"\d{1,8}", plan["new_code"]):
+                raise HikError("O HikCentral não retornou IDs válidos para a reserva atualizada.")
+            _confirm_new_booking(client, updated, start, end, [level])
+            save("updated")
 
-    new = (_booking_by_code(client, plan["new_code"], start, end, vid) if plan.get("new_code")
-           else _target_booking(client, vid, start, end, plan["old_id"]))
-    if not new:
-        raise HikError("Etapa 3: a reserva antiga foi excluída e a nova ainda não aparece. "
-                       "Confira a reserva no HikCentral antes de repetir.") from failure
-    new_id, code = original_appointment_identifier(new), _id(new.get("appointCode"))
-    if (new_id == plan["old_id"] or not re.fullmatch(r"\d{1,64}", new_id)
-            or not re.fullmatch(r"\d{1,8}", code) or plan.get("new_id", new_id) != new_id):
-        raise HikError("Etapa 3: o HikCentral retornou um vínculo divergente para a reserva nova.")
-    period = _confirm_new_booking(client, new, start, end, [level])
-    if plan["stage"] == "create_inflight":
-        save("created", new_id=new_id, new_code=code)
-
+    updated = _booking_at_period(client, vid, start, end)
+    if not updated or original_appointment_identifier(updated) != plan.get("new_id"):
+        raise HikError("A reserva atualizada não apareceu na conferência OpenAPI.")
+    _confirm_original_period_moved(client, plan)
+    period = _confirm_new_booking(client, updated, start, end, [level])
     active = client.find_registration_record(vid, start, end, active_only=True)
-    if active and _id(active.get("recordId")) == plan["old_checkin"]:
-        raise HikError("Etapa 4: o HikCentral ainda apresenta a visita anterior como ativa.")
-    if plan["stage"] == "created" and active:
+    if plan["stage"] == "updated" and active:
         save("checked_in", new_checkin=_id(active.get("recordId")), automatic_checkin=True)
-    elif plan["stage"] == "created":
+    elif plan["stage"] == "updated":
         save("checkin_inflight", automatic_checkin=False)
         returned, failure = _write_once(lambda: client.register_existing_visitor(
-            vid, payload, selected, appointment_id=new_id))
+            vid, payload, selected, appointment_id=plan["new_id"]))
         if returned:
             save("checkin_inflight", new_checkin=_id(returned))
         active = client.find_registration_record(vid, start, end, active_only=True)
     rid = _id((active or {}).get("recordId"))
-    if not rid or rid == plan["old_checkin"] or plan.get("new_checkin", rid) != rid:
-        raise HikError("Etapa 4: a reserva nova foi criada, mas o check-in ainda não foi confirmado. "
-                       "Confira o visitante no HikCentral antes de repetir.") from failure
+    if not rid or plan.get("new_checkin", rid) != rid:
+        raise HikError("A reserva foi atualizada pela API, mas o HikCentral ainda não confirmou o check-in. "
+                       "Confira a visita antes de repetir.") from failure
     if plan["stage"] == "checkin_inflight":
         save("checked_in", new_checkin=rid)
     _confirmed_edit(client, vid, payload, visitor, group, rid)
-    new = _booking_by_code(client, code, start, end, vid)
-    if not new or original_appointment_identifier(new) != new_id:
-        raise HikError("A reserva nova não apareceu na conferência após o check-in.")
-    period = _confirm_new_booking(client, new, start, end, [level])
-    remark = (new.get("visitorInfo") or {}).get("remark")
-    if remark is None or str(remark).strip() != visitor.reservation.strip():
-        raise EditorFieldError({"reservation": "A reserva nova foi criada, mas o apartamento/Remark "
-                                "não foi confirmado nela. Confira a reserva no HikCentral."})
     if visitor.photo_jpeg and not same_photo(visitor.photo_jpeg, fetch_visitor_photo(client, vid)):
-        raise EditorFieldError({"photo": "A foto no perfil ainda difere da foto informada para a nova visita."})
+        raise EditorFieldError({"photo": "A foto no perfil ainda difere da foto informada."})
 
     if plan["stage"] in {"checked_in", "apply_inflight"}:
-        if plan["stage"] != "applied":
-            save("apply_inflight")
-            current_levels = parse_access_levels(visitor_details(client, vid))
-            if not any(str(item.get("id")) == level["id"] and item.get("name") == level["name"]
-                       for item in current_levels):
-                client.assign_access(vid, level["id"])
-            client.apply(vid, doors)
-            save("applied")
+        save("apply_inflight")
+        current_levels = parse_access_levels(visitor_details(client, vid))
+        if not any(str(item.get("id")) == level["id"] and item.get("name") == level["name"]
+                   for item in current_levels):
+            client.assign_access(vid, level["id"])
+        client.apply(vid, doors)
+        save("applied")
     if plan["stage"] != "applied":
-        raise HikError("Reserva e check-in confirmados, mas o HikCentral não aceitou a solicitação de acesso.")
-    history = {"visitor_id": vid, "appointment_id": new_id, "registration_record_id": rid,
+        raise HikError("Reserva atualizada pela API; o HikCentral ainda não confirmou a solicitação de acesso.")
+
+    code = _id(updated.get("appointCode"))
+    history = {"visitor_id": vid, "appointment_id": plan["new_id"], "registration_record_id": rid,
                "reservation_code": code, "reservation_entry_at": start, "reservation_exit_at": end,
                "entry_at": start, "exit_at": end, "group": group,
                "first": visitor.first_name, "last": visitor.last_name, "reservation": visitor.reservation,
@@ -327,9 +428,9 @@ def _replace(client, record, payload, selected, doors, visitor, requested_level,
     save_registration(history)
     journal.unlink()
     return {"state": "submitted",
-            "message": "O HikCentral recebeu a solicitação de acesso e controla a distribuição.",
-            "operation": "replace", "rebooking_completed": True, "operation_completed": True,
-            "automatic_checkin": bool(plan.get("automatic_checkin")), "confirmed_appointment_id": new_id,
+            "message": "A reserva foi atualizada pela OpenAPI; o HikCentral controla a distribuição do acesso.",
+            "operation": "reservation_update", "rebooking_completed": True, "operation_completed": True,
+            "automatic_checkin": bool(plan.get("automatic_checkin")), "confirmed_appointment_id": plan["new_id"],
             "confirmed_checkin_id": rid, "confirmed_group": group, "reservation_period": period,
             "access_receipt_saved": False}
 
@@ -352,16 +453,7 @@ def _old_booking(client, plan, *, require=False):
     if old and (original_appointment_identifier(old) != plan["old_id"]
                 or compare_reservation_period(old, plan["old_booking_entry"], plan["old_booking_exit"])["state"]
                 != "matched"):
-        raise HikError("A reserva anterior mudou durante a troca. Confira no HikCentral.")
+        raise HikError("A reserva anterior mudou durante a alteração. Confira no HikCentral.")
     if require and not old:
-        raise HikError("A reserva anterior não foi encontrada para confirmar a troca.")
+        raise HikError("A reserva anterior não foi encontrada para confirmar a alteração.")
     return old
-
-
-def _prepare_writer(prepare_creation, old, payload):
-    if not callable(prepare_creation):
-        raise HikError("Entre no HikCentral para preparar a criação da reserva nova.")
-    create = prepare_creation(old, payload)
-    if not callable(create):
-        raise HikError("O HikCentral não confirmou que pode criar a reserva para o mesmo visitante.")
-    return create

@@ -1,14 +1,14 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.63` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.65` (prévia técnica para testes).
 
 No **Histórico de check-ins**, as colunas **Início da reserva** e **Término da reserva** são consultadas diretamente em Visitor Reservation e associadas pelo ID da reserva. O status e as passagens continuam vinculados ao check-in. Se a API não confirmar um vínculo exato, as datas da reserva aparecem como “—”.
 
-Em **Cadastros efetuados**, escolha **Reservas sem check-in** para buscar e corrigir datas e apartamento de reservas pendentes. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**. Na troca de datas, entre no Edge e abra **Visitor > Visitor Reservation** para concluir a substituição para o mesmo visitante.
+Em **Cadastros efetuados**, escolha **Reservas sem check-in** para buscar e corrigir datas e apartamento de reservas pendentes. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**.
 
 Em **Cadastros efetuados**, abra o visitante, corrija os campos e use **Salvar alterações**. Nome, sobrenome, foto e pulseira são gravados em Visitor Information; Apartamento é gravado como Remark no perfil e na reserva.
 
-Quando uma data da reserva for alterada, o aplicativo abre uma janela isolada do Microsoft Edge. Entre no HikCentral; o aplicativo confere a sessão, a permissão para criar reserva, o visitante e o nível original. A troca segue a ordem confirmada: (1) checkout da visita atual, (2) exclusão da reserva original, (3) criação de reserva para o mesmo Visitor ID, (4) check-in manual se o HikCentral não o tiver feito automaticamente. O aplicativo confere a reserva e o check-in e guarda as etapas para retomar com segurança se a conexão cair. Após o HikCentral aceitar a solicitação de acesso, a edição é concluída; a distribuição pelas catracas fica sob controle do HikCentral e não bloqueia a edição. A senha do Web Client não é armazenada.
+Quando a data da visita for alterada, o aplicativo usa somente a OpenAPI: (1) faz checkout se a visita ainda estiver ativa, (2) atualiza a reserva original pelo endpoint oficial de edição, preservando o Visitor ID, (3) confere a reserva atualizada e faz check-in apenas se o HikCentral não o tiver feito automaticamente. O endpoint de criação de reservas foi testado e devolveu outro Visitor ID nesta instalação; por isso, o aplicativo não apaga nem cria uma reserva substituta. A atualização é conferida por consultas OpenAPI e registrada para permitir recuperação se a conexão cair. A distribuição pelas catracas fica sob controle do HikCentral e não bloqueia a edição.
 
 Se as datas da reserva não forem alteradas, o aplicativo atualiza os dados do perfil e a visita existente, preservando o período já registrado. A conclusão da edição não depende de confirmação individual das catracas.
 
@@ -42,10 +42,11 @@ Níveis iniciais conforme as imagens: CATRACAS SABIA, ENTRADA ACQUAVALE, LOJA AC
 1. POST /artemis/api/visitor/v1/visitorgroups: recuperar grupos.
 2. POST /artemis/api/acs/v1/privilege/group com type=2: consultar níveis Visitor e catracas associadas.
 3. POST /artemis/api/visitor/v2/appointment: criar a reserva e receber appointRecordId e visitorId.
-4. POST /artemis/api/visitor/v1/registerment: registrar o check-in e guardar o ID do registro separadamente.
-5. POST /artemis/api/acs/v1/privilege/group/single/addPersons com type=2: atribuir níveis ao visitorId.
-6. POST /artemis/api/visitor/v1/auth/reapplication: solicitar envio às catracas.
-7. POST /artemis/api/visitor/v1/person/ID/elementDownloadDetail: consultar estado de face e pulseira por catraca.
+4. POST /artemis/api/visitor/v2/appointment/update: editar as datas e o Remark da reserva existente, sem criar outro visitante.
+5. POST /artemis/api/visitor/v1/registerment: registrar o check-in e guardar o ID do registro separadamente.
+6. POST /artemis/api/acs/v1/privilege/group/single/addPersons com type=2: atribuir níveis ao visitorId.
+7. POST /artemis/api/visitor/v1/auth/reapplication: solicitar envio às catracas.
+8. POST /artemis/api/visitor/v1/person/ID/elementDownloadDetail: consultar estado de face e pulseira por catraca.
 
 ## Instalação / compilação
 No GitHub, entre em Actions > Compilar EXE Windows e faça download do artefato ValeCadastroFacialNFC-Windows depois de execução bem-sucedida. Ele contém ValeCadastroFacialNFC.exe compilado pelo PyInstaller com runtime Python embutido.
