@@ -619,6 +619,64 @@ def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monke
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Teste do editor exige Tk Windows")
+def test_reservation_history_mode_searches_and_opens_unchecked_booking(monkeypatch):
+    import app
+    import modern_ui
+    import visitor_editor
+    from core import default_settings
+    from remote_history import APPOINTMENTS_PATH
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    calls, opened = [], []
+    booking = {
+        "appointStatus": 0, "appointID": "8312", "appointCode": "5400",
+        "appointStartTime": "2026-11-12T00:00:00-03:00",
+        "appointEndTime": "2026-11-13T23:59:59-03:00",
+        "visitorInfo": {"visitorId": "715", "visitorGivenName": "Visita",
+                        "visitorFamilyName": "Teste", "visitorGroupName": "Hóspedes Vale",
+                        "remark": "302"},
+    }
+
+    class Client:
+        def post(self, path, request):
+            assert path == APPOINTMENTS_PATH
+            calls.append(request)
+            return {"data": {"total": 1, "list": [booking]}}
+
+    monkeypatch.setattr(visitor_editor, "open_unregistered_reservation_editor",
+                        lambda _app, record: opened.append(record))
+    root = app.ValeApp()
+    try:
+        root.book.select(root.history_tab)
+        root.update()
+        root.key, root.secret = "test-key", "test-secret"
+        monkeypatch.setattr(root, "client", Client)
+        monkeypatch.setattr(root, "task", lambda work, finish: finish(work(), None))
+        monkeypatch.setattr(root, "_load_history_passages",
+                            lambda *_: pytest.fail("Uma reserva sem check-in não tem passagens."))
+        assert root.history_mode.get() == modern_ui.HISTORY_MODE_CHECKINS
+        root.history_mode_box.set(modern_ui.HISTORY_MODE_RESERVATIONS)
+        root.history_mode_box.event_generate("<<ComboboxSelected>>")
+        root.update()
+        assert not calls and root._history_page == 1
+        root.history_start.set("12/11/2026")
+        root.history_end.set("12/11/2026")
+        root.history_name.set("Visita")
+        root.history_apply_filters()
+        assert len(calls) == 1
+        assert calls[0]["appointState"] == 0 and calls[0]["visitorName"] == "Visita"
+        root.history_table.selection_set("0")
+        root.view_history_selection()
+        record, = opened
+        assert record["_reservation_only"] and not record["registration_record_id"]
+        assert record["appointment_id"] == "8312" and record["reservation_code"] == "5400"
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Teste do editor exige Tk Windows")
 def test_general_visitor_without_checkin_opens_editable_required_fields(monkeypatch):
     """Dados ausentes devem ser completados na tela, sem torná-la somente leitura."""
     import app
@@ -1339,6 +1397,61 @@ def test_closed_visit_photo_error_marks_required_fields_and_accepts_completion(m
         assert "visit" not in popup._editor_field_errors
         assert popup._editor_field_vars["card"].get() == "12345678"
         popup.destroy()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Editor de reserva exige Windows Tk")
+def test_save_reservation_without_checkin_keeps_same_profile_and_original_time(monkeypatch):
+    import app
+    import unregistered_reservation
+    import visitor_editor
+    from core import default_settings
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
+    root = app.ValeApp()
+    refreshes = []
+    submissions = []
+    root.refresh_history = lambda: refreshes.append(True)
+    root.task = lambda work, done: submissions.append((work, done))
+
+    class FakeClient:
+        def visitor_groups(self):
+            return ["Hóspedes Vale"]
+
+        def resolve_levels(self, names):
+            assert names == ["VISITANTE_VALE"]
+            return [{"id": "7", "name": "VISITANTE_VALE"}], ["57", "64", "89"]
+
+    root.client = FakeClient
+    record = {"visitor_id": "2024", "appointment_id": "74167", "reservation_code": "1467",
+              "first": "Teste", "last": "Sintético", "group": "", "access_names": ["VISITANTE_VALE"],
+              "entry_at": "2030-11-14T08:30:00-03:00", "exit_at": "2030-11-14T23:59:59-03:00",
+              "reservation": "123", "_reservation_only": True}
+
+    def verify(_client, selected_record, start, end, remark, selected):
+        assert selected_record is record
+        assert start == record["entry_at"]
+        assert end.startswith("2030-11-15T")
+        assert remark == "321"
+        assert selected == [{"id": "7", "name": "VISITANTE_VALE"}]
+        return {"state": "confirmed"}
+
+    monkeypatch.setattr(unregistered_reservation, "reschedule_unregistered_reservation", verify)
+    try:
+        visitor_editor.open_unregistered_reservation_editor(root, record)
+        popup = root._active_visitor_editor
+        popup._reservation_field_vars["exit"].set("15/11/2030")
+        popup._reservation_field_vars["reservation"].set("321")
+        popup._save_reservation_button.invoke()
+        work, done = submissions[0]
+        done(work(), None)
+        assert refreshes == [True] and not popup.winfo_exists()
     finally:
         root.destroy()
 

@@ -61,6 +61,7 @@ def normalize_checkin(row: dict):
     return {
         "visitor_id": vid,
         "registration_record_id": str(row.get("recordId") or ""),
+        "appointment_id": _checkin_appointment_id(row),
         "first": first, "last": last, "full_name": full_name,
         "group": str(base.get("visitorGroup") or ""),
         "reservation": str(base.get("remark") or ""),
@@ -76,6 +77,36 @@ def normalize_checkin(row: dict):
         "access_level_ids": [x["id"] for x in levels],
         "expect_face": None, "expect_card": None,
     }
+
+
+def _checkin_appointment_id(row):
+    """Use explicit reservation links only. recordId identifies the check-in."""
+    ids = {
+        str(info.get(key)).strip()
+        for info in (row, row.get("visitorBaseInfo") or {})
+        if isinstance(info, dict)
+        for key in ("appointId", "appointID")
+        if info.get(key)
+    }
+    value = next(iter(ids)) if len(ids) == 1 else ""
+    return value if len(value) <= 64 else ""
+
+
+def add_local_booking_reference(record, local):
+    """Recover the booking reference from the same check-in, not the latest visit."""
+    local_id = str(local.get("appointment_id") or "")
+    remote_id = str(record.get("appointment_id") or record.get("_original_appointment_id") or "")
+    checkin_id = str(record.get("registration_record_id") or "")
+    if (not local_id or not checkin_id
+            or str(record.get("visitor_id") or "") != str(local.get("visitor_id") or "")
+            or checkin_id != str(local.get("registration_record_id") or "")
+            or (remote_id and remote_id != local_id)):
+        return record
+    result = {**record, "appointment_id": local_id}
+    for field in ("reservation_entry_at", "reservation_exit_at", "reservation_code"):
+        if local.get(field) and not result.get(field):
+            result[field] = local[field]
+    return result
 
 
 def filter_local_history_by_entry_date(rows: list[dict], start_iso: str,
@@ -108,14 +139,7 @@ def filter_local_history_by_entry_date(rows: list[dict], start_iso: str,
     return matching
 
 
-def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
-                   name: str = "", page_size: int = PAGE_SIZE):
-    """Paginate the selected batch using safe server requests of up to 100.
-
-    Selecting 200/500 in the UI must return 200/500 records even on older
-    HikCentral versions that reject pageSize >100. The logical page can be
-    multiple adjacent server pages sorted by visitingTime.
-    """
+def _history_query(page, page_size, name):
     if not 1 <= page <= MAX_PAGES or not 1 <= page_size <= 500:
         raise ValueError("Página inválida.")
     name = name.strip()
@@ -124,10 +148,21 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
     server_size = min(page_size, PAGE_SIZE)
     server_first_page = (page - 1) * page_size // server_size + 1
     request_count = (page_size + server_size - 1) // server_size
+    return name, server_size, range(server_first_page, server_first_page + request_count)
+
+
+def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
+                   name: str = "", page_size: int = PAGE_SIZE):
+    """Paginate the selected batch using safe server requests of up to 100.
+
+    Selecting 200/500 in the UI must return 200/500 records even on older
+    HikCentral versions that reject pageSize >100. The logical page can be
+    multiple adjacent server pages sorted by visitingTime.
+    """
+    name, server_size, server_pages = _history_query(page, page_size, name)
     rows, seen = [], set()
     total = None
-    for part in range(request_count):
-        server_page = server_first_page + part
+    for server_page in server_pages:
         if total is not None and (server_page - 1) * server_size >= total:
             break
         payload = {
@@ -172,6 +207,80 @@ def fetch_checkins(client, start_iso: str, end_iso: str, page: int = 1,
         "rows": rows, "total": total, "page": page,
         "page_size": page_size,
         "has_next": page < MAX_PAGES and (page * page_size < total),
+    }
+
+
+def fetch_unchecked_reservations(client, start_iso, end_iso, page=1, name="", page_size=PAGE_SIZE):
+    """List actual reservations still in Reserved state, independently of check-ins."""
+    name, server_size, server_pages = _history_query(page, page_size, name)
+    rows = {}
+    total = None
+    for server_page in server_pages:
+        if total is not None and (server_page - 1) * server_size >= total:
+            break
+        params = {
+            "pageNo": server_page, "pageSize": server_size, "appointState": 0,
+            "appointStartTime": start_iso, "appointEndTime": end_iso,
+            "sortField": "VisitingTime", "orderType": 1,
+        }
+        if name:
+            params["visitorName"] = name
+        data = client.post(APPOINTMENTS_PATH, params).get("data") or {}
+        try:
+            current_total = int(data["total"])
+            if current_total < 0:
+                raise ValueError()
+        except (TypeError, ValueError, KeyError) as exc:
+            raise HikError("HikCentral não retornou a paginação de reservas.") from exc
+        if total is not None and current_total != total:
+            raise HikError("O total de reservas mudou durante a consulta. Clique em Buscar novamente.")
+        total = current_total
+        items = data.get("list")
+        if items is None and total == 0:
+            items = []
+        if not isinstance(items, list):
+            raise HikError("HikCentral não retornou uma lista de reservas.")
+        for item in items:
+            row = _normalize_unchecked_reservation(item)
+            if row:
+                rows[row["appointment_id"]] = row
+    return {"rows": list(rows.values()), "total": total or 0, "page": page,
+            "page_size": page_size, "has_next": page < MAX_PAGES and page * page_size < (total or 0)}
+
+
+def _normalize_unchecked_reservation(item):
+    if not isinstance(item, dict) or str(item.get("appointStatus")) != "0":
+        return None
+    info = item.get("visitorInfo")
+    if not isinstance(info, dict):
+        return None
+    vid = str(info.get("visitorId") or "").strip()
+    if not vid or len(vid) > 64:
+        return None
+    try:
+        period = compare_reservation_period(item, item.get("appointStartTime"), item.get("appointEndTime"))
+    except (TypeError, ValueError):
+        return None
+    if not period["appointment_id"] or not period["code"]:
+        return None
+    first = str(info.get("visitorGivenName") or info.get("firstName") or "").strip()
+    last = str(info.get("visitorFamilyName") or info.get("lastName") or "").strip()
+    full_name = str(info.get("visitorName") or info.get("fullName")
+                    or " ".join(filter(None, (first, last)))).strip()
+    if not first and not last:
+        first, _, last = full_name.partition(" ")
+    levels = parse_access_levels(item)
+    return {
+        "_reservation_only": True, "_reservation_period": period,
+        "visitor_id": vid, "appointment_id": period["appointment_id"],
+        "reservation_code": period["code"], "registration_record_id": "",
+        "entry_at": period["entry_at"], "exit_at": period["exit_at"],
+        "reservation_entry_at": period["entry_at"], "reservation_exit_at": period["exit_at"],
+        "first": first, "last": last, "full_name": full_name,
+        "group": str(info.get("visitorGroupName") or info.get("visitorGroup") or ""),
+        "reservation": str(info.get("remark") or ""), "checkin_state": "sem check-in",
+        "origin": "Visitor Reservation",
+        "access_names": [x["name"] for x in levels], "access_level_ids": [x["id"] for x in levels],
     }
 
 
@@ -362,10 +471,11 @@ def original_appointment_identifier(appointment: dict) -> str:
 
 
 def find_original_appointment(client, record, *, max_pages=10):
-    """Match the known booking ID and visitor, or an exact period without an ID.
+    """Verify an explicit booking ID or match a check-in to a unique reservation.
 
     A check-in edit may change its period while the original booking retains
-    the old dates. A known booking ID must not be discarded for that reason.
+    the old dates. Where the periods differ, a sole overlapping Registered
+    booking can match an active check-in. Other candidates need a selection.
     """
     if not record.get("visitor_id") or not record.get("entry_at") or not record.get("exit_at"):
         raise HikError("Visitante e período são necessários para localizar a reserva original.")
@@ -385,7 +495,7 @@ def find_original_appointment(client, record, *, max_pages=10):
                 query_start, query_end = min(query_start, reference), max(query_end, reference)
         except (TypeError, ValueError):
             pass
-    matches = []
+    candidates = {}
     for page in range(1, max_pages + 1):
         payload = {
             "pageNo": page, "pageSize": 100,
@@ -394,26 +504,56 @@ def find_original_appointment(client, record, *, max_pages=10):
             "appointState": -1, "sortField": "VisitingTime", "orderType": 1,
         }
         data = client.post(APPOINTMENTS_PATH, payload).get("data") or {}
-        if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+        if not isinstance(data, dict):
             raise HikError("A consulta de reservas não retornou lista válida.")
-        rows = data["list"]
+        rows = data.get("list")
+        if rows is None and str(data.get("total")) == "0":
+            rows = []
+        if not isinstance(rows, list):
+            raise HikError("A consulta de reservas não retornou lista válida.")
         for entry in rows:
             info = (entry.get("visitorInfo") or {}) if isinstance(entry, dict) else {}
-            linked = (known_id and isinstance(info, dict) and
-                      str(info.get("visitorId") or "") == str(record["visitor_id"]) and
-                      original_appointment_identifier(entry) == known_id)
-            if linked or (not known_id and _same_visit(entry, record)):
-                matches.append(entry)
+            if not isinstance(info, dict) or str(info.get("visitorId") or "") != str(record["visitor_id"]):
+                continue
+            candidate_id = original_appointment_identifier(entry)
+            if not candidate_id:
+                continue
+            if candidate_id in candidates and candidates[candidate_id] != entry:
+                raise HikError("A reserva mudou durante a consulta. Pesquise novamente.")
+            candidates[candidate_id] = entry
         total = int(data.get("total") or 0)
+        if total > page * 100 and len(rows) < 100:
+            raise HikError("A consulta de reservas retornou uma página incompleta. Pesquise novamente.")
         if len(rows) < 100 or (total and page * 100 >= total):
             break
     else:
         raise HikError("Há reservas demais para validar a edição com segurança.")
-    if len(matches) != 1:
-        raise HikError(
-            "Não foi possível associar a visita a uma reserva única no HikCentral. "
-            "Edição bloqueada sem alterar o visitante.")
-    return matches[0]
+    if known_id and known_id in candidates:
+        return candidates[known_id]
+    if not known_id and len(candidates) == 1:
+        entry = next(iter(candidates.values()))
+        if _same_visit(entry, record):
+            return entry
+        active = record.get("checkin_state") in ("check-in efetuado", "confirmado")
+        booking_group = str((entry.get("visitorInfo") or {}).get("visitorGroupName") or "")
+        same_group = not booking_group or booking_group.casefold() == str(record.get("group") or "").casefold()
+        if active and same_group and str(entry.get("appointStatus")) == "3":
+            try:
+                period = compare_reservation_period(entry, record["entry_at"], record["exit_at"])
+                if (datetime.fromisoformat(period["entry_at"]) < end
+                        and datetime.fromisoformat(period["exit_at"]) > start):
+                    return entry
+            except (TypeError, ValueError):
+                pass
+
+    if candidates:
+        message = "Selecione a reserva correta deste visitante pelo código e período."
+    else:
+        message = "Não foi possível associar a visita a uma reserva única no HikCentral. Confira o vínculo da reserva."
+    error = HikError(message)
+    error.fields = {"appointment": message}
+    error.choices = {"appointment": list(candidates.values())}
+    raise error
 
 
 def compare_reservation_period(appointment, start_iso, end_iso):
@@ -492,16 +632,24 @@ def resolve_remote_edit_record(client, record):
     appointment_levels = []
     appointment_error = ""
     appointment_id = ""
+    appointment_choices = []
     try:
+        remote_appointment_id = _checkin_appointment_id(original)
+        record = {**record, "checkin_state": STATUSES.get(
+            str(original.get("visitorStatus")), record.get("checkin_state"))}
+        if remote_appointment_id and remote_appointment_id != record.get("appointment_id"):
+            record.update(appointment_id=remote_appointment_id, reservation_entry_at="",
+                          reservation_exit_at="", reservation_code="")
         appointment = find_original_appointment(client, record)
-        appointment_id = original_appointment_identifier(appointment)
-        appointment_levels = parse_access_levels(appointment)
         appt_info = appointment.get("visitorInfo") or appointment.get("VisitorInfo") or {}
         appt_group = str(appt_info.get("visitorGroupName") or "")
         if appt_group and normalize(appt_group) != normalize(group):
             raise HikError("Grupo da reserva diverge do check-in.")
+        appointment_levels = parse_access_levels(appointment)
+        appointment_id = original_appointment_identifier(appointment)
     except HikError as exc:
         appointment_error = str(exc)
+        appointment_choices = getattr(exc, "choices", {}).get("appointment", [])
 
     # A ausência de accessInfo em uma fonte não prova ausência de permissão.
     sources = [("reserva", appointment_levels),
@@ -609,11 +757,12 @@ def resolve_remote_edit_record(client, record):
     result["_edit_operation"] = "update" if state == "0" else "renew" if state in ("1", "2", "3", "4") else ""
     result["_original_appointment_id"] = appointment_id
     result["_appointment_lookup_error"] = appointment_error
+    result["_appointment_choices"] = appointment_choices
     result["_reservation_period"] = {"state": "unavailable"}
     if appointment_id:
         try:
             period = compare_reservation_period(appointment, record["entry_at"], record["exit_at"])
-            result.update(_reservation_period=period,
+            result.update(_reservation_period=period, appointment_id=appointment_id,
                           reservation_entry_at=period["entry_at"],
                           reservation_exit_at=period["exit_at"], reservation_code=period["code"])
         except (HikError, TypeError, ValueError):
