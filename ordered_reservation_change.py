@@ -9,6 +9,7 @@ import re
 from core import _write_json_atomic, VALE_VISITOR_LEVELS, TZ, verify_visitor_access_plan
 from edit_errors import EditorFieldError
 from edit_journal import select_edit_journal
+from edit_request import validate_edit_request
 from hikcentral import HikError, normalize
 from remote_history import (
     APPOINTMENTS_PATH, compare_reservation_period, fetch_visitor_photo,
@@ -349,7 +350,7 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
                      update_attempts=int(plan.get("update_attempts") or 0) + 1)
                 _, failure = _write_once(lambda: client.post(UPDATE_BOOKING, body))
                 updated = _booking_at_period(client, vid, start, end)
-                if not updated or original_appointment_identifier(updated) != plan["new_id"]:
+                if not updated:
                     raise HikError("A API não confirmou os campos da reserva atualizada; confira antes de repetir.") from failure
                 if not _reservation_matches_request(updated, payload, vid):
                     raise HikError("O HikCentral ainda não confirmou o nome, sobrenome e apartamento informados.")
