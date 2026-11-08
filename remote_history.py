@@ -437,8 +437,7 @@ def parse_access_levels(data):
 def _same_visit(appointment, record):
     if not isinstance(appointment, dict):
         return False
-    info = appointment.get("visitorInfo") or {}
-    if not isinstance(info, dict) or str(info.get("visitorId") or "") != record["visitor_id"]:
+    if _appointment_visitor_id(appointment) != record["visitor_id"]:
         return False
     try:
         start = datetime.fromisoformat(str(appointment.get("appointStartTime") or ""))
@@ -451,20 +450,44 @@ def _same_visit(appointment, record):
         return False
 
 
+def _appointment_visitor_info(appointment):
+    """Read visitor data from the casing variants returned by HikCentral."""
+    if not isinstance(appointment, dict):
+        return {}
+    for key in ("visitorInfo", "VisitorInfo", "visitorBaseInfo", "VisitorBaseInfo"):
+        info = appointment.get(key)
+        if isinstance(info, dict):
+            return info
+    return {}
+
+
+def _appointment_visitor_id(appointment):
+    info = _appointment_visitor_info(appointment)
+    for key in ("visitorId", "visitorID", "VisitorId", "VisitorID", "ID"):
+        value = str(info.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def original_appointment_identifier(appointment: dict) -> str:
     """Extrai o identificador da RESERVA; não confundir com recordId de check-in.
 
     appointRecordId é o campo documentado para a edição de check-in.
-    appointID é aceito para as versões que o retornam na listagem. Quando
-    ambos existirem e divergirem, falhar fechado sem escolher um ID arbitrário.
+    appointID/appointId são aceitos para as versões que os retornam na
+    listagem. Quando os campos existirem e divergirem, falhar fechado sem
+    escolher um ID arbitrário.
     """
     if not isinstance(appointment, dict):
         return ""
-    first = str(appointment.get("appointRecordId") or "").strip()
-    legacy = str(appointment.get("appointID") or "").strip()
-    if first and legacy and first != legacy:
+    identifiers = {
+        str(appointment.get(key) or "").strip()
+        for key in ("appointRecordId", "appointID", "appointId")
+        if str(appointment.get(key) or "").strip()
+    }
+    if len(identifiers) > 1:
         raise HikError("Reserva retornou identificadores divergentes; edição bloqueada.")
-    value = first or legacy
+    value = next(iter(identifiers), "")
     if len(value) > 64:
         raise HikError("ID de reserva inválido; edição bloqueada.")
     return value
@@ -475,7 +498,8 @@ def find_original_appointment(client, record, *, max_pages=10):
 
     A check-in edit may change its period while the original booking retains
     the old dates. Where the periods differ, a sole overlapping Registered
-    booking can match an active check-in. Other candidates need a selection.
+    booking for the same visitor and group can still match, including after
+    checkout. Other candidates need an explicit selection.
     """
     if not record.get("visitor_id") or not record.get("entry_at") or not record.get("exit_at"):
         raise HikError("Visitante e período são necessários para localizar a reserva original.")
@@ -503,6 +527,10 @@ def find_original_appointment(client, record, *, max_pages=10):
             "appointEndTime": (query_end + timedelta(days=1)).isoformat(timespec="seconds"),
             "appointState": -1, "sortField": "VisitingTime", "orderType": 1,
         }
+        search_name = str(record.get("first") or
+                          str(record.get("full_name") or "").partition(" ")[0]).strip()
+        if search_name:
+            payload["visitorName"] = search_name
         data = client.post(APPOINTMENTS_PATH, payload).get("data") or {}
         if not isinstance(data, dict):
             raise HikError("A consulta de reservas não retornou lista válida.")
@@ -512,8 +540,7 @@ def find_original_appointment(client, record, *, max_pages=10):
         if not isinstance(rows, list):
             raise HikError("A consulta de reservas não retornou lista válida.")
         for entry in rows:
-            info = (entry.get("visitorInfo") or {}) if isinstance(entry, dict) else {}
-            if not isinstance(info, dict) or str(info.get("visitorId") or "") != str(record["visitor_id"]):
+            if _appointment_visitor_id(entry) != str(record["visitor_id"]):
                 continue
             candidate_id = original_appointment_identifier(entry)
             if not candidate_id:
@@ -534,10 +561,14 @@ def find_original_appointment(client, record, *, max_pages=10):
         entry = next(iter(candidates.values()))
         if _same_visit(entry, record):
             return entry
-        active = record.get("checkin_state") in ("check-in efetuado", "confirmado")
-        booking_group = str((entry.get("visitorInfo") or {}).get("visitorGroupName") or "")
-        same_group = not booking_group or booking_group.casefold() == str(record.get("group") or "").casefold()
-        if active and same_group and str(entry.get("appointStatus")) == "3":
+        booking_group = str(_appointment_visitor_info(entry).get("visitorGroupName") or
+                            _appointment_visitor_info(entry).get("visitorGroup") or "")
+        same_group = (not booking_group or
+                      _normalized_person_name(booking_group) ==
+                      _normalized_person_name(record.get("group")))
+        # A unique reservation can still be edited after check-out. The prior
+        # active-check-in condition incorrectly blocked the same reservation.
+        if same_group and str(entry.get("appointStatus")) == "3":
             try:
                 period = compare_reservation_period(entry, record["entry_at"], record["exit_at"])
                 if (datetime.fromisoformat(period["entry_at"]) < end
@@ -581,13 +612,15 @@ def reservation_period_report(client, record, start_iso, end_iso):
         return {"state": "unavailable", "message": "Datas da reserva original não confirmadas pela consulta."}
 
 
-def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso, end_iso):
-    """Attach live reservation dates to check-ins using the exact appointment link.
+def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso, end_iso, name=""):
+    """Attach live reservation dates to check-ins using a verified reservation link.
 
     The check-in's visitStartTime/visitEndTime remain intact for editing and
     passage lookup. Display dates come from the linked appointment record.
     Local metadata is used only to recover an appointment ID when its
-    registration_record_id matches the exact remote check-in.
+    registration_record_id matches the exact remote check-in. When the API
+    omits that link, a sole same-visitor/group reservation overlapping the
+    visit may supply dates and the edit ID.
     """
     local_by_visitor = {str(row.get("visitor_id") or ""): row
                         for row in local_rows if isinstance(row, dict)}
@@ -609,12 +642,15 @@ def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso
                 pass
 
     appointments = {}
+    by_visitor = {}
     query_error = False
-    if target_ids:
+    if linked:
         try:
             target_visitors = {aid: str(link.get("visitor_id") or "")
                                for _row, link, aid in linked if aid}
-            target_visitor_ids = set(target_visitors.values())
+            target_visitor_ids = {str(link.get("visitor_id") or "")
+                                  for _row, link, _aid in linked}
+            target_visitor_ids.discard("")
             query_start = min([datetime.fromisoformat(start_iso), *bounds]) - timedelta(days=1)
             query_end = max([datetime.fromisoformat(end_iso), *bounds]) + timedelta(days=1)
             for page in range(1, 11):
@@ -624,6 +660,8 @@ def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso
                     "appointEndTime": query_end.isoformat(timespec="seconds"),
                     "sortField": "VisitingTime", "orderType": 1,
                 }
+                if str(name or "").strip():
+                    params["visitorName"] = str(name).strip()
                 data = client.post(APPOINTMENTS_PATH, params).get("data") or {}
                 if not isinstance(data, dict):
                     raise HikError("A consulta de reservas não retornou dados legíveis.")
@@ -639,20 +677,16 @@ def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso
                 for appointment in items:
                     if not isinstance(appointment, dict):
                         continue
-                    info = appointment.get("visitorInfo") or appointment.get("VisitorInfo") or {}
-                    if not isinstance(info, dict):
-                        continue
-                    visitor_id = str(info.get("visitorId") or "")
+                    visitor_id = _appointment_visitor_id(appointment)
                     if visitor_id not in target_visitor_ids:
                         continue
                     aid = original_appointment_identifier(appointment)
-                    if aid not in target_ids or target_visitors.get(aid) != visitor_id:
+                    if not aid or (aid in target_ids and target_visitors.get(aid) != visitor_id):
                         continue
                     if aid in appointments and appointments[aid] != appointment:
                         raise HikError("A mesma reserva retornou dados divergentes.")
                     appointments[aid] = appointment
-                if target_ids.issubset(appointments):
-                    break
+                    by_visitor.setdefault(visitor_id, {})[aid] = appointment
                 if not items or len(items) < 100 or page * 100 >= total:
                     break
         except (HikError, TypeError, ValueError, KeyError):
@@ -661,14 +695,35 @@ def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso
     for row, link, aid in linked:
         appointment = appointments.get(aid) if aid else None
         if appointment:
-            info = appointment.get("visitorInfo") or appointment.get("VisitorInfo") or {}
-            if str(info.get("visitorId") or "") != str(row.get("visitor_id") or ""):
+            if _appointment_visitor_id(appointment) != str(row.get("visitor_id") or ""):
                 appointment = None
         if not appointment and aid:
             try:
                 appointment = find_original_appointment(client, link)
             except (HikError, ValueError, TypeError, KeyError):
                 appointment = None
+        if not appointment and not aid:
+            candidates = list(by_visitor.get(str(row.get("visitor_id") or ""), {}).values())
+            if len(candidates) == 1:
+                candidate = candidates[0]
+                candidate_info = _appointment_visitor_info(candidate)
+                candidate_group = str(candidate_info.get("visitorGroupName") or
+                                      candidate_info.get("visitorGroup") or "")
+                row_group = str(row.get("group") or "")
+                same_group = (not candidate_group or not row_group or
+                              _normalized_person_name(candidate_group) == _normalized_person_name(row_group))
+                try:
+                    start = datetime.fromisoformat(str(candidate.get("appointStartTime") or ""))
+                    end = datetime.fromisoformat(str(candidate.get("appointEndTime") or ""))
+                    visit_start = datetime.fromisoformat(str(row.get("entry_at") or ""))
+                    visit_end = datetime.fromisoformat(str(row.get("exit_at") or ""))
+                    overlaps = start <= visit_end and end >= visit_start
+                    if (end > start and same_group and
+                            (_same_visit(candidate, row) or
+                             (overlaps and str(candidate.get("appointStatus")) == "3"))):
+                        appointment = candidate
+                except (TypeError, ValueError):
+                    pass
         period = None
         if appointment:
             try:
@@ -746,7 +801,7 @@ def resolve_remote_edit_record(client, record):
             record.update(appointment_id=remote_appointment_id, reservation_entry_at="",
                           reservation_exit_at="", reservation_code="")
         appointment = find_original_appointment(client, record)
-        appt_info = appointment.get("visitorInfo") or appointment.get("VisitorInfo") or {}
+        appt_info = _appointment_visitor_info(appointment)
         appt_group = str(appt_info.get("visitorGroupName") or "")
         if appt_group and normalize(appt_group) != normalize(group):
             raise HikError("Grupo da reserva diverge do check-in.")
