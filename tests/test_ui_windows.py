@@ -1504,7 +1504,7 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch):
         dialog._visitor_information_save_button.invoke()
         assert len(calls) == 1
         args, kwargs = calls[0]
-        assert args[:2] == ("715", "Visitante")
+        assert args[1:3] == ("715", "Visitante")
         assert "entry" not in kwargs and "exit" not in kwargs and "reservation" not in kwargs
         assert not dialog.winfo_exists()
     finally:
