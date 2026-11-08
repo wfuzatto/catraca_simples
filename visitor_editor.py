@@ -580,15 +580,13 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     f"Visitante ID: {record.get('visitor_id') or ''}\n"
                     f"Reserva original: {appointment_id}\n"
                     f"Novas datas: {visit_start:%d/%m/%Y %H:%M:%S} a {visit_end:%d/%m/%Y %H:%M:%S}\n\n"
-                    "A troca seguirá esta ordem no HikCentral:\n"
-                    "1. Fazer checkout da visita atual.\n"
-                    "2. Excluir a reserva original.\n"
-                    "3. Criar outra reserva para o mesmo Visitor ID.\n"
-                    "4. Confirmar o check-in, se o HikCentral não o fizer automaticamente.\n\n"
-                    "No Edge, entre no Web Client e abra Visitor > Visitor Reservation. "
-                    "O checkout começa após a conferência da sessão e das permissões."
+                    "A alteração será feita pela OpenAPI do HikCentral:\n"
+                    "1. Fazer checkout da visita atual, se ainda estiver ativa.\n"
+                    "2. Atualizar a reserva original com as novas datas e o apartamento.\n"
+                    "3. Conferir a reserva e confirmar o check-in, se o HikCentral não o fizer automaticamente.\n\n"
+                    "O Visitor ID e o vínculo da reserva serão preservados; não será criado outro cadastro."
                 )
-                if not messagebox.askyesno("Confirmar troca de datas", summary_text, parent=dialog):
+                if not messagebox.askyesno("Confirmar alteração de datas", summary_text, parent=dialog):
                     return
             else:
                 summary_text = (
@@ -657,30 +655,12 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                 edit_record["_selected_checkin_id"] = str(chosen_visit.get("recordId") or "")
             from visitor_profile import update_profile
             if date_changed:
-                from contextlib import ExitStack
-                from native_booking_bridge import open_booking_bridge
                 from ordered_reservation_change import change_reservation_dates
-                from remote_history import original_appointment_identifier
-                with ExitStack() as stack:
-                    def prepare_creation(original, target_payload):
-                        bridge = stack.enter_context(open_booking_bridge(
-                            app.settings["host"], app.settings["port"], timeout_seconds=180,
-                            cert_pin_sha256=app.settings.get("cert_pin_sha256", "")))
-                        return bridge.prepare(
-                            str(record["visitor_id"]), target_payload["visitStartTime"],
-                            target_payload["visitEndTime"], selected,
-                            expected_booking_id=original_appointment_identifier(original) if original else None,
-                            first_name=obj.first_name, last_name=obj.last_name, remark=obj.reservation,
-                            purpose_type=target_payload.get("visitPurposeType", 4),
-                            purpose_detail=target_payload.get("visitPurpose", ""))
-                    def prepare_and_save_profile(original, target_payload):
-                        create = prepare_creation(original, target_payload)
-                        update_profile(client, str(record["visitor_id"]), obj.first_name, obj.last_name,
-                                       card=obj.card_number, new_photo=selected_profile_photo)
-                        return create
-                    return change_reservation_dates(
-                        client, edit_record, payload, selected, doors, obj, new_group, requested_level,
-                        prepare_creation=prepare_and_save_profile)
+                return change_reservation_dates(
+                    client, edit_record, payload, selected, doors, obj, new_group, requested_level,
+                    profile_update=lambda: update_profile(
+                        client, str(record["visitor_id"]), obj.first_name, obj.last_name,
+                        card=obj.card_number, new_photo=selected_profile_photo))
             update_profile(client, str(record["visitor_id"]), obj.first_name, obj.last_name,
                            card=obj.card_number, new_photo=selected_profile_photo)
             from copy import deepcopy
