@@ -1222,7 +1222,11 @@ def test_editing_reservation_dates_uses_single_save_and_same_visitor_replacement
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
     monkeypatch.setattr(visitor_editor, "load_pending", lambda: None)
     monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
-    monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
+    success_messages = []
+    monkeypatch.setattr(visitor_editor.messagebox, "showinfo",
+                        lambda *a, **k: success_messages.append(str(a)))
+    monkeypatch.setattr(visitor_editor.messagebox, "showwarning",
+                        lambda *a, **k: pytest.fail("Edição concluída não deve alertar sobre confirmação das catracas"))
 
     original_photo = io.BytesIO()
     Image.new("RGB", (80, 80), "white").save(original_photo, "JPEG")
@@ -1277,7 +1281,8 @@ def test_editing_reservation_dates_uses_single_save_and_same_visitor_replacement
         create = prepare_creation({"appointID": "appt1649", "appointCode": "23"}, payload)
         assert callable(create)
         events.append("ordered-transaction")
-        return {"state": "confirmed", "doors": [], "rebooking_completed": True,
+        return {"state": "submitted", "message": "HikCentral controla a distribuição.",
+                "rebooking_completed": True, "operation_completed": True,
                 "automatic_checkin": False, "confirmed_appointment_id": "newappt",
                 "confirmed_checkin_id": "newcheckin", "confirmed_group": group,
                 "reservation_period": {"state": "matched", "code": "24",
@@ -1326,6 +1331,8 @@ def test_editing_reservation_dates_uses_single_save_and_same_visitor_replacement
         submissions[0][1](result, None)
         assert record["appointment_id"] == "newappt"
         assert record["registration_record_id"] == "newcheckin"
+        assert len(success_messages) == 1
+        assert "O HikCentral recebeu a solicitação de acesso e controla a distribuição" in success_messages[0]
         assert not popup.winfo_exists()
     finally:
         root.destroy()

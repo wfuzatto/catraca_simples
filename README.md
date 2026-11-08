@@ -1,14 +1,16 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.61` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.62` (prévia técnica para testes).
 
 Em **Cadastros efetuados**, escolha **Reservas sem check-in** para buscar e corrigir datas e apartamento de reservas pendentes. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**. Na troca de datas, entre no Edge e abra **Visitor > Visitor Reservation** para concluir a substituição para o mesmo visitante.
 
 Em **Cadastros efetuados**, abra o visitante, corrija os campos e use **Salvar alterações**. Nome, sobrenome, foto e pulseira são gravados em Visitor Information; Apartamento é gravado como Remark no perfil e na reserva.
 
-Quando uma data da reserva for alterada, o aplicativo abre uma janela isolada do Microsoft Edge. Entre no HikCentral; o aplicativo confere a sessão, a permissão para criar reserva, o visitante e o nível original. A troca segue a ordem confirmada: (1) checkout da visita atual, (2) exclusão da reserva original, (3) criação de reserva para o mesmo Visitor ID, (4) check-in manual se o HikCentral não o tiver feito automaticamente. O aplicativo confirma cada resultado e guarda as etapas para retomar com segurança se a conexão cair. A senha do Web Client não é armazenada.
+Quando uma data da reserva for alterada, o aplicativo abre uma janela isolada do Microsoft Edge. Entre no HikCentral; o aplicativo confere a sessão, a permissão para criar reserva, o visitante e o nível original. A troca segue a ordem confirmada: (1) checkout da visita atual, (2) exclusão da reserva original, (3) criação de reserva para o mesmo Visitor ID, (4) check-in manual se o HikCentral não o tiver feito automaticamente. O aplicativo confere a reserva e o check-in e guarda as etapas para retomar com segurança se a conexão cair. Após o HikCentral aceitar a solicitação de acesso, a edição é concluída; a distribuição pelas catracas fica sob controle do HikCentral e não bloqueia a edição. A senha do Web Client não é armazenada.
 
-Se as datas da reserva não forem alteradas, o aplicativo atualiza os dados do perfil e a visita existente, preservando o período já registrado. Se uma credencial for recusada por uma catraca depois da troca, a tela mantém os dados e permite corrigir a foto ou a pulseira sem criar outra reserva.
+Se as datas da reserva não forem alteradas, o aplicativo atualiza os dados do perfil e a visita existente, preservando o período já registrado. A conclusão da edição não depende de confirmação individual das catracas.
+
+Na Preview 62, uma edição de cadastro ou troca de datas termina após o HikCentral confirmar a reserva e o check-in e aceitar a solicitação de acesso. O aplicativo não consulta a confirmação individual em cada catraca.
 
 Na Preview 56, o editor confere separadamente as datas da visita (Visitor Check-In/Out) e da reserva original (Visitor Reservation). Uma divergência aparece com os dois períodos e não é apresentada como sincronização concluída. A edição da visita continua disponível quando a consulta da reserva não responde. O leitor de níveis também aceita o formato `accessLevelList.accessLevel[].baseinfo` retornado nesta instalação do HikCentral.
 

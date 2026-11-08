@@ -39,7 +39,6 @@ def ordered_lab(monkeypatch, tmp_path):
                        "visitorCardInfo": {"cardNumber": "12345678"}}}
     new_row = None
     auto_checkin = False
-    delivery_state = "confirmed"
 
     class Client:
         url = "https://hikcentral.test"
@@ -86,9 +85,7 @@ def ordered_lab(monkeypatch, tmp_path):
             assert visitor_id == "1865" and doors == ["57", "64", "89"]
 
         def delivery_report(self, *_args, **_kwargs):
-            events.append("report")
-            return {"state": delivery_state, "message": "synthetic delivery report",
-                    "doors": [{"faceState": "confirmed", "credentialState": "confirmed"}]}
+            raise AssertionError("Edição não deve esperar confirmação individual das catracas")
 
     client = Client()
     monkeypatch.setattr(ordered, "visitor_details", lambda *_args: {
@@ -134,26 +131,25 @@ def ordered_lab(monkeypatch, tmp_path):
         nonlocal auto_checkin
         auto_checkin = bool(value)
 
-    def set_delivery(value):
-        nonlocal delivery_state
-        delivery_state = value
-
     return SimpleNamespace(client=client, run=run, events=events, bookings=bookings,
                            history=history, active=active, record=record,
-                           set_auto=set_auto, set_delivery=set_delivery)
+                           set_auto=set_auto)
 
 
 def test_date_change_follows_checkout_delete_create_checkin_order(ordered_lab):
     result = ordered_lab.run()
     assert ordered_lab.events == ["preflight", "checkout", "delete", "create",
-                                  "checkin", "assign", "apply", "report"]
+                                  "checkin", "assign", "apply"]
     assert "2502" not in ordered_lab.bookings
     assert ordered_lab.bookings["5054"]["appointID"] == "2000"
     assert result["rebooking_completed"] is True
     assert result["automatic_checkin"] is False
     assert result["confirmed_appointment_id"] == "2000"
     assert result["confirmed_checkin_id"] == "check-new"
+    assert result["state"] == "submitted"
+    assert result["operation_completed"] is True
     assert ordered_lab.history[0]["appointment_id"] == "2000"
+    assert ordered_lab.history[0]["state"] == "submitted"
 
 
 def test_missing_web_client_preflight_stops_before_checkout(ordered_lab):
@@ -171,7 +167,7 @@ def test_skips_manual_checkin_when_hikcentral_already_created_it(ordered_lab):
     ordered_lab.set_auto(True)
     result = ordered_lab.run()
     assert ordered_lab.events == ["preflight", "checkout", "delete", "create",
-                                  "assign", "apply", "report"]
+                                  "assign", "apply"]
     assert result["automatic_checkin"] is True
     assert result["confirmed_checkin_id"] == "check-auto"
 
