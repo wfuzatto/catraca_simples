@@ -507,13 +507,16 @@ def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monke
     assert [r["visitor_id"] for r in captured["rows"]] == ["1654"]
     assert [r["visitor_id"] for r in captured["passages"]] == ["1654"]
     assert "descartado" in captured["label"]
-    assert len(client.calls) == 1
+    assert len(client.calls) == 2
     path, payload, options = client.calls[0]
     assert path == CHECKINS_PATH
     assert payload["visitorName"] == "TOALHEIRO"
     assert payload["visitStartTime"] == "2026-11-05T00:00:00-03:00"
     assert payload["visitEndTime"] == "2026-11-06T00:00:00-03:00"
     assert options == {}
+    reservation_path, reservation_payload, _ = client.calls[1]
+    assert reservation_path.endswith("appointment/appointmentlist")
+    assert reservation_payload["visitorName"] == "TOALHEIRO"
 
 
 def test_original_appointment_identifier_not_checkin_id_or_reservation_code():
