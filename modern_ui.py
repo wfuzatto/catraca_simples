@@ -470,7 +470,7 @@ def _history(app):
     hscroll.grid(row=1, column=0, sticky="ew")
     app.history_table.configure(yscrollcommand=scroll.set, xscrollcommand=hscroll.set)
     app.history_table.bind("<<TreeviewSelect>>", app._history_selection)
-    app.history_table.bind("<Double-1>", app.view_history_selection)
+    app.history_table.bind("<Button-1>", app.view_history_selection)
     paging = ctk.CTkFrame(inner, fg_color="transparent")
     paging.pack(fill="x", padx=18, pady=(5, 0))
     app.history_previous_button = _secondary(
@@ -485,12 +485,12 @@ def _history(app):
     ctk.CTkLabel(inner, textvariable=app.history_status, text_color=MUTED,
                  anchor="w", font=("Segoe UI", 12), wraplength=780).pack(
                      fill="x", padx=18, pady=(4, 10))
-    # Todas as ações do visitante estão na janela aberta por duplo clique.
+    # Os campos da reserva e do perfil abrem editores independentes.
     # A consulta de passagens continua automática, sem botão redundante.
-    app.history_double_click_hint = _text(
-        inner, "Dê dois cliques em uma linha para consultar e editar a visita ou a reserva.",
+    app.history_cell_action_hint = _text(
+        inner, "Reserva sem check-in: clique na data para editar datas e apartamento. Clique no nome para editar Visitor Information (nome, sobrenome, foto e pulseira).",
         size=11, color=MUTED)
-    app.history_double_click_hint.pack(anchor="w", padx=18, pady=(0, 13))
+    app.history_cell_action_hint.pack(anchor="w", padx=18, pady=(0, 13))
 
 
 def _settings(app):

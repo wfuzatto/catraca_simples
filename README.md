@@ -1,6 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.68` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.69` (prévia técnica para testes).
+
+Na Preview 69, a tabela separa os dois editores: clique no início ou término da reserva para abrir o editor de datas/apartamento; clique no nome para abrir Visitor Information e editar nome, sobrenome, foto e pulseira, sem campos de reserva. Esse fluxo de reserva se aplica às reservas sem check-in.
 
 No **Histórico de check-ins**, as colunas **Início da reserva** e **Término da reserva** vêm diretamente da Visitor Reservation. Quando o HikCentral omite o ID da reserva no check-in, a aplicação procura um vínculo único pelo Visitor ID, grupo e período; se houver mais de uma possibilidade, não inventa as datas. O status e as passagens continuam vinculados ao check-in.
 
@@ -12,7 +14,7 @@ Na Preview 66, a consulta também tenta resolver o vínculo ausente antes de dei
 
 Em **Cadastros efetuados**, escolha **Reservas sem check-in** para buscar e corrigir datas e apartamento de reservas pendentes. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**.
 
-Em **Cadastros efetuados**, abra o visitante, corrija os campos e use **Salvar alterações**. Nome, sobrenome, foto e pulseira são gravados em Visitor Information; Apartamento é gravado como Remark no perfil e na reserva.
+Em **Cadastros efetuados**, clique no nome para editar nome, sobrenome, foto e pulseira diretamente em Visitor Information. Clique nas datas de uma reserva sem check-in para editar período e apartamento no editor próprio da reserva. Os campos de perfil não são enviados junto com a alteração da reserva.
 
 Quando a data da visita for alterada, o aplicativo usa somente a OpenAPI: (1) faz checkout se a visita ainda estiver ativa, (2) atualiza a reserva original pelo endpoint oficial de edição, preservando o Visitor ID, (3) confere a reserva atualizada e faz check-in apenas se o HikCentral não o tiver feito automaticamente. O endpoint de criação de reservas foi testado e devolveu outro Visitor ID nesta instalação; por isso, o aplicativo não apaga nem cria uma reserva substituta. A atualização é conferida por consultas OpenAPI e registrada para permitir recuperação se a conexão cair. A distribuição pelas catracas fica sob controle do HikCentral e não bloqueia a edição.
 

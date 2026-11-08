@@ -587,8 +587,8 @@ def test_history_loading_indicator_for_list_and_editor(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Teste de layout exige interface Tk no Windows")
-def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monkeypatch):
-    """Retirar apenas a linha de ações, mantendo busca, paginação e duplo clique."""
+def test_history_has_two_separate_cell_edit_actions(monkeypatch):
+    """Mantém busca/paginação e separa edição da reserva e do perfil."""
     import app
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
@@ -599,8 +599,10 @@ def test_history_has_no_redundant_buttons_and_opens_editor_by_double_click(monke
         root.update()
         root.book.select(root.history_tab)
         root.update()
-        assert root.history_table.bind("<Double-1>")
-        assert "dois cliques" in root.history_double_click_hint.cget("text")
+        assert root.history_table.bind("<Button-1>")
+        hint = root.history_cell_action_hint.cget("text").casefold()
+        assert "datas e apartamento" in hint and "visitor information" in hint
+        assert "foto e pulseira" in hint
         for old_button in (
             "history_verify_button", "history_resend_button",
             "history_details_button", "history_photo_button"):
@@ -639,7 +641,8 @@ def test_reservation_history_mode_searches_and_opens_unchecked_booking(monkeypat
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
-    calls, opened = [], []
+    from types import SimpleNamespace
+    calls, opened_dates, opened_profiles = [], [], []
     booking = {
         "appointStatus": 0, "appointID": "8312", "appointCode": "5400",
         "appointStartTime": "2026-11-12T00:00:00-03:00",
@@ -656,9 +659,10 @@ def test_reservation_history_mode_searches_and_opens_unchecked_booking(monkeypat
             return {"data": {"total": 1, "list": [booking]}}
 
     monkeypatch.setattr(visitor_editor, "open_unregistered_reservation_editor",
-                        lambda _app, record: opened.append(record))
+                        lambda _app, record: opened_dates.append(record))
     root = app.ValeApp()
     try:
+        root.geometry("1500x900")
         root.book.select(root.history_tab)
         root.update()
         root.key, root.secret = "test-key", "test-secret"
@@ -677,11 +681,20 @@ def test_reservation_history_mode_searches_and_opens_unchecked_booking(monkeypat
         root.history_apply_filters()
         assert len(calls) == 1
         assert calls[0]["appointState"] == 0 and calls[0]["visitorName"] == "Visita"
-        root.history_table.selection_set("0")
-        root.view_history_selection()
-        record, = opened
-        assert record["_reservation_only"] and not record["registration_record_id"]
-        assert record["appointment_id"] == "8312" and record["reservation_code"] == "5400"
+        root.edit_history_visitor_information = lambda record: opened_profiles.append(record)
+        for column, expected_action in (("#2", "reservation"), ("#4", "profile")):
+            x, y, width, height = root.history_table.bbox("0", column)
+            assert width and height
+            event = SimpleNamespace(widget=root.history_table, x=x + width // 2,
+                                    y=y + height // 2)
+            root.view_history_selection(event)
+            if expected_action == "reservation":
+                record, = opened_dates
+                assert record["_reservation_only"] and not record["registration_record_id"]
+                assert record["appointment_id"] == "8312" and record["reservation_code"] == "5400"
+            else:
+                record, = opened_profiles
+                assert record["_reservation_only"] and record["visitor_id"] == "715"
     finally:
         root.destroy()
 
@@ -1452,6 +1465,48 @@ def test_save_reservation_without_checkin_keeps_same_profile_and_original_time(m
         work, done = submissions[0]
         done(work(), None)
         assert refreshes == [True] and not popup.winfo_exists()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Editor Visitor Information exige Tk Windows")
+def test_visitor_information_editor_has_no_reservation_fields(monkeypatch):
+    import app
+    import visitor_editor
+    import visitor_profile
+    from core import default_settings
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
+    calls = []
+    monkeypatch.setattr(visitor_profile, "update_profile",
+                        lambda *args, **kwargs: calls.append((args, kwargs)) or ["nome e sobrenome"])
+    root = app.ValeApp()
+    root.client = lambda: object()
+    root.task = lambda work, done: done(work(), None)
+    root.refresh_history = lambda: None
+    try:
+        visitor_editor.open_visitor_information_editor(
+            root,
+            {"visitor_id": "715", "first": "Visita", "last": "Teste", "group": "Hóspedes Vale"},
+            remote_details={"VisitorInfo": {
+                "visitorId": "715", "visitorGivenName": "Visita",
+                "visitorFamilyName": "Teste", "visitorGroupName": "Hóspedes Vale"}})
+        dialog = root._active_visitor_editor
+        assert set(dialog._visitor_information_fields) == {"first", "last", "card"}
+        assert not ({"entry", "exit", "reservation", "appointment"} &
+                    set(dialog._visitor_information_fields))
+        dialog._visitor_information_fields["first"].set("Visitante")
+        dialog._visitor_information_save_button.invoke()
+        assert len(calls) == 1
+        args, kwargs = calls[0]
+        assert args[:2] == ("715", "Visitante")
+        assert "entry" not in kwargs and "exit" not in kwargs and "reservation" not in kwargs
+        assert not dialog.winfo_exists()
     finally:
         root.destroy()
 
