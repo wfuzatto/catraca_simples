@@ -569,3 +569,84 @@ def test_original_period_metadata_remains_queryable_after_later_edits():
     client = FakeClient({"data": {"list": [booking], "total": 1}})
     assert find_original_appointment(client, record) == booking
     assert client.calls[0][1]["appointStartTime"] == "2026-11-05T00:00:00-03:00"
+
+
+def test_checkin_link_and_local_reference_preserve_the_selected_visit():
+    from remote_history import add_local_booking_reference
+
+    item = example_record()
+    item.update(appointId="512", appointRecordId="40")
+    current = normalize_checkin(item)
+    assert current["registration_record_id"] == "40"
+    assert current["appointment_id"] == "512"
+    assert normalize_checkin({**item, "appointId": ""})["appointment_id"] == ""
+    latest = {"visitor_id": "812", "registration_record_id": "42", "appointment_id": "999",
+              "reservation_code": "1234"}
+    assert add_local_booking_reference(current, latest) == current
+    assert add_local_booking_reference(current, {**latest, "registration_record_id": "40"}) == current
+    old = {**current, "appointment_id": ""}
+    assert add_local_booking_reference(old, latest) == old
+    recovered = add_local_booking_reference(old, {**latest, "registration_record_id": "40"})
+    assert recovered["appointment_id"] == "999" and recovered["reservation_code"] == "1234"
+
+
+def _test_appointment(aid, vid, *, status=0, code="6650"):
+    return {"appointID": aid, "appointCode": code, "appointStatus": status,
+            "appointStartTime": "2026-11-02T12:57:00-03:00",
+            "appointEndTime": "2026-11-03T17:00:00-03:00",
+            "visitorInfo": {"visitorId": vid, "visitorGivenName": "Maria",
+                            "visitorFamilyName": "Alves", "visitorGroupName": "Hóspedes Vale",
+                            "remark": "18"}}
+
+
+def test_active_visit_with_extended_dates_finds_the_unique_registered_booking():
+    from remote_history import find_original_appointment
+
+    appointment = _test_appointment("512", "812", status=3)
+    other_visitor = _test_appointment("999", "999", status=3)
+    api = FakeClient({"data": {"total": 2, "list": [appointment, other_visitor]}})
+    record = normalize_checkin(example_record())
+    assert record["exit_at"] != appointment["appointEndTime"]
+    assert find_original_appointment(api, record) == appointment
+
+
+def test_divergent_dates_with_multiple_bookings_require_explicit_selection():
+    from remote_history import find_original_appointment
+
+    appointment = _test_appointment("512", "812", status=3)
+    second = _test_appointment("513", "812", status=3, code="6651")
+    other_visitor = _test_appointment("999", "999", status=3)
+    api = FakeClient({"data": {"total": 3, "list": [appointment, other_visitor, second]}})
+    record = normalize_checkin(example_record())
+    # This could be a different reservation whose dates happen to match the
+    # period the operator already set in Check-In/Out.
+    second["appointEndTime"] = record["exit_at"]
+    with pytest.raises(HikError, match="Selecione a reserva correta") as raised:
+        find_original_appointment(api, record)
+    assert raised.value.choices["appointment"] == [appointment, second]
+    assert "appointment" in raised.value.fields
+    assert find_original_appointment(api, {**record, "appointment_id": "513"}) == second
+
+
+def test_reserved_only_search_uses_appointment_endpoint_and_keeps_no_checkin():
+    from remote_history import APPOINTMENTS_PATH, fetch_unchecked_reservations
+
+    appointment = _test_appointment("512", "812")
+    checked_in = _test_appointment("513", "813", status=3, code="6651")
+    client = FakeClient({"data": {"total": 2, "list": [appointment, checked_in]}})
+    start, end = search_window("02/11/2026", "04/11/2026")
+    result = fetch_unchecked_reservations(client, start, end, name="Maria", page_size=10)
+    assert result["total"] == 2 and not result["has_next"]
+    row, = result["rows"]
+    assert row["_reservation_only"] is True and row["registration_record_id"] == ""
+    assert row["visitor_id"] == "812" and row["appointment_id"] == "512"
+    assert row["reservation_code"] == "6650" and row["reservation"] == "18"
+    assert row["full_name"] == "Maria Alves" and row["group"] == "Hóspedes Vale"
+    assert row["_reservation_period"]["state"] == "matched"
+    assert row["entry_at"] == appointment["appointStartTime"]
+    assert row["exit_at"] == appointment["appointEndTime"]
+    path, params, opts = client.calls[0]
+    assert path == APPOINTMENTS_PATH and not opts
+    assert params["appointState"] == 0 and params["visitorName"] == "Maria"
+    assert params["appointStartTime"] == start and params["appointEndTime"] == end
+    assert params["pageNo"] == 1 and params["pageSize"] == 10

@@ -28,9 +28,10 @@ from settings_auth import verify_settings_password
 import modern_ui
 from visitor_history import list_history, save_registration, set_history_status, get_history
 from remote_history import (search_window, fetch_checkins, visitor_details,
-                            fetch_visitor_photo, history_time,
+                            fetch_unchecked_reservations, fetch_visitor_photo, history_time,
                             enrich_checkins_with_appointment_levels,
-                            resolve_remote_edit_record, filter_local_history_by_entry_date)
+                            resolve_remote_edit_record, filter_local_history_by_entry_date,
+                            add_local_booking_reference)
 from access_passages import fetch_visitor_passages, load_reader_directions
 from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
 
@@ -1031,8 +1032,11 @@ class ValeApp(tk.Tk):
     def refresh_history(self):
         # Por padrão sempre consulta o HikCentral. Histórico DPAPI é somente
         # uma contingência identificada quando o servidor está indisponível.
+        mode = getattr(self, "history_mode", None)
+        selected_mode = mode.get() if mode is not None else ""
+        reservation_only = selected_mode == modern_ui.HISTORY_MODE_RESERVATIONS
         try:
-            local_rows = list_history()
+            local_rows = [] if reservation_only else list_history()
         except Exception:
             local_rows = []
         if self.busy:
@@ -1054,6 +1058,9 @@ class ValeApp(tk.Tk):
             self.history_status.set("Filtro inválido: " + str(exc))
             return
         if not self.key or not self.secret:
+            if reservation_only:
+                self._show_history_rows([], "Configure a conexão HikCentral para consultar reservas.")
+                return
             self._show_history_rows(
                 local_rows,
                 f"{len(local_rows)} cadastro(s) LOCAIS no período: configure a conexão HikCentral.")
@@ -1065,16 +1072,18 @@ class ValeApp(tk.Tk):
             self, "Carregando cadastros do HikCentral...", phase="records")
         def work():
             client = self.client()
-            result = fetch_checkins(
-                client, start_iso, end_iso, page, name, page_size=page_size)
-            # Uma única busca de check-ins, já combinando data de validade
-            # e nome na API. A base geral Visitor Information não possui
-            # validade verificável e NÃO deve contaminar esta lista.
-            return result
+            fetch = fetch_unchecked_reservations if reservation_only else fetch_checkins
+            return fetch(client, start_iso, end_iso, page, name, page_size=page_size)
 
         def finish(result, error):
             modern_ui.stop_history_loading(self, phase="records")
+            if mode is not None and mode.get() != selected_mode:
+                return
             if error:
+                if reservation_only:
+                    self._show_history_rows([], "Não foi possível consultar reservas no HikCentral: " + str(error))
+                    self.history_page_label.set("Consulta central indisponível")
+                    return
                 self._show_history_rows(
                     local_rows, "HikCentral indisponível: exibindo SOMENTE histórico LOCAL. " +
                     str(error))
@@ -1090,6 +1099,9 @@ class ValeApp(tk.Tk):
             local_index = {r["visitor_id"]: r for r in local_rows}
             rows = []
             for remote in verified_rows:
+                if reservation_only:
+                    rows.append(remote)
+                    continue
                 local = local_index.get(remote["visitor_id"])
                 # Os privilégios locais só podem ser usados se o mesmo registro
                 # e período continuarem confirmados remotamente.
@@ -1121,15 +1133,17 @@ class ValeApp(tk.Tk):
                     row["_local_verified"] = True
                     row["state"] = local.get("state", "não verificada")
                 rows.append(row)
+            row_type = "reservas sem check-in" if reservation_only else "check-ins"
             description = (
-                f"HikCentral: {len(rows)} check-ins nesta página após filtro de "
+                f"HikCentral: {len(rows)} {row_type} nesta página após filtro de "
                 "início válido e nome. "
                 f"API retornou {result['total']} registro(s) antes da conferência local."
                 + (f" {excluded} registro(s) fora da seleção descartado(s) "
                    "nesta página." if excluded else ""))
             self._show_history_rows(rows, description)
             # Somente visitas confirmadas no período entram na consulta ACS.
-            self._load_history_passages(rows, description)
+            if not reservation_only:
+                self._load_history_passages(rows, description)
             self.history_page_label.set(
                 f"Página {page} • {result['total']} registro(s) na API, antes da "
                 f"validação de datas • {page_size} por página")
@@ -1138,6 +1152,13 @@ class ValeApp(tk.Tk):
             self.history_previous_button.configure(
                 state="normal" if page > 1 else "disabled")
         self.task(work, finish)
+
+    def history_mode_changed(self):
+        self._history_page = 1
+        self._show_history_rows([], "Clique em Buscar para consultar.")
+        self.history_page_label.set("Página 1")
+        self.history_previous_button.configure(state="disabled")
+        self.history_next_button.configure(state="disabled")
 
     def history_page_size_changed(self):
         """Changing page size is local until the operator explicitly searches."""
@@ -1163,6 +1184,10 @@ class ValeApp(tk.Tk):
         if chosen:
             record = self._history_records.get(chosen[0])
             if record:
+                if record.get("_reservation_only"):
+                    self.history_status.set(
+                        f"Reserva {record['reservation_code']} | Visitor ID {record['visitor_id']} | Sem check-in")
+                    return
                 diag = record.get("passage_diagnostics") or {}
                 missing_reader_ids = ", ".join(
                     str(x) for x in diag.get("unknown_reader_codes", [])[:5])
@@ -1366,17 +1391,17 @@ class ValeApp(tk.Tk):
         if not record:
             return
         record = dict(record)
+        if record.get("_reservation_only"):
+            from visitor_editor import open_unregistered_reservation_editor
+            open_unregistered_reservation_editor(self, record)
+            return
         from editor_validation import infer_edit_operation
         record["_edit_operation"] = infer_edit_operation(record)
-        # A reserva original permanece vinculada à pessoa, mesmo quando já
-        # não aparece na listagem remota depois do check-out.
+        # O histórico local guarda o último cadastro da pessoa. Só aproveitar
+        # a reserva se esse cadastro for o mesmo check-in selecionado.
         try:
             local = get_history(record["visitor_id"]) or {}
-            if local.get("appointment_id"):
-                record["appointment_id"] = str(local["appointment_id"])
-                for field in ("reservation_entry_at", "reservation_exit_at", "reservation_code"):
-                    if local.get(field):
-                        record[field] = local[field]
+            record = add_local_booking_reference(record, local)
         except (OSError, RuntimeError, ValueError):
             pass
         from visitor_editor import open_visitor_editor

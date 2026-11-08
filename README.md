@@ -1,6 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.60` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.61` (prévia técnica para testes).
+
+Em **Cadastros efetuados**, escolha **Reservas sem check-in** para buscar e corrigir datas e apartamento de reservas pendentes. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**. Na troca de datas, entre no Edge e abra **Visitor > Visitor Reservation** para concluir a substituição para o mesmo visitante.
 
 Em **Cadastros efetuados**, abra o visitante, corrija os campos e use **Salvar alterações**. Nome, sobrenome, foto e pulseira são gravados em Visitor Information; Apartamento é gravado como Remark no perfil e na reserva.
 

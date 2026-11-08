@@ -17,10 +17,6 @@ from hikcentral import HikError, normalize_pin, read_cert_sha256
 from visitor_profile import validate_visitor_remark
 
 
-PERMISSION_PATH = "/ISAPI/Bumblebee/Platform/V1/Permission/Security/UserPermission?MT=GET"
-CREATE_PERMISSION = "623"  # VISITOR.VISITOR_APPOINT_REVIEW.ADD in the HikCentral Web Client.
-
-
 def _same_origin(request_url, expected_url):
     """Compare normalized origins, including implicit HTTPS/HTTP default ports."""
     requested = urlsplit(str(request_url or ""))
@@ -38,7 +34,7 @@ def _same_origin(request_url, expected_url):
 def build_appointment_request(profile, original, visitor_id, start, end, selected_levels,
                               first_name, last_name, remark, encrypt, *,
                               purpose_type=4, purpose_detail=""):
-    """Copy the existing Visitor's native metadata into a V3 reservation request."""
+    """Build the native Visitor Information request to reserve one existing visitor."""
     vid = str(visitor_id or "").strip()
     old = (original or {}).get("AppointmentRecord") or original or {}
     visitor = old.get("Visitor") or {}
@@ -61,18 +57,20 @@ def build_appointment_request(profile, original, visitor_id, start, end, selecte
     existing_levels = existing_levels.get("AccessLevel") or []
     if isinstance(existing_levels, dict):
         existing_levels = [existing_levels]
-    normalized_existing = sorted((str(x.get("ID") or x.get("id") or ""),
-                                  str((x.get("BaseInfo") or x.get("baseInfo") or {}).get("Name") or
-                                      (x.get("BaseInfo") or x.get("baseInfo") or {}).get("name") or ""))
-                                 for x in existing_levels if isinstance(x, dict))
+    native_levels = [(x.get("ID") or x.get("id") or "",
+                      str((x.get("BaseInfo") or x.get("baseInfo") or {}).get("Name") or
+                          (x.get("BaseInfo") or x.get("baseInfo") or {}).get("name") or ""))
+                     for x in existing_levels if isinstance(x, dict)]
+    normalized_existing = sorted((str(level_id), name) for level_id, name in native_levels)
     normalized_selected = sorted((str(x.get("id") or ""), str(x.get("name") or ""))
                                  for x in selected_levels if isinstance(x, dict))
     if not normalized_selected or (old and normalized_existing != normalized_selected):
         raise EditorFieldError({"group": "O nível Visitor da reserva original mudou. Confirme o nível antes de continuar."})
 
-    reason = ((visitor.get("ExtendInfo") or {}).get("VisitorReasonInfo") or {})
-    reason_id = reason.get("ID", purpose_type)
-    reason_detail = reason.get("VisitorReasonDetail", purpose_detail)
+    extend_info = visitor.get("ExtendInfo") or {}
+    reason = extend_info.get("VisitorReasonInfo") or {}
+    reason_id = reason.get("ID", extend_info.get("VisitorReason", purpose_type))
+    reason_detail = reason.get("VisitorReasonDetail", extend_info.get("VisitorReasonDetail", purpose_detail))
     if reason_id is None or str(reason_id).strip() == "":
         raise EditorFieldError({"visit": "O Web Client não retornou o motivo da visita."})
 
@@ -81,56 +79,77 @@ def build_appointment_request(profile, original, visitor_id, start, end, selecte
     if len(first) < 2 or len(last) < 2:
         raise EditorFieldError({"first" if len(first) < 2 else "last": "Informe nome e sobrenome válidos."})
     remark = validate_visitor_remark(remark)
+    identification = profile_base.get("IdentifiyCode") or ""
     visitor_base = {
         "VisitorGroupID": profile_base.get("VisitorGroupID"),
+        "IdentificationType": profile_base.get("IdentificationType", "") if identification else "",
+        "IdentifiyCode": identification,
+        "PhotoUrl": "",
+        "SmallPhotoUrl": "",
         "GivenName": encrypt(first),
         "FamilyName": encrypt(last),
         "FullName": encrypt(first + " " + last),
         "Gender": profile_base.get("Gender", 0),
         "Email": profile_base.get("Email") or "",
         "PhoneNum": profile_base.get("PhoneNum") or "",
+        "BeginDate": str(start),
+        "EndDate": str(end),
         "Description": encrypt(str(remark or "").strip()),
-        "IdentificationType": profile_base.get("IdentificationType", 0),
-        "IdentifiyCode": profile_base.get("IdentifiyCode") or "",
         "CompanyName": profile_base.get("CompanyName") or "",
         "LicenseplateCode": profile_base.get("LicenseplateCode") or "",
         "PersonType": profile_base.get("PersonType", 0),
         "Nation": profile_base.get("Nation", 0),
-        "IdentificationExpireTime": profile_base.get("IdentificationExpireTime") or "",
-        "FullPath": "",
-        "PersonCode": "",
     }
-    levels = [{"ID": level[0], "Name": level[1]} for level in normalized_selected]
+    # The native form forwards AccessLevel.ID from the server as-is. OpenAPI
+    # normalizes IDs to text for comparison, but the V2 write uses native IDs.
+    native_ids = {str(level_id): level_id for level_id, _name in native_levels}
+    levels = []
+    for level_id, name in normalized_selected:
+        raw_id = native_ids.get(level_id)
+        if raw_id is None:
+            raw_id = int(level_id) if re.fullmatch(r"[0-9]{1,15}", level_id) else level_id
+        levels.append({"ID": raw_id, "BaseInfo": {"Name": name}})
     original_access = visitor.get("AccessInfo") or {}
-    visit = {
-        "IntervieweeInfo": {"ID": "", "name": ""},
-        "BeginDate": str(start),
-        "EndDate": str(end),
-        "ElectrostaticDetectionType": original_access.get("ElectrostaticDetectionType", 0),
-        "QRCodeValidNum": original_access.get("QRCodeValidNum", 0),
-        "AccessLevelList": levels,
-    }
-    native_profile = profile.get("BaseInfo") or {}
+    qr_valid = original_access.get("QRCodeValidNum", 0)
+    interviewee = extend_info.get("Interviewee") or extend_info.get("IntervieweeInfo") or {}
+    interviewee_id = interviewee.get("ID") if isinstance(interviewee, dict) else None
     additional = profile.get("AdditionalInfo")
     if additional is None:
         additional = visitor.get("AdditionalInfo") or []
     return {
-        "AppointmentInfo": {
-            "VisitorInfo": {
+        "VisitorList": {
+            "Visitor": [{
                 "ID": profile.get("ID"),
                 "BaseInfo": visitor_base,
                 "AdditionalInfo": additional,
-            },
-            "AccessInfo": {
-                "VisitorReason": reason_id,
-                "VisitorReasonDetail": reason_detail or "",
-                "VisitInfoList": [visit],
-            },
-            "WatchListInfo": {},
-            "ConsumeInfo": {},
+                "ExtendInfo": {
+                    "Interviewee": {"ID": interviewee_id if interviewee_id not in (None, "") else -1},
+                    "VisitorReason": reason_id,
+                    "VisitorReasonDetail": reason_detail or "",
+                },
+                "QRCodeValidNum": qr_valid,
+                "AccessInfo": {
+                    "ElectrostaticDetectionType": original_access.get("ElectrostaticDetectionType", 0),
+                    "QRCodeValidNum": qr_valid,
+                    "AccessLevelList": {"AccessLevel": levels},
+                },
+            }],
         }
     }
 
+
+# The native ISAPI transport adds the authenticated Web Client's AppendInfo token.
+_READ_PERMISSIONS = r"""async () => {
+  const isapi = window.delegate_library('f803799d0').default;
+  const status = await isapi.get({
+    url:'/ISAPI/Bumblebee/Platform/V1/Permission/Security/UserPermission',
+    showLoading:false, errorResponse:() => false, error:() => false,
+  });
+  const user = status?.Data?.UserPermission || {};
+  const codes = user.WebClientPermission ?? user.webClientPermission;
+  return {ready:Number(status?.ErrorCode) === 0 && codes != null,
+    canCreate:String(codes ?? '').split(',').some(code => code.trim() === '623')};
+}"""
 
 _LOGIN_READY = r"""async () => {
   if (typeof window.__valeReq !== 'function') {
@@ -138,17 +157,9 @@ _LOGIN_READY = r"""async () => {
     if (!queue || typeof queue.push !== 'function') return {ready:false};
     queue.push([[`vale-bridge-${Date.now()}`], {}, require => { window.__valeReq = require; }]);
   }
+  if (typeof window.__valeReq?.m?.[6337] !== 'function') return {ready:false};
   try {
-    const response = await fetch('/ISAPI/Bumblebee/Platform/V1/Permission/Security/UserPermission?MT=GET', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:'{}', credentials:'same-origin'
-    });
-    const result = await response.json();
-    const status = result.ResponseStatus || result;
-    const data = status.Data || {};
-    const user = data.UserPermission || {};
-    const codes = String(user.WebClientPermission || user.webClientPermission || '').split(',');
-    return {ready:response.ok && Number(status.ErrorCode) === 0 && !!user.WebClientPermission,
-      canCreate:codes.includes('623')};
+    return await (""" + _READ_PERMISSIONS + r""")();
   } catch (_) { return {ready:false}; }
 }"""
 
@@ -156,12 +167,8 @@ _PREPARE = r"""async args => {
   const require = window.__valeReq;
   if (typeof require !== 'function') throw new Error('O Web Client não carregou o módulo de visitantes.');
   const api = require(6337).A;
-  const status = await fetch('/ISAPI/Bumblebee/Platform/V1/Permission/Security/UserPermission?MT=GET', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body:'{}', credentials:'same-origin'
-  }).then(r=>r.json()).then(x=>x.ResponseStatus||x);
-  const user = status.Data?.UserPermission || {};
-  const permissions = String(user.WebClientPermission || user.webClientPermission || '').split(',');
-  if (Number(status.ErrorCode) !== 0 || !permissions.includes('623'))
+  const permissions = await (""" + _READ_PERMISSIONS + r""")();
+  if (!permissions.ready || !permissions.canCreate)
     throw new Error('A conta do Web Client não tem permissão para criar a reserva substituta. Nenhuma etapa foi iniciada.');
 
   let original = null;
@@ -183,7 +190,7 @@ _PREPARE = r"""async args => {
   if (!profile || String(profile.ID) !== String(args.visitor_id))
     throw new Error('Visitor Information não retornou o perfil selecionado.');
 
-  const oldBase = original.Visitor?.BaseInfo || {};
+  const oldBase = original?.Visitor?.BaseInfo || {};
   const base = profile.BaseInfo || {};
   if (original && String(base.VisitorGroupID || '') !== String(oldBase.VisitorGroupID || ''))
     throw new Error('Visitor Information e a reserva original retornaram grupos diferentes.');
@@ -224,16 +231,16 @@ _STORE_REQUEST = r"""async body => {
 
 _CREATE = r"""async () => {
   const api = window.__valeReq(6337).A;
-  const response = await api.batchAddAppointVisitor(window.__valePreparedAppointment);
-  const appointments = response?.Data?.AppointmentList?.Appointment;
+  const response = await api.addAppointVisitor(window.__valePreparedAppointment);
+  const appointments = response?.Data?.AppointmentRecordList?.AppointmentRecord;
   const rows = Array.isArray(appointments) ? appointments : appointments ? [appointments] : [];
-  if (rows.length !== 1 || Number(rows[0]?.ErrorInfo?.ErrorCode) !== 0)
+  if (Number(response?.ErrorCode) !== 0 || rows.length !== 1)
     throw new Error('O Web Client não confirmou a criação da reserva substituta. Confira Visitor Reservation antes de repetir.');
   const row = rows[0];
-  const result = {visitor_id:String(row.VisitorInfo?.ID || ''),
+  const result = {visitor_id:String(row.Visitor?.ID || ''),
     appointment_id:String(row.ID || ''), code:String(row.AppointCode || ''),
-    entry_at:String(row.VisitorInfo?.BaseInfo?.BeginDate || ''),
-    exit_at:String(row.VisitorInfo?.BaseInfo?.EndDate || '')};
+    entry_at:String(row.Visitor?.BaseInfo?.BeginDate || ''),
+    exit_at:String(row.Visitor?.BaseInfo?.EndDate || '')};
   if (!result.visitor_id || !result.appointment_id || !result.code)
     throw new Error('O Web Client respondeu sem confirmar o ID e o código da reserva. Consulte Visitor Reservation.');
   return result;
@@ -299,11 +306,12 @@ class BookingBridge(AbstractContextManager):
             except Exception:
                 pass
             __import__("time").sleep(1)
-        raise HikError("Entre no HikCentral na janela do Edge. Nenhuma etapa da troca foi iniciada.")
+        raise HikError("Entre no HikCentral na janela do Edge e abra Visitor > Visitor Reservation. "
+                       "Nenhuma etapa da troca foi iniciada.")
 
     def prepare(self, visitor_id, start, end, selected_levels, *, expected_booking_id=None,
                 first_name, last_name, remark, purpose_type=4, purpose_detail=""):
-        if not self._page or not self._page.url.startswith(self._origin):
+        if not self._page or not _same_origin(self._page.url, self._origin):
             raise HikError("A sessão autenticada do Web Client não está disponível.")
         args = {"visitor_id":str(visitor_id), "start":str(start), "end":str(end),
                 "levels":[{"id":str(x["id"]), "name":str(x["name"])} for x in selected_levels],

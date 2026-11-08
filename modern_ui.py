@@ -23,6 +23,8 @@ MUTED = "#687A95"
 LINE = "#E3EAF4"
 CYAN = "#22B9C6"
 GREEN = "#20B978"
+HISTORY_MODE_CHECKINS = "Histórico de check-ins"
+HISTORY_MODE_RESERVATIONS = "Reservas sem check-in"
 
 
 def _text(parent, value, *, size=13, color=INK, bold=False, **grid):
@@ -390,7 +392,7 @@ def update_history_loading(app, message, phase="passages"):
 
 
 def _history(app):
-    """Central check-ins from HikCentral, with explicit local offline fallback."""
+    """Central check-ins and reservations from HikCentral."""
     page = app.history_tab
     page.configure(style="Vale.Page.TFrame")
     background = ctk.CTkFrame(page, fg_color=BG, corner_radius=0)
@@ -399,12 +401,17 @@ def _history(app):
     inner.pack(fill="both", expand=True, padx=18, pady=18)
     heading = ctk.CTkFrame(inner, fg_color="transparent")
     heading.pack(fill="x", padx=17, pady=(18, 10))
-    _text(heading, "Histórico de check-ins", size=19, bold=True).pack(side="left")
+    _text(heading, "Cadastros e reservas", size=19, bold=True).pack(side="left")
+    app.history_mode = tk.StringVar(value=HISTORY_MODE_CHECKINS)
+    app.history_mode_box = ttk.Combobox(
+        heading, textvariable=app.history_mode, state="readonly", width=24,
+        values=(HISTORY_MODE_CHECKINS, HISTORY_MODE_RESERVATIONS))
+    app.history_mode_box.pack(side="right")
+    app.history_mode_box.bind("<<ComboboxSelected>>", lambda _event: app.history_mode_changed())
+    _text(heading, "Exibir", size=12).pack(side="right", padx=(0, 6))
     _text(inner,
-          "Esta lista consulta o histórico de visitas no HikCentral: um check-out pode continuar "
-          "aqui mesmo após excluir a pessoa em Visitor Information. Não indica cadastro ativo. "
-          "De/Até filtram o INÍCIO VÁLIDO e Nome restringe a busca às mesmas datas. "
-          "Cadastrado em é apenas informativo. Dê dois cliques para consultar os detalhes.",
+          "De/Até filtram o início da visita ou da reserva. O histórico inclui check-outs. "
+          "Selecione Reservas sem check-in para encontrar reservas ainda não registradas.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     app.history_loading_frame = ctk.CTkFrame(inner, fg_color="#E9F2FF", corner_radius=8)
     app.history_loading_label = ctk.CTkLabel(
@@ -481,7 +488,7 @@ def _history(app):
     # Todas as ações do visitante estão na janela aberta por duplo clique.
     # A consulta de passagens continua automática, sem botão redundante.
     app.history_double_click_hint = _text(
-        inner, "Dê dois cliques em um visitante para ver a foto, consultar os dados e corrigir o cadastro.",
+        inner, "Dê dois cliques em uma linha para consultar e editar a visita ou a reserva.",
         size=11, color=MUTED)
     app.history_double_click_hint.pack(anchor="w", padx=18, pady=(0, 13))
 
