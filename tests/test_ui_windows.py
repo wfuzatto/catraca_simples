@@ -505,8 +505,8 @@ def test_remote_editor_shows_photo_and_keeps_unverified_form_editable(monkeypatc
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Layout da lista necessita Tk no Windows")
-def test_history_table_has_validity_and_actual_passage_columns(monkeypatch):
-    """Sem HikCentral: coluna de validade nunca substitui passagem física."""
+def test_history_table_uses_reservation_dates_and_keeps_actual_passage_columns(monkeypatch):
+    """Datas exibidas vêm da reserva; passagem física continua nas colunas próprias."""
     import app
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
@@ -522,7 +522,7 @@ def test_history_table_has_validity_and_actual_passage_columns(monkeypatch):
             "checkin", "first_entry", "last_exit")
         titles = [root.history_table.heading(col)["text"] for col in columns]
         assert titles == [
-            "Cadastrado em", "Início válido", "Término válido",
+            "Cadastrado em", "Início da reserva", "Término da reserva",
             "Visitante", "Grupo", "Check-in", "Primeira entrada", "Última saída"]
         assert "Nível" not in titles and "Catracas" not in titles
         assert root.history_table.cget("xscrollcommand")
@@ -531,16 +531,26 @@ def test_history_table_has_validity_and_actual_passage_columns(monkeypatch):
             "visitor_id": "123", "registered_at": "2026-11-03T10:00:00-03:00",
             "entry_at": "2026-11-03T09:00:00-03:00",
             "exit_at": "2026-11-05T17:00:00-03:00",
+            "reservation_entry_at": "2026-11-04T09:00:00-03:00",
+            "reservation_exit_at": "2026-11-06T17:00:00-03:00",
             "first": "Ana", "last": "Teste", "group": "Hóspedes Vale",
             "checkin_state": "check-in efetuado",
             "first_entry_at": "2026-11-03T10:15:00-03:00",
             "last_exit_at": "2026-11-03T16:15:00-03:00",
+        }, {
+            "visitor_id": "456", "entry_at": "2026-11-03T09:00:00-03:00",
+            "exit_at": "2026-11-05T17:00:00-03:00",
+            "first": "Bruno", "last": "Teste", "group": "Hóspedes Vale",
         }], "Teste offline")
         values = root.history_table.item("0")["values"]
         assert len(values) == 8
-        assert values[2] == "05/11/2026 17:00:00"
+        assert values[1] == "04/11/2026 09:00:00"
+        assert values[2] == "06/11/2026 17:00:00"
         assert values[6] == "03/11/2026 10:15:00"
         assert values[7] == "03/11/2026 16:15:00"
+        assert root._history_records["0"]["entry_at"] == "2026-11-03T09:00:00-03:00"
+        unlinked_values = root.history_table.item("1")["values"]
+        assert unlinked_values[1:3] == ["—", "—"]
     finally:
         root.destroy()
 

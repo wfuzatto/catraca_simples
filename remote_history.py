@@ -581,6 +581,111 @@ def reservation_period_report(client, record, start_iso, end_iso):
         return {"state": "unavailable", "message": "Datas da reserva original não confirmadas pela consulta."}
 
 
+def enrich_checkins_with_reservation_periods(client, rows, local_rows, start_iso, end_iso):
+    """Attach live reservation dates to check-ins using the exact appointment link.
+
+    The check-in's visitStartTime/visitEndTime remain intact for editing and
+    passage lookup. Display dates come from the linked appointment record.
+    Local metadata is used only to recover an appointment ID when its
+    registration_record_id matches the exact remote check-in.
+    """
+    local_by_visitor = {str(row.get("visitor_id") or ""): row
+                        for row in local_rows if isinstance(row, dict)}
+    linked = []
+    target_ids = set()
+    bounds = []
+    for row in rows:
+        link = add_local_booking_reference(dict(row), local_by_visitor.get(str(row.get("visitor_id") or ""), {}))
+        aid = str(link.get("appointment_id") or link.get("_original_appointment_id") or "").strip()
+        if aid:
+            target_ids.add(aid)
+        linked.append((row, link, aid))
+        for field in ("entry_at", "exit_at", "reservation_entry_at", "reservation_exit_at"):
+            try:
+                value = datetime.fromisoformat(str(link.get(field) or ""))
+                if value.tzinfo is not None:
+                    bounds.append(value)
+            except (TypeError, ValueError):
+                pass
+
+    appointments = {}
+    query_error = False
+    if target_ids:
+        try:
+            target_visitors = {aid: str(link.get("visitor_id") or "")
+                               for _row, link, aid in linked if aid}
+            target_visitor_ids = set(target_visitors.values())
+            query_start = min([datetime.fromisoformat(start_iso), *bounds]) - timedelta(days=1)
+            query_end = max([datetime.fromisoformat(end_iso), *bounds]) + timedelta(days=1)
+            for page in range(1, 11):
+                params = {
+                    "pageNo": page, "pageSize": 100, "appointState": -1,
+                    "appointStartTime": query_start.isoformat(timespec="seconds"),
+                    "appointEndTime": query_end.isoformat(timespec="seconds"),
+                    "sortField": "VisitingTime", "orderType": 1,
+                }
+                data = client.post(APPOINTMENTS_PATH, params).get("data") or {}
+                if not isinstance(data, dict):
+                    raise HikError("A consulta de reservas não retornou dados legíveis.")
+                items = data.get("list")
+                try:
+                    total = int(data["total"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise HikError("A consulta de reservas não retornou o total de registros.") from exc
+                if items is None and total == 0:
+                    items = []
+                if not isinstance(items, list):
+                    raise HikError("A consulta de reservas não retornou uma lista válida.")
+                for appointment in items:
+                    if not isinstance(appointment, dict):
+                        continue
+                    info = appointment.get("visitorInfo") or appointment.get("VisitorInfo") or {}
+                    if not isinstance(info, dict):
+                        continue
+                    visitor_id = str(info.get("visitorId") or "")
+                    if visitor_id not in target_visitor_ids:
+                        continue
+                    aid = original_appointment_identifier(appointment)
+                    if aid not in target_ids or target_visitors.get(aid) != visitor_id:
+                        continue
+                    if aid in appointments and appointments[aid] != appointment:
+                        raise HikError("A mesma reserva retornou dados divergentes.")
+                    appointments[aid] = appointment
+                if target_ids.issubset(appointments):
+                    break
+                if not items or len(items) < 100 or page * 100 >= total:
+                    break
+        except (HikError, TypeError, ValueError, KeyError):
+            query_error = True
+
+    for row, link, aid in linked:
+        appointment = appointments.get(aid) if aid else None
+        if appointment:
+            info = appointment.get("visitorInfo") or appointment.get("VisitorInfo") or {}
+            if str(info.get("visitorId") or "") != str(row.get("visitor_id") or ""):
+                appointment = None
+        if not appointment and aid:
+            try:
+                appointment = find_original_appointment(client, link)
+            except (HikError, ValueError, TypeError, KeyError):
+                appointment = None
+        period = None
+        if appointment:
+            try:
+                period = compare_reservation_period(appointment, row.get("entry_at"), row.get("exit_at"))
+            except (ValueError, TypeError, KeyError):
+                period = None
+        if period:
+            row.update(reservation_entry_at=period["entry_at"],
+                       reservation_exit_at=period["exit_at"], reservation_code=period["code"],
+                       appointment_id=period["appointment_id"], _reservation_period=period)
+        else:
+            row.update(reservation_entry_at="", reservation_exit_at="", reservation_code="",
+                       _reservation_period={"state": "unavailable"},
+                       _reservation_lookup_error=bool(query_error or aid))
+    return rows
+
+
 def reservation_period_notice(period, start_iso, end_iso):
     """User-facing dates with their actual source, including a real mismatch."""
     if not isinstance(period, dict) or not period.get("state"):

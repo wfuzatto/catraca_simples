@@ -1,6 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.62` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.63` (prévia técnica para testes).
+
+No **Histórico de check-ins**, as colunas **Início da reserva** e **Término da reserva** são consultadas diretamente em Visitor Reservation e associadas pelo ID da reserva. O status e as passagens continuam vinculados ao check-in. Se a API não confirmar um vínculo exato, as datas da reserva aparecem como “—”.
 
 Em **Cadastros efetuados**, escolha **Reservas sem check-in** para buscar e corrigir datas e apartamento de reservas pendentes. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**. Na troca de datas, entre no Edge e abra **Visitor > Visitor Reservation** para concluir a substituição para o mesmo visitante.
 

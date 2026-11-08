@@ -30,6 +30,7 @@ from visitor_history import list_history, save_registration, set_history_status,
 from remote_history import (search_window, fetch_checkins, visitor_details,
                             fetch_unchecked_reservations, fetch_visitor_photo, history_time,
                             enrich_checkins_with_appointment_levels,
+                            enrich_checkins_with_reservation_periods,
                             resolve_remote_edit_record, filter_local_history_by_entry_date,
                             add_local_booking_reference)
 from access_passages import fetch_visitor_passages, load_reader_directions
@@ -845,8 +846,8 @@ class ValeApp(tk.Tk):
             self._history_records[key] = record
             self.history_table.insert("", "end", iid=key, values=(
                 history_time(record.get("registered_at")),
-                history_time(record.get("entry_at")),
-                history_time(record.get("exit_at")),
+                history_time(record.get("reservation_entry_at")),
+                history_time(record.get("reservation_exit_at")),
                 " ".join(filter(None, (record.get("first"), record.get("last")))),
                 record.get("group", ""),
                 record.get("checkin_state", "não verificado"),
@@ -1036,9 +1037,10 @@ class ValeApp(tk.Tk):
         selected_mode = mode.get() if mode is not None else ""
         reservation_only = selected_mode == modern_ui.HISTORY_MODE_RESERVATIONS
         try:
-            local_rows = [] if reservation_only else list_history()
+            local_source_rows = [] if reservation_only else list_history()
         except Exception:
-            local_rows = []
+            local_source_rows = []
+        local_rows = list(local_source_rows)
         if self.busy:
             self.history_status.set("Operação em andamento; clique em Buscar ao terminar.")
             return
@@ -1050,8 +1052,8 @@ class ValeApp(tk.Tk):
             page_size = int(self.history_page_size.get())
             if page_size not in (10, 50, 100, 200, 500):
                 raise ValueError("Quantidade de cadastros por página inválida.")
-            # Offline, filtrar pelo INÍCIO VÁLIDO e nome; o horário de
-            # cadastro não participa da busca. Não inventar datas ausentes.
+            # Histórico local sem conexão é filtrado pelo início do check-in;
+            # o horário de cadastro não participa da busca. Não inventar datas.
             local_rows = filter_local_history_by_entry_date(
                 local_rows, start_iso, end_iso, name)
         except Exception as exc:
@@ -1073,7 +1075,11 @@ class ValeApp(tk.Tk):
         def work():
             client = self.client()
             fetch = fetch_unchecked_reservations if reservation_only else fetch_checkins
-            return fetch(client, start_iso, end_iso, page, name, page_size=page_size)
+            result = fetch(client, start_iso, end_iso, page, name, page_size=page_size)
+            if not reservation_only:
+                result["rows"] = enrich_checkins_with_reservation_periods(
+                    client, result["rows"], local_source_rows, start_iso, end_iso)
+            return result
 
         def finish(result, error):
             modern_ui.stop_history_loading(self, phase="records")
@@ -1090,12 +1096,14 @@ class ValeApp(tk.Tk):
                 self.history_page_label.set("Consulta central indisponível")
                 return
             # Defesa adicional: a OpenAPI pode devolver também visitas que
-            # se sobrepõem ao intervalo. O filtro visível é SOMENTE a data
-            # de INÍCIO VÁLIDO, e também exige correspondência do nome.
+            # se sobrepõem ao intervalo. No histórico, o filtro usa o início
+            # do check-in, mesmo que as datas exibidas venham da reserva.
             # Isso impede mostrar a visita de 06/11 numa pesquisa 05/11.
             verified_rows = filter_local_history_by_entry_date(
                 result["rows"], start_iso, end_iso, name)
             excluded = len(result["rows"]) - len(verified_rows)
+            without_booking = sum(not row.get("reservation_entry_at") or not row.get("reservation_exit_at")
+                                  for row in verified_rows)
             local_index = {r["visitor_id"]: r for r in local_rows}
             rows = []
             for remote in verified_rows:
@@ -1134,12 +1142,14 @@ class ValeApp(tk.Tk):
                     row["state"] = local.get("state", "não verificada")
                 rows.append(row)
             row_type = "reservas sem check-in" if reservation_only else "check-ins"
+            filtered_by = "início da reserva" if reservation_only else "início do check-in"
             description = (
-                f"HikCentral: {len(rows)} {row_type} nesta página após filtro de "
-                "início válido e nome. "
+                f"HikCentral: {len(rows)} {row_type} nesta página após filtro pelo "
+                f"{filtered_by} e nome. As datas da tabela vêm da reserva vinculada. "
                 f"API retornou {result['total']} registro(s) antes da conferência local."
                 + (f" {excluded} registro(s) fora da seleção descartado(s) "
-                   "nesta página." if excluded else ""))
+                   "nesta página." if excluded else "")
+                + (f" {without_booking} linha(s) sem reserva vinculada confirmada." if without_booking else ""))
             self._show_history_rows(rows, description)
             # Somente visitas confirmadas no período entram na consulta ACS.
             if not reservation_only:
