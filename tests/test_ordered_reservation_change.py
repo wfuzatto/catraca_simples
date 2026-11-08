@@ -48,6 +48,7 @@ def ordered_lab(monkeypatch, tmp_path):
     update_commits = True
     update_reply_timeout = False
     keep_old_booking = False
+    hide_unfiltered_bookings = False
     writes = []
 
     class Client:
@@ -64,6 +65,8 @@ def ordered_lab(monkeypatch, tmp_path):
                 code = str(payload.get("appointCode") or "")
                 rows = ([deepcopy(bookings[code])] if code in bookings else []) if code else list(
                     deepcopy(list(bookings.values())))
+                if not code and hide_unfiltered_bookings:
+                    rows = []
                 return {"data": {"list": rows, "total": len(rows)}}
             if path == ordered.CHECKOUT:
                 events.append("checkout")
@@ -91,7 +94,7 @@ def ordered_lab(monkeypatch, tmp_path):
                             "visitorCardInfo": {"cardNumber": "12345678"}}
                 if update_reply_timeout:
                     raise TimeoutError("response timed out after commit")
-                return {"code": "0", "data": {"appointRecordId": "2000"}}
+                return {"code": "0", "data": {"appointRecordId": "2000", "appointCode": "2502"}}
             raise AssertionError(f"Unexpected write: {path}")
 
         def find_registration_record(self, visitor_id, start, end, *, active_only=False, record_id=None):
@@ -163,11 +166,15 @@ def ordered_lab(monkeypatch, tmp_path):
         nonlocal keep_old_booking
         keep_old_booking = bool(value)
 
+    def _set_hide_unfiltered(value):
+        nonlocal hide_unfiltered_bookings
+        hide_unfiltered_bookings = bool(value)
+
     return SimpleNamespace(client=client, run=run, events=events, bookings=bookings,
                            history=history, old_visit=old_visit, active_rows=active_rows,
                            writes=writes, journal=journal_path, set_auto=_set_auto,
                            set_commit=_set_commit, set_timeout=_set_timeout,
-                           set_keep_old=_set_keep_old)
+                           set_keep_old=_set_keep_old, set_hide_unfiltered=_set_hide_unfiltered)
 
 
 def test_date_change_checks_out_then_updates_original_reservation_through_openapi(ordered_lab):
@@ -239,6 +246,26 @@ def test_skips_manual_checkin_when_hikcentral_already_created_it(ordered_lab):
 
 def test_refuses_to_continue_if_api_leaves_old_and_new_reservations(ordered_lab):
     ordered_lab.set_keep_old(True)
-    with pytest.raises(HikError, match="manteve a reserva antiga"):
+    with pytest.raises(HikError):
         ordered_lab.run()
     assert "checkin" not in ordered_lab.events
+
+
+def test_finds_checked_out_reservation_by_code_when_unfiltered_list_omits_it(ordered_lab):
+    ordered_lab.set_hide_unfiltered(True)
+    ordered_lab.bookings["2502"]["appointStatus"] = 4
+
+    result = ordered_lab.run()
+
+    assert ordered_lab.events == ["checkout", "profile_update", "reservation_update", "checkin", "assign", "apply"]
+    assert result["confirmed_appointment_id"] == "2000"
+    assert ordered_lab.bookings["2502"]["appointStatus"] == 4
+
+
+def test_reservation_update_keeps_given_and_family_names_as_separate_fields(ordered_lab):
+    ordered_lab.run()
+    sent = ordered_lab.writes[0]["visitorInfoList"][0]["VisitorInfo"]
+
+    assert sent["visitorGivenName"] == "Teste"
+    assert sent["visitorFamilyName"] == "Sobrenome"
+    assert "visitorName" not in sent

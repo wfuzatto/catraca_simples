@@ -780,3 +780,22 @@ def test_reserved_only_search_uses_appointment_endpoint_and_keeps_no_checkin():
     assert params["appointState"] == 0 and params["visitorName"] == "Maria"
     assert params["appointStartTime"] == start and params["appointEndTime"] == end
     assert params["pageNo"] == 1 and params["pageSize"] == 10
+
+
+def test_reservation_display_uses_given_and_family_names_when_server_joins_them():
+    from remote_history import _normalize_unchecked_reservation
+
+    appointment = {
+        "appointID": "774457976919425024", "appointCode": "8738", "appointStatus": "0",
+        "appointStartTime": "2026-11-07T00:00:00-03:00",
+        "appointEndTime": "2026-11-09T23:59:59-03:00",
+        "visitorInfo": {
+            "visitorId": "1923", "visitorGivenName": "WESLEYN1",
+            "visitorFamilyName": "TESTE2", "visitorName": "WESLEYN1TESTE2",
+        },
+    }
+
+    row = _normalize_unchecked_reservation(appointment)
+
+    assert (row["first"], row["last"]) == ("WESLEYN1", "TESTE2")
+    assert row["full_name"] == "WESLEYN1 TESTE2"

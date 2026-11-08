@@ -15,7 +15,7 @@ from remote_history import (
     APPOINTMENTS_PATH, compare_reservation_period, fetch_visitor_photo,
     find_original_appointment, original_appointment_identifier, parse_access_levels, visitor_details,
 )
-from reservation_replacement import _booking_by_code, _confirm_new_booking
+from reservation_replacement import _booking_by_code
 from visitor_edit_transaction import _confirmed_edit
 from visitor_history import save_registration
 from visitor_profile import same_photo
@@ -111,7 +111,39 @@ def _booking_at_period(client, visitor_id, start, end):
     return next(iter(matches.values()), None)
 
 
+def _booking_by_code_at_period(client, code, visitor_id, start, end):
+    """Use the stable reservation code to read a reservation across its states.
+
+    This HikCentral installation omits checked-out/registered reservations from
+    the unfiltered appointment list even though a lookup by reservation code
+    returns them. The code is confirmed against the visitor ID and exact period.
+    """
+    code = _id(code)
+    if not code:
+        return None
+    row = _booking_by_code(client, code, start, end, visitor_id)
+    if not row:
+        return None
+    try:
+        if compare_reservation_period(row, start, end)["state"] == "matched":
+            return row
+    except (TypeError, ValueError, KeyError) as exc:
+        raise HikError("A reserva localizada pelo código retornou datas inválidas.") from exc
+    return None
+
+
 def _confirm_original_period_moved(client, plan):
+    old = _booking_by_code(client, plan["old_code"], plan["old_booking_entry"],
+                           plan["old_booking_exit"], plan["visitor_id"])
+    if old:
+        try:
+            still_old = compare_reservation_period(
+                old, plan["old_booking_entry"], plan["old_booking_exit"])["state"] == "matched"
+        except (TypeError, ValueError, KeyError) as exc:
+            raise HikError("A conferência da reserva anterior retornou datas inválidas.") from exc
+        if still_old:
+            raise HikError("O HikCentral mostrou as novas datas, mas também manteve a reserva antiga. "
+                           "A edição foi interrompida para evitar reservas duplicadas.")
     old = _booking_at_period(client, plan["visitor_id"],
                              plan["old_booking_entry"], plan["old_booking_exit"])
     if old:
@@ -334,7 +366,8 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
     if plan["stage"] in {"profile_updated", "update_inflight"}:
         if str(_old_visit(client, plan)["visitorStatus"]) not in CLOSED_STATES:
             raise HikError("A visita anterior ainda está ativa; a reserva não foi alterada.")
-        updated = _booking_at_period(client, vid, start, end)
+        target_code = _id(plan.get("new_code") or plan["old_code"])
+        updated = _booking_by_code_at_period(client, target_code, vid, start, end)
         if updated:
             if plan["stage"] != "update_inflight":
                 raise HikError("Já existe uma reserva nas novas datas. Confira no HikCentral antes de continuar.")
@@ -344,49 +377,77 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
                 if parse_access_levels(updated) != [level]:
                     raise HikError("A reserva encontrada nas novas datas tem outro nível de acesso.")
                 plan["new_id"] = observed_id
-                plan["new_code"] = _id(updated.get("appointCode"))
+                plan["new_code"] = _id(updated.get("appointCode")) or target_code
                 body = _reservation_update_body(client, updated, payload, vid, level)
                 save("update_inflight", new_id=plan["new_id"], new_code=plan["new_code"],
                      update_attempts=int(plan.get("update_attempts") or 0) + 1)
-                _, failure = _write_once(lambda: client.post(UPDATE_BOOKING, body))
-                updated = _booking_at_period(client, vid, start, end)
+                update_reply, failure = _write_once(lambda: client.post(UPDATE_BOOKING, body))
+                reply_data = (update_reply.get("data") or {}) if isinstance(update_reply, dict) else {}
+                response_id = _id(reply_data.get("appointRecordId")) if isinstance(reply_data, dict) else ""
+                response_code = _id(reply_data.get("appointCode")) if isinstance(reply_data, dict) else ""
+                target_code = response_code or plan["new_code"]
+                save("update_inflight", new_id=response_id, new_code=target_code,
+                     update_attempts=int(plan.get("update_attempts") or 0) + 1)
+                updated = _booking_by_code_at_period(client, target_code, vid, start, end)
                 if not updated:
                     raise HikError("A API não confirmou os campos da reserva atualizada; confira antes de repetir.") from failure
+                observed_id = original_appointment_identifier(updated)
+                if response_id and response_id != observed_id:
+                    raise HikError("O ID de reserva devolvido pela API difere da reserva consultada.")
+                plan["new_id"] = observed_id
+                plan["new_code"] = _id(updated.get("appointCode")) or target_code
                 if not _reservation_matches_request(updated, payload, vid):
                     raise HikError("O HikCentral ainda não confirmou o nome, sobrenome e apartamento informados.")
             plan["new_id"] = original_appointment_identifier(updated)
             plan["new_code"] = _id(updated.get("appointCode"))
             if not re.fullmatch(r"\d{1,64}", plan["new_id"]) or not re.fullmatch(r"\d{1,8}", plan["new_code"]):
                 raise HikError("O HikCentral não retornou IDs válidos para a reserva atualizada.")
-            _confirm_new_booking(client, updated, start, end, [level])
+            _confirm_updated_booking(client, updated, start, end, [level])
             save("updated")
         else:
-            old = _booking_at_period(client, vid, plan["old_booking_entry"], plan["old_booking_exit"])
+            old = _booking_by_code_at_period(
+                client, plan["old_code"], vid,
+                plan["old_booking_entry"], plan["old_booking_exit"])
             if not old or original_appointment_identifier(old) != plan["old_id"]:
                 raise HikError("A API não confirmou nem a reserva antiga nem as novas datas. Confira no HikCentral.") from failure
             body = _reservation_update_body(client, old, payload, vid, level)
             save("update_inflight", update_attempts=int(plan.get("update_attempts") or 0) + 1)
-            _, failure = _write_once(lambda: client.post(UPDATE_BOOKING, body))
-            updated = _booking_at_period(client, vid, start, end)
+            update_reply, failure = _write_once(lambda: client.post(UPDATE_BOOKING, body))
+            reply_data = (update_reply.get("data") or {}) if isinstance(update_reply, dict) else {}
+            response_id = _id(reply_data.get("appointRecordId")) if isinstance(reply_data, dict) else ""
+            response_code = _id(reply_data.get("appointCode")) if isinstance(reply_data, dict) else ""
+            new_code = response_code or plan["old_code"]
+            save("update_inflight", new_id=response_id, new_code=new_code,
+                 update_attempts=int(plan.get("update_attempts") or 0) + 1)
+            updated = _booking_by_code_at_period(client, new_code, vid, start, end)
             if not updated:
-                raise HikError("O HikCentral ainda não confirmou a atualização da reserva pela API. "
-                               "A reserva original foi preservada; tente salvar novamente.") from failure
+                old_after = _booking_by_code_at_period(
+                    client, plan["old_code"], vid,
+                    plan["old_booking_entry"], plan["old_booking_exit"])
+                if old_after and original_appointment_identifier(old_after) == plan["old_id"]:
+                    raise HikError("O HikCentral ainda não confirmou a atualização da reserva pela API. "
+                                   "A reserva original foi preservada; tente salvar novamente.") from failure
+                raise HikError("A API não confirmou a reserva antiga nem as novas datas. Confira no HikCentral.") from failure
             _confirm_original_period_moved(client, plan)
-            plan["new_id"] = original_appointment_identifier(updated)
-            plan["new_code"] = _id(updated.get("appointCode"))
+            observed_id = original_appointment_identifier(updated)
+            if response_id and response_id != observed_id:
+                raise HikError("O ID de reserva devolvido pela API difere da reserva consultada.")
+            plan["new_id"] = observed_id
+            plan["new_code"] = _id(updated.get("appointCode")) or new_code
             if not _reservation_matches_request(updated, payload, vid):
                 save("update_inflight", new_id=plan["new_id"], new_code=plan["new_code"])
                 raise HikError("A reserva foi atualizada, mas a API ainda não confirmou nome, sobrenome e apartamento.") from failure
             if not re.fullmatch(r"\d{1,64}", plan["new_id"]) or not re.fullmatch(r"\d{1,8}", plan["new_code"]):
                 raise HikError("O HikCentral não retornou IDs válidos para a reserva atualizada.")
-            _confirm_new_booking(client, updated, start, end, [level])
+            _confirm_updated_booking(client, updated, start, end, [level])
             save("updated")
 
-    updated = _booking_at_period(client, vid, start, end)
+    updated = _booking_by_code_at_period(
+        client, _id(plan.get("new_code") or plan["old_code"]), vid, start, end)
     if not updated or original_appointment_identifier(updated) != plan.get("new_id"):
         raise HikError("A reserva atualizada não apareceu na conferência OpenAPI.")
     _confirm_original_period_moved(client, plan)
-    period = _confirm_new_booking(client, updated, start, end, [level])
+    period = _confirm_updated_booking(client, updated, start, end, [level])
     active = client.find_registration_record(vid, start, end, active_only=True)
     if plan["stage"] == "updated" and active:
         save("checked_in", new_checkin=_id(active.get("recordId")), automatic_checkin=True)
@@ -458,3 +519,18 @@ def _old_booking(client, plan, *, require=False):
     if require and not old:
         raise HikError("A reserva anterior não foi encontrada para confirmar a alteração.")
     return old
+
+
+def _confirm_updated_booking(client, booking, start, end, levels):
+    """Confirm an edited existing reservation, including HikCentral's state 4."""
+    period = compare_reservation_period(booking, start, end)
+    if period["state"] != "matched" or parse_access_levels(booking) != levels:
+        raise EditorFieldError({"replacement_code": "Confira as datas e o nível original na reserva atualizada."})
+    flow = booking.get("approvalFlowCode")
+    if flow:
+        approval = client.post(
+            "/artemis/api/visitor/v1/visitorApprovalFlow/details",
+            {"approvalFlowCode": str(flow)}).get("data") or {}
+        if str(approval.get("status")) != "1":
+            raise EditorFieldError({"replacement_code": "Aguarde a aprovação da reserva atualizada no HikCentral."})
+    return period
