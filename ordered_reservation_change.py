@@ -255,7 +255,7 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
     if journal.exists():
         try:
             plan = json.loads(journal.read_text(encoding="utf-8"))
-        if plan.get("stage") in LEGACY_DESTRUCTIVE_STAGES:
+            if plan.get("stage") in LEGACY_DESTRUCTIVE_STAGES:
                 raise HikError("Há uma tentativa antiga de excluir/recriar esta reserva. Confira o vínculo no HikCentral antes de continuar.")
             valid = (all(plan.get(key) == value for key, value in scope.items())
                      and plan.get("stage") in STAGES
