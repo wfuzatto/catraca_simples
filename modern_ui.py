@@ -410,7 +410,7 @@ def _history(app):
     app.history_mode_box.bind("<<ComboboxSelected>>", lambda _event: app.history_mode_changed())
     _text(heading, "Exibir", size=12).pack(side="right", padx=(0, 6))
     _text(inner,
-          "De/Até filtram o início da visita ou da reserva. O histórico inclui check-outs. "
+          "De/Até filtram o início da visita ou da reserva. No histórico, as colunas de datas vêm da reserva vinculada; o status continua vindo do check-in. Inclui check-outs. "
           "Selecione Reservas sem check-in para encontrar reservas ainda não registradas.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     app.history_loading_frame = ctk.CTkFrame(inner, fg_color="#E9F2FF", corner_radius=8)
@@ -455,8 +455,8 @@ def _history(app):
               "checkin", "first_entry", "last_exit")
     app.history_table = ttk.Treeview(table_area, columns=fields, show="headings", selectmode="browse")
     for key, label, width in (
-        ("registered", "Cadastrado em", 156), ("start", "Início válido", 155),
-        ("end", "Término válido", 155), ("name", "Visitante", 190),
+        ("registered", "Cadastrado em", 156), ("start", "Início da reserva", 155),
+        ("end", "Término da reserva", 155), ("name", "Visitante", 190),
         ("group", "Grupo", 128), ("checkin", "Check-in", 124),
         ("first_entry", "Primeira entrada", 159), ("last_exit", "Última saída", 159)):
         app.history_table.heading(key, text=label)

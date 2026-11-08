@@ -590,6 +590,58 @@ def test_checkin_link_and_local_reference_preserve_the_selected_visit():
     assert recovered["appointment_id"] == "999" and recovered["reservation_code"] == "1234"
 
 
+def test_checkin_history_enrichment_reads_period_from_exact_reservation():
+    from remote_history import APPOINTMENTS_PATH, enrich_checkins_with_reservation_periods
+
+    checkin_source = example_record(visitor="1780", record="checkin-1780")
+    checkin_source["visitorBaseInfo"].update(
+        fullName="Wesley1 Nascimento2",
+        visitStartTime="2026-11-07T00:00:00-03:00",
+        visitEndTime="2026-11-08T23:59:59-03:00")
+    checkin = normalize_checkin(checkin_source)
+    booking = {
+        "appointID": "booking-8738", "appointCode": "8738", "appointStatus": "3",
+        "appointStartTime": "2026-11-07T00:00:00-03:00",
+        "appointEndTime": "2026-11-09T23:59:59-03:00",
+        "visitorInfo": {"visitorId": "1780", "visitorName": "Wesley1 Nascimento2"},
+    }
+    client = FakeClient({"data": {"list": [booking], "total": 1}})
+
+    result = enrich_checkins_with_reservation_periods(
+        client, [checkin], [{
+            "visitor_id": "1780", "registration_record_id": "checkin-1780",
+            "appointment_id": "booking-8738",
+        }], "2026-11-07T00:00:00-03:00", "2026-11-09T00:00:00-03:00")
+
+    assert result[0]["entry_at"] == "2026-11-07T00:00:00-03:00"
+    assert result[0]["exit_at"] == "2026-11-08T23:59:59-03:00"
+    assert result[0]["reservation_entry_at"] == "2026-11-07T00:00:00-03:00"
+    assert result[0]["reservation_exit_at"] == "2026-11-09T23:59:59-03:00"
+    assert result[0]["reservation_code"] == "8738"
+    assert client.calls[0][0] == APPOINTMENTS_PATH
+    assert client.calls[0][1]["appointState"] == -1
+
+
+def test_checkin_history_does_not_guess_reservation_without_exact_link():
+    from remote_history import enrich_checkins_with_reservation_periods
+
+    checkin_source = example_record(visitor="1780", record="checkin-1780")
+    checkin_source["visitorBaseInfo"].update(
+        visitStartTime="2026-11-07T00:00:00-03:00",
+        visitEndTime="2026-11-08T23:59:59-03:00")
+    checkin = normalize_checkin(checkin_source)
+    client = FakeClient({"data": {"list": [], "total": 0}})
+
+    result = enrich_checkins_with_reservation_periods(
+        client, [checkin], [], "2026-11-07T00:00:00-03:00",
+        "2026-11-09T00:00:00-03:00")
+
+    assert result[0]["reservation_entry_at"] == ""
+    assert result[0]["reservation_exit_at"] == ""
+    assert result[0]["_reservation_period"]["state"] == "unavailable"
+    assert client.calls == []
+
+
 def _test_appointment(aid, vid, *, status=0, code="6650"):
     return {"appointID": aid, "appointCode": code, "appointStatus": status,
             "appointStartTime": "2026-11-02T12:57:00-03:00",
