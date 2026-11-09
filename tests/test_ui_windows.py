@@ -1585,6 +1585,10 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch, check
     checkins = []
     monkeypatch.setattr(visitor_profile, "update_profile",
                         lambda *args, **kwargs: calls.append((args, kwargs)) or ["nome e sobrenome"])
+    # UI-only fake omits the Person/Visitor group APIs. The full
+    # last-write group checks have independent backend simulation tests.
+    monkeypatch.setattr(visitor_profile, "confirm_visitor_group_after_edit",
+                        lambda client, vid, group: group)
     # Este teste cobre campos/layout e não as duas APIs reais de credenciais.
     # Os casos de Person/Visitor em desacordo são testados separadamente.
     monkeypatch.setattr(credential_management, "ensure_issued_card",
