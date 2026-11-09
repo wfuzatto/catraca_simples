@@ -601,7 +601,8 @@ def test_history_has_two_separate_cell_edit_actions(monkeypatch):
         root.update()
         assert root.history_table.bind("<Button-1>")
         hint = root.history_cell_action_hint.cget("text").casefold()
-        assert "datas e apartamento" in hint and "visitor information" in hint
+        assert "somente as datas" in hint and "visitor information" in hint
+        assert "apartamento/remark" in hint
         assert "foto e pulseira" in hint
         for old_button in (
             "history_verify_button", "history_resend_button",
