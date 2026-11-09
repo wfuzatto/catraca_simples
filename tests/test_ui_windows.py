@@ -722,6 +722,8 @@ def test_clicking_checkin_reservation_dates_uses_the_separate_reservation_editor
     }
     try:
         root.update()
+        root.book.select(root.history_tab)
+        root.update()
         root._show_history_rows([record], "")
         root.edit_history_reservation = lambda selected: opened.append(selected)
         for column in ("#2", "#3"):
