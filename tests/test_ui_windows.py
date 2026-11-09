@@ -1673,6 +1673,9 @@ def test_registered_reservation_editor_shows_only_dates_and_preserves_profile_da
         assert visitor.reservation == "Apto 123"
         assert not popup.winfo_exists()
     finally:
+        # Let CTkScrollbar finish pending canvas draws before the Tcl root closes.
+        root.update_idletasks()
+        root.update()
         root.destroy()
 
 
