@@ -65,7 +65,7 @@ def read_card_credential(client, visitor_id: str) -> CardReadback:
     if not isinstance(info, dict) or str(info.get("visitorId") or "") != visitor_id:
         raise HikError("Visitor Info retornou identidade divergente.")
     return CardReadback(
-        person_card=_cards(person),
+        person_card=_cards(person, required=False) or (),
         visitor_card=_cards(info, required=False),
         visitor_id=visitor_id)
 
