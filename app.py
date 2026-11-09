@@ -23,7 +23,6 @@ from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_se
                   mark_assigned, mark_card_confirmed, mark_registered, clear_pending,
                   save_last_delivery, load_last_delivery)
 from devices import list_readers, read_uid, to_card_number
-from credential_management import ensure_issued_card
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
 from settings_auth import verify_settings_password
 import modern_ui
@@ -37,7 +36,7 @@ from remote_history import (search_window, visitor_details,
 from access_passages import fetch_visitor_passages, load_reader_directions
 from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
 from registration_recovery import (seal_registration_context, open_registration_context,
-                                   restore_pending_credentials, ensure_checkin_card)
+                                   restore_pending_credentials)
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
