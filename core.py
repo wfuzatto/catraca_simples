@@ -642,8 +642,8 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
     path = (base or app_dir()) / "pending.json"
     if not expect_face and not expect_card:
         raise ValueError("Informe reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
+    old = load_pending(base) if path.exists() else None
     if path.exists():
-        old = load_pending(base)
         if not (isinstance(old, dict) and old.get("stage") == "appointment_inflight"):
             raise RuntimeError("Há cadastro pendente. Confira o cadastro anterior antes de criar outro.")
     data = {
