@@ -14,7 +14,7 @@ from PIL import Image, ImageTk
 from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   initial_visitor_group, validate_visitor_group_selection, validate_valid_times,
                   visitor_levels_for_group, verify_visitor_access_plan,
-                  mark_appointment_inflight,
+                  mark_appointment_inflight, mark_checkin_started,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   prepare_face_jpeg, face_cover_preview, normalize_ticket_start, default_ticket_start,
                   validate_ticket_period, require_confirmed_daily_schedule,
@@ -35,6 +35,8 @@ from remote_history import (search_window, visitor_details,
                             add_local_booking_reference)
 from access_passages import fetch_visitor_passages, load_reader_directions
 from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
+from registration_recovery import (seal_registration_context, open_registration_context,
+                                   restore_pending_credentials, ensure_checkin_card)
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -642,9 +644,23 @@ class ValeApp(tk.Tk):
         self.status.set("Aproxime a pulseira do leitor NFC.")
         self.task(work, finish)
 
+    def _clear_registration_after_success(self):
+        """Limpa o formulário somente após cadastro/reconciliação confirmada."""
+        for var in (self.first, self.last, self.card, self.reservation):
+            var.set("")
+        self.uid.set("UID não lido")
+        preferred = self.settings.get("preferred_group", "")
+        self.group.set(
+            preferred if preferred in self.connected_groups
+            else (self.connected_groups[0] if not preferred and self.connected_groups else ""))
+        self.photo_data, self.preview = b"", None
+        self.photo_widget.configure(image="", text="SEM FOTO")
+        self._reset_registration_period_after_success()
+
     def register(self):
         if load_pending():
-            self.show_pending_recovery()
+            self.status.set("Há uma operação anterior; tentando concluir sem criar outra reserva...")
+            self._auto_resume_pending()
             return
         if not self.verified:
             messagebox.showwarning("Verificação", "Aguardando a sincronização automática do HikCentral.")
@@ -726,9 +742,13 @@ class ValeApp(tk.Tk):
 
             def work():
                 client = self.client()
-                # Falha fechada: se o POST for aceito mas a resposta se perder,
-                # a recepção terá de conciliar a reserva antes de reenviá-la.
-                mark_appointment_inflight()
+                # Salvar contexto cifrado com DPAPI ANTES do primeiro POST.
+                # Permite recuperar pulseira, grupo e foto sem pedir CONFERIDO
+                # nem criar outra reserva em caso de erro ou reinicialização.
+                context = seal_registration_context(
+                    first=obj.first_name, last=obj.last_name, group=group,
+                    card=obj.card_number, photo=obj.photo_jpeg)
+                mark_appointment_inflight(encrypted_context=context)
                 appointment_id, visitor_id = client.create_appointment(payload, selected)
                 # Checkpoint immediately after the reservation to prevent duplicates.
                 access_ids = [level["id"] for level in selected]
@@ -758,7 +778,17 @@ class ValeApp(tk.Tk):
                     save_registration(history)
                 except Exception:
                     pass  # Local history must never cause the reservation to be sent again.
+                from visitor_profile import confirm_checkin_card, update_profile
+                card = obj.card_number.strip() if expect_card else ""
+                # A reserva pode criar uma pulseira virtual e grupo genérico.
+                # Corrigir e reler o perfil ANTES do check-in, que usará estes
+                # dados, sem pedir confirmação manual durante o atendimento.
+                update_profile(client, visitor_id, obj.first_name, obj.last_name,
+                               card=card, group=group, new_photo=obj.photo_jpeg)
+                if not checkin_requested and expect_card:
+                    mark_card_confirmed(visitor_id)
                 if checkin_requested:
+                    mark_checkin_started()
                     registration_record_id = client.register_visitor(payload, selected,
                                                                       appointment_id, visitor_id)
                     mark_registered(registration_record_id)
@@ -767,18 +797,16 @@ class ValeApp(tk.Tk):
                                            "checkin_state": "check-in efetuado"})
                     except Exception:
                         pass
-                from visitor_profile import confirm_checkin_card, update_profile
-                card = obj.card_number.strip() if expect_card else ""
-                # Appointment registration can create a virtual card and leave
-                # the person in the default Visitors group. Save and verify the
-                # operator's actual profile fields after the appointment/check-in.
-                update_profile(client, visitor_id, obj.first_name, obj.last_name,
-                               card=card, group=group)
-                if expect_card:
-                    if checkin_requested:
-                        confirm_checkin_card(client, visitor_id, payload["visitStartTime"],
-                                             payload["visitEndTime"], registration_record_id, card)
-                    mark_card_confirmed(visitor_id)
+                    if expect_card:
+                        ensure_checkin_card(client, {
+                            "visitor_id": visitor_id,
+                            "registration_record_id": registration_record_id,
+                            "entry_at": payload["visitStartTime"],
+                            "exit_at": payload["visitEndTime"],
+                        }, {
+                            "card": card, "photo_bytes": obj.photo_jpeg,
+                        })
+                        mark_card_confirmed(visitor_id)
                 for level_id in access_ids:
                     client.assign_access(visitor_id, level_id)
                     mark_assigned(level_id)
@@ -812,30 +840,13 @@ class ValeApp(tk.Tk):
                 if error:
                     pending = load_pending()
                     if pending:
-                        if pending.get("stage") == "appointment_inflight":
-                            advice = ("O envio da reserva pode ter sido aceito, mas a resposta é incerta. "
-                                      "Antes de repetir, consulte Visitor > Visitor Reservation no HikCentral. "
-                                      "Nenhuma nova reserva será criada automaticamente.")
-                        elif pending.get("card_confirmed") is False:
-                            advice = ("A reserva já foi criada. Abra o mesmo visitante em Cadastros efetuados, "
-                                      "confira a pulseira e use Resolver pendência para revisar o cadastro.")
-                        elif not pending.get("checkin_requested", True):
-                            advice = ("A reserva foi criada sem solicitação de check-in. "
-                                      "A recuperação concluirá os acessos sem registrar o visitante.")
-                        elif not pending.get("registered", True):
-                            advice = ("Existe uma reserva, mas o check-in não está confirmado. "
-                                      "Confira o estado no HikCentral antes de retomar ou repetir.")
-                        else:
-                            advice = "A recuperação automática verificará os acessos já autorizados."
-                        known_id = pending.get("visitor_id") or "não recebido"
-                        messagebox.showwarning("Cadastro parcial",
-                            f"Visitor ID: {known_id}.\n{error}\n\n{advice}")
-                    else:
-                        messagebox.showerror("Resultado incerto",
-                            f"{error}\nConfira no HikCentral antes de tentar novamente.")
-                    self.status.set("Operação não concluída; verificando recuperação automática.")
-                    if pending:
+                        # Falhas parciais são retomadas em segundo plano, sem
+                        # popup/modal que force o operador a digitar CONFERIDO.
+                        self.status.set("Cadastro parcialmente salvo; conferindo o mesmo Visitor ID...")
                         self.after(4000, self._auto_resume_pending)
+                    else:
+                        messagebox.showerror("Falha antes do cadastro", str(error), parent=self)
+                        self.status.set("Cadastro não enviado. Revise os dados e tente novamente.")
                     return
                 report = result.get("report")
                 if result.get("card_saved_without_checkin"):
@@ -866,19 +877,7 @@ class ValeApp(tk.Tk):
                         f"A consulta de entrega falhou: {result['report_error']}\n\n"
                         "A distribuição dos dados às catracas é acompanhada pelo HikCentral.")
                     self.status.set("Cadastro concluído; entrega ainda não verificada.")
-                for var in (self.first, self.last, self.card, self.reservation):
-                    var.set("")
-                self.uid.set("UID não lido")
-                # Próxima venda respeita grupo bloqueado ou escolha livre do caixa.
-                preferred = self.settings.get("preferred_group", "")
-                self.group.set(
-                    preferred if preferred in self.connected_groups
-                    else (self.connected_groups[0] if not preferred and self.connected_groups else ""))
-                self.photo_data, self.preview = b"", None
-                self.photo_widget.configure(image="", text="SEM FOTO")
-                # Somente após cadastro efetivamente concluído: não herdar
-                # data futura ou ingresso de vários dias no próximo atendimento.
-                self._reset_registration_period_after_success()
+                self._clear_registration_after_success()
 
             # Spinner visible only after the operator answered SIM to the preview.
             self.task(work, finish, registration_loading=True)
@@ -2000,8 +1999,6 @@ class ValeApp(tk.Tk):
         def work():
             client = self.client()
             pending = load_pending()
-            if pending.get("card_confirmed") is False:
-                return {"unresolved": "Confira a pulseira deste cadastro no histórico antes de resolver a pendência."}
             # Nunca recuperar pendência desconhecida com permissões presumidas.
             approved_names = pending.get("access_names")
             if not isinstance(approved_names, list) or len(approved_names) != 1:
@@ -2014,6 +2011,21 @@ class ValeApp(tk.Tk):
                 return {"unresolved": "Pendência com nível/pontos diferentes do registro original. "
                                       "Revisão manual necessária; nenhum acesso foi alterado."}
             checkin_requested = pending.get("checkin_requested", True)
+            encrypted = pending.get("encrypted_context")
+            context = open_registration_context(encrypted) if encrypted else None
+            completed_identity = None
+            if context:
+                # Reconciliar dados do MESMO Visitor ID e reserva confirmada.
+                # Nesta etapa não exigimos check-in porque ele pode ainda não
+                # ter sido enviado: o marcador separa essa situação da incerta.
+                restore_pending_credentials(
+                    client, pending, context, verify_checkin_card=False)
+                completed_identity = (
+                    context["first"], context["last"], context["card"])
+            elif pending.get("card_confirmed") is False:
+                return {"unresolved": (
+                    "Pendência de versão antiga sem pulseira protegida. "
+                    "Confira somente este cadastro antes de liberar a estação.")}
             if checkin_requested and not pending.get("registered", False):
                 entry_at, exit_at = pending.get("entry_at"), pending.get("exit_at")
                 if not entry_at or not exit_at:
@@ -2021,9 +2033,31 @@ class ValeApp(tk.Tk):
                 record_id = client.find_existing_registration(
                     pending["visitor_id"], entry_at, exit_at)
                 if not record_id:
-                    return {"unresolved": "Check-in não confirmado na consulta de leitura. "
-                                          "Revisar a visita no HikCentral; nenhuma nova reserva foi criada."}
+                    if context is None or pending.get("checkin_inflight", True):
+                        return {"unresolved": (
+                            "Check-in anterior com resultado incerto. "
+                            "Não é seguro reenviar; confira a visita no HikCentral.")}
+                    # Na versão nova, o journal comprova que nenhum POST de
+                    # check-in foi iniciado: enviar UMA vez, na reserva existente.
+                    from datetime import datetime as _dt
+                    recovered = Visitor(
+                        context["first"], context["last"], context["group"],
+                        context["photo_bytes"], context["card"],
+                        _dt.fromisoformat(entry_at), _dt.fromisoformat(exit_at))
+                    recovered_payload = registration_payload(recovered)
+                    if (recovered_payload["visitStartTime"] != entry_at or
+                            recovered_payload["visitEndTime"] != exit_at):
+                        raise ValueError("Período recuperado diferente do journal.")
+                    mark_checkin_started()
+                    record_id = client.register_visitor(
+                        recovered_payload, selected, pending["appointment_id"],
+                        pending["visitor_id"])
                 mark_registered(record_id)
+                pending = load_pending()
+            if context:
+                if pending.get("expect_card"):
+                    restore_pending_credentials(client, pending, context)
+                    mark_card_confirmed(pending["visitor_id"])
                 pending = load_pending()
             for level in pending["access_ids"]:
                 if level not in pending["assigned"]:
@@ -2045,7 +2079,8 @@ class ValeApp(tk.Tk):
             except Exception:
                 status = "não verificada"
             return {"visitor_id": pending["visitor_id"], "state": status,
-                    "checkin_requested": bool(checkin_requested)}
+                    "checkin_requested": bool(checkin_requested),
+                    "completed_identity": completed_identity}
 
         def finish(value, error):
             self._refresh_pending_button()
@@ -2061,7 +2096,11 @@ class ValeApp(tk.Tk):
                         value["unresolved"], parent=self)
             else:
                 self._recovery_attempts = 0
-                self.status.set("Cadastro pendente recuperado automaticamente; entrega " + value["state"] + ".")
+                self.status.set("Cadastro anterior recuperado automaticamente; entrega " + value["state"] + ".")
+                identity = value.get("completed_identity")
+                if identity and (self.first.get().strip(), self.last.get().strip(),
+                                 self.card.get().strip()) == identity:
+                    self._clear_registration_after_success()
                 if notify:
                     messagebox.showinfo("Pendência resolvida",
                         ("Check-in anterior conciliado, sem nova reserva. " if value.get("checkin_requested", True) else

@@ -28,7 +28,7 @@ jobs:
           python scripts/download_face_yunet.py
           if ($LASTEXITCODE -ne 0) { throw "Modelo YuNet oficial inválido ou indisponível" }
           # Import real startup modules before running any tests: catches removed symbols.
-          python -c "import app; import core; import modern_ui; import responsive_ui; import devices; import hikcentral; import face_capture_logic; import face_capture_ui; import remote_history; import access_passages; import pending_recovery; import access_receipt; import transaction_cleanup; import edit_journal; import edit_errors; import edit_request; import editor_validation; import ordered_reservation_change; face_capture_logic.LocalFaceDetector(); print('Startup and offline facial detector imports OK: ' + core.APP_VERSION)"
+          python -c "import app; import core; import modern_ui; import responsive_ui; import devices; import hikcentral; import face_capture_logic; import face_capture_ui; import remote_history; import access_passages; import pending_recovery; import access_receipt; import transaction_cleanup; import registration_recovery; import edit_journal; import edit_errors; import edit_request; import editor_validation; import ordered_reservation_change; face_capture_logic.LocalFaceDetector(); print('Startup and offline facial detector imports OK: ' + core.APP_VERSION)"
           if ($LASTEXITCODE -ne 0) { throw "Falha de importacao dos modulos do aplicativo" }
           # Isolate Tk interpreters: creating/destroying many CTk windows in
           # the same Windows Python process can invalidate Tcl's library context.
@@ -47,7 +47,7 @@ jobs:
             python -m pytest -q "$uiCase"
             if ($LASTEXITCODE -ne 0) { throw "Teste de interface falhou: $uiCase" }
           }
-          python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py face_capture_logic.py face_capture_ui.py remote_history.py access_passages.py pending_recovery.py access_receipt.py visitor_edit_transaction.py ordered_reservation_change.py transaction_cleanup.py edit_journal.py edit_errors.py edit_request.py editor_validation.py
+          python -m compileall -q app.py core.py hikcentral.py devices.py modern_ui.py responsive_ui.py face_capture_logic.py face_capture_ui.py remote_history.py access_passages.py pending_recovery.py registration_recovery.py access_receipt.py visitor_edit_transaction.py ordered_reservation_change.py transaction_cleanup.py edit_journal.py edit_errors.py edit_request.py editor_validation.py
           if ($LASTEXITCODE -ne 0) { throw "Compilacao dos modulos falhou" }
       - name: Empacotar EXE autocontido
         shell: pwsh

@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.75"
+APP_VERSION = "1.0.0-preview.76"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -614,7 +614,7 @@ def _write_json_atomic(path: Path, data: dict) -> None:
 
 
 
-def mark_appointment_inflight(base: Path | None = None) -> None:
+def mark_appointment_inflight(base: Path | None = None, *, encrypted_context: str = "") -> None:
     """Persist a non-personal checkpoint BEFORE the first remote write.
 
     If the response to appointment is lost, do not automatically resubmit.
@@ -626,7 +626,8 @@ def mark_appointment_inflight(base: Path | None = None) -> None:
         "stage": "appointment_inflight",
         "visitor_id": "", "appointment_id": "",
         "access_ids": [], "door_ids": [], "registered": False,
-        "assigned": [], "expect_face": False, "expect_card": False
+        "assigned": [], "expect_face": False, "expect_card": False,
+        "encrypted_context": encrypted_context,
     })
 
 
@@ -641,8 +642,8 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
     path = (base or app_dir()) / "pending.json"
     if not expect_face and not expect_card:
         raise ValueError("Informe reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
+    old = load_pending(base) if path.exists() else None
     if path.exists():
-        old = load_pending(base)
         if not (isinstance(old, dict) and old.get("stage") == "appointment_inflight"):
             raise RuntimeError("Há cadastro pendente. Confira o cadastro anterior antes de criar outro.")
     data = {
@@ -652,12 +653,28 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
         "access_names": access_names or [],
         "expect_face": bool(expect_face), "expect_card": bool(expect_card),
         "registration_record_id": "", "registered": registered,
-        "checkin_requested": bool(checkin_requested), "assigned": [],
+        "checkin_requested": bool(checkin_requested), "checkin_inflight": False,
+        "assigned": [],
         "entry_at": entry_at, "exit_at": exit_at
     }
     if card_confirmed is not None:
         data["card_confirmed"] = card_confirmed
+    # O contexto permanece cifrado com DPAPI ao longo de todos os checkpoints.
+    # Nunca copiá-lo em histórico, logs ou mensagens de erro.
+    if isinstance(old, dict) and old.get("encrypted_context"):
+        data["encrypted_context"] = old["encrypted_context"]
     _write_json_atomic(path, data)
+
+
+def mark_checkin_started(base: Path | None = None) -> None:
+    """Checkpoint ANTES do POST; depois dele, nunca repetir um check-in incerto."""
+    data = load_pending(base)
+    if not data or data.get("stage") != "appointment_confirmed":
+        raise RuntimeError("Não há reserva confirmada para iniciar o check-in.")
+    if data.get("registered") or data.get("checkin_inflight"):
+        raise RuntimeError("Check-in já confirmado ou com resultado incerto; não reenviar.")
+    data["checkin_inflight"] = True
+    _write_json_atomic((base or app_dir()) / "pending.json", data)
 
 
 def mark_card_confirmed(visitor_id: str, base: Path | None = None) -> None:
