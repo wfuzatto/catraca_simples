@@ -105,16 +105,26 @@ def update_profile(client, visitor_id, first, last, *, card="", remark=None, new
         except HikError as exc:
             error = str(exc)
         details, names, cards, saved_remark, saved_remark_present = read_profile(client, visitor_id)
-        if (names != (first, last) or cards != ((card,) if "cards" in update else old_cards) or
-                ("remark" in update and
-                 (not saved_remark_present or saved_remark != remark))):
-            raise HikError("A conferência do perfil não confirmou os dados solicitados. " + error)
-        if "personGivenName" in update:
+        mismatches = {}
+        if names != (first, last):
+            mismatches.update(first="O HikCentral não confirmou o nome e o sobrenome.",
+                              last="O HikCentral não confirmou o nome e o sobrenome.")
+        elif "personGivenName" in update:
             changed.append("nome e sobrenome")
-        if "cards" in update:
+        if cards != ((card,) if "cards" in update else old_cards):
+            mismatches["card"] = "O HikCentral não confirmou a pulseira solicitada."
+        elif "cards" in update:
             changed.append("pulseira")
         if "remark" in update:
-            changed.append("Remark")
+            if not saved_remark_present or saved_remark != remark:
+                mismatches["remark"] = (
+                    "O HikCentral não confirmou o Remark do perfil em Person Information. " + error)
+            else:
+                changed.append("Remark")
+        if mismatches:
+            failure = EditorFieldError(mismatches)
+            failure.profile_saved = list(changed)
+            raise failure
     if new_photo:
         try:
             previous = fetch_visitor_photo(client, visitor_id, details=details)

@@ -65,6 +65,56 @@ def test_profile_updates_name_and_card_without_touching_visit_or_booking():
     assert len(writes) == 1
 
 
+def test_profile_remark_comes_from_person_information_not_reservation_remark():
+    values = {"first": "Wesley", "last": "Teste", "person_remark": "Apto 1",
+              "visitor_remark": "Apto 1", "card": "1234"}
+    writes = []
+
+    class Client:
+        def post(self, path, payload):
+            if path == DETAIL_PATH:
+                return {"data": {"VisitorInfo": {
+                    "visitorId": "1865", "visitorGivenName": values["first"],
+                    "visitorFamilyName": values["last"], "remark": values["visitor_remark"]}}}
+            if path == PERSON_INFO:
+                return {"data": {"personId": "1865", "personGivenName": values["first"],
+                                 "personFamilyName": values["last"], "remark": values["person_remark"],
+                                 "cards": [{"cardNo": values["card"]}]}}
+            assert path == PERSON_UPDATE
+            writes.append(payload)
+            values["person_remark"] = payload["remark"]
+            return {"code": "0"}
+
+    assert update_profile(Client(), "1865", "Wesley", "Teste", card="1234",
+                          remark="Apto 2") == ["Remark"]
+    assert values["person_remark"] == "Apto 2"
+    assert values["visitor_remark"] == "Apto 1"
+    assert writes == [{"personId": "1865", "remark": "Apto 2"}]
+
+
+def test_profile_edit_does_not_report_success_when_person_remark_stays_old():
+    values = {"person_remark": "Apto 1", "visitor_remark": "Apto 1"}
+
+    class Client:
+        def post(self, path, payload):
+            if path == DETAIL_PATH:
+                return {"data": {"VisitorInfo": {"visitorId": "1865",
+                    "visitorGivenName": "Wesley", "visitorFamilyName": "Teste",
+                    "remark": "Remark da reserva que não é editado aqui"}}}
+            if path == PERSON_INFO:
+                return {"data": {"personId": "1865", "personGivenName": "Wesley",
+                                 "personFamilyName": "Teste", "remark": values["person_remark"], "cards": []}}
+            assert path == PERSON_UPDATE
+            # Simulate the HikCentral API accepting the request envelope while
+            # refusing to persist the profile Remark.
+            return {"code": "0"}
+
+    with pytest.raises(EditorFieldError) as exc:
+        update_profile(Client(), "1865", "Wesley", "Teste", remark="Apto 2")
+    assert "remark" in exc.value.fields
+    assert "Person Information" in exc.value.fields["remark"]
+
+
 def test_reservation_group_update_targets_visitor_info_and_preserves_its_dates():
     from unregistered_reservation import _request
 

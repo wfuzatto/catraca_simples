@@ -61,12 +61,18 @@ def test_registration_requires_at_least_one_credential():
     visitor = Visitor("Joao", "Silva", "Day use", b"", "", start, end)
     with pytest.raises(ValueError, match="facial"):
         registration_payload(visitor)
+    payload = registration_payload(visitor, editing=True, require_credential=False)
+    info = payload["visitorInfoList"][0]["VisitorInfo"]
+    assert "faces" not in info and "cards" not in info
 
 
 def test_settings_and_pending(tmp_path):
     s = default_settings()
+    assert s["auto_checkin"] is False
+    s["auto_checkin"] = True
     save_settings(s, tmp_path)
     assert load_settings(tmp_path)["host"] == s["host"]
+    assert load_settings(tmp_path)["auto_checkin"] is True
     save_pending("v001", ["a", "b"], tmp_path, expect_face=False, expect_card=True)
     assert load_pending(tmp_path)["appointment_id"] == ""
     assert load_pending(tmp_path)["expect_face"] is False
@@ -224,10 +230,12 @@ def test_checkout_rollover_month_and_year_and_payload_timezone():
 def test_pending_auto_recovery_has_date_interval(tmp_path):
     save_pending("v001", ["level"], tmp_path, appointment_id="appointment1",
                  door_ids=["door1"], registered=False, expect_face=False, expect_card=True,
+                 checkin_requested=False,
                  entry_at="2099-10-31T12:00:00-03:00",
                  exit_at="2099-11-01T23:59:59-03:00")
     pending = load_pending(tmp_path)
     assert pending["registered"] is False
+    assert pending["checkin_requested"] is False
     assert pending["entry_at"].startswith("2099-10-31")
     assert pending["exit_at"].startswith("2099-11-01")
     mark_registered("record-abc", tmp_path)

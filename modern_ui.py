@@ -516,6 +516,7 @@ def _settings(app):
     app.s_cert_pin, app.s_key, app.s_secret = tk.StringVar(), tk.StringVar(), tk.StringVar()
     app.s_format, app.s_camera = tk.StringVar(), tk.StringVar()
     app.s_preferred_group = tk.StringVar()
+    app.s_auto_checkin = tk.StringVar(value="Não")
     app.s_valid_times = tk.StringVar(value="0")
     app.s_validity_start = tk.StringVar(value="00:00:00")
     app.s_validity_end = tk.StringVar(value="23:59:59")
@@ -572,6 +573,18 @@ def _settings(app):
     app.preferred_box.configure(values=(), state="disabled")
     _text(local, "Grupo selecionado bloqueia o Cadastro neste caixa. Sem preferência permite escolher livremente.",
           size=11, color=MUTED).pack(anchor="w", pady=(9, 0))
+    checkin_area = ctk.CTkFrame(local, fg_color="transparent")
+    checkin_area.pack(fill="x", pady=(12, 0))
+    checkin_row = ctk.CTkFrame(checkin_area, fg_color="transparent")
+    checkin_row.pack(fill="x")
+    _text(checkin_row, "Check-in automático", size=12, bold=True).pack(side="left")
+    app.auto_checkin_box = ttk.Combobox(
+        checkin_row, textvariable=app.s_auto_checkin, state="readonly",
+        values=("Não", "Sim"), width=10, style="Vale.TCombobox")
+    app.auto_checkin_box.pack(side="left", padx=(12, 0), ipady=5)
+    _text(checkin_area,
+          "Sim: o aplicativo solicita check-in. Não: não solicita; o HikCentral ainda pode fazê-lo automaticamente.",
+          size=11, color=MUTED).pack(anchor="w", pady=(5, 0))
     times_area = ctk.CTkFrame(local, fg_color="transparent")
     times_area.pack(fill="x", pady=(16, 0))
     _text(times_area, "VALID TIMES (fixo: 0)", size=12, bold=True).pack(anchor="w", pady=(0, 6))

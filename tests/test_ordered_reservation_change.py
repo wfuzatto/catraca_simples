@@ -144,11 +144,12 @@ def ordered_lab(monkeypatch, tmp_path):
               "exit_at": OLD_END, "group": "Hóspedes Vale", "checkin_state": "check-in efetuado",
               "expect_card": True}
 
-    def run(*, journal=None):
+    def run(*, journal=None, auto_checkin=False):
         return ordered.change_reservation_dates(
             client, record, payload, [dict(LEVEL)], ["57", "64", "89"], visitor,
             "Hóspedes Vale", ["VISITANTE_VALE"], journal=journal or journal_path,
-            profile_update=lambda: events.append("profile_update"))
+            profile_update=lambda: events.append("profile_update"),
+            auto_checkin=auto_checkin)
 
     def _set_auto(value):
         nonlocal auto_checkin
@@ -179,13 +180,14 @@ def ordered_lab(monkeypatch, tmp_path):
 
 def test_date_change_checks_out_then_updates_original_reservation_through_openapi(ordered_lab):
     result = ordered_lab.run()
-    assert ordered_lab.events == ["checkout", "profile_update", "reservation_update", "checkin", "assign", "apply"]
+    assert ordered_lab.events == ["checkout", "profile_update", "reservation_update", "assign", "apply"]
     assert ordered_lab.bookings["2502"]["appointID"] == "2000"
     assert ordered_lab.bookings["2502"]["visitorInfo"]["visitorId"] == "1865"
     assert result["rebooking_completed"] is True
     assert result["automatic_checkin"] is False
     assert result["confirmed_appointment_id"] == "2000"
-    assert result["confirmed_checkin_id"] == "check-new"
+    assert result["confirmed_checkin_id"] == ""
+    assert result["checkin_state"] == "sem check-in"
     assert result["state"] == "submitted"
     assert result["operation_completed"] is True
     assert ordered_lab.history[0]["appointment_id"] == "2000"
@@ -236,7 +238,7 @@ def test_openapi_update_timeout_after_commit_is_reconciled_without_duplicate(ord
     ordered_lab.set_timeout(True)
     result = ordered_lab.run()
     assert ordered_lab.events.count("reservation_update") == 1
-    assert ordered_lab.events.count("checkin") == 1
+    assert ordered_lab.events.count("checkin") == 0
     assert len(ordered_lab.bookings) == 1
     assert result["confirmed_appointment_id"] == "2000"
 
@@ -249,9 +251,11 @@ def test_retries_update_only_after_readback_proves_original_is_still_intact(orde
     assert ordered_lab.events == ["checkout", "profile_update", "reservation_update"]
 
     ordered_lab.set_commit(True)
-    result = ordered_lab.run()
+    # Recovery keeps the original "no check-in" decision even if settings
+    # change while the update is pending.
+    result = ordered_lab.run(auto_checkin=True)
     assert ordered_lab.events.count("reservation_update") == 2
-    assert ordered_lab.events.count("checkin") == 1
+    assert ordered_lab.events.count("checkin") == 0
     assert result["confirmed_appointment_id"] == "2000"
 
 
@@ -261,6 +265,34 @@ def test_skips_manual_checkin_when_hikcentral_already_created_it(ordered_lab):
     assert ordered_lab.events == ["checkout", "profile_update", "reservation_update", "assign", "apply"]
     assert result["automatic_checkin"] is True
     assert result["confirmed_checkin_id"] == "check-auto"
+
+
+def test_manual_checkin_requires_explicit_configuration(ordered_lab):
+    result = ordered_lab.run(auto_checkin=True)
+    assert ordered_lab.events == ["checkout", "profile_update", "reservation_update", "checkin", "assign", "apply"]
+    assert result["confirmed_checkin_id"] == "check-new"
+    assert result["checkin_state"] == "check-in efetuado"
+
+
+def test_updates_dates_without_photo_or_card_when_checkin_is_disabled(ordered_lab):
+    visitor = Visitor("Teste", "Sobrenome", "Hóspedes Vale", b"", "",
+                      datetime.fromisoformat(NEW_START), datetime.fromisoformat(NEW_END), "321")
+    payload = registration_payload(visitor, editing=True, require_credential=False)
+    record = {"visitor_id": "1865", "appointment_id": "1000",
+              "registration_record_id": "check-old", "entry_at": OLD_START,
+              "exit_at": OLD_END, "group": "Hóspedes Vale", "checkin_state": "check-in efetuado",
+              "expect_card": True, "expect_face": True}
+    result = ordered.change_reservation_dates(
+        ordered_lab.client, record, payload, [dict(LEVEL)], ["57", "64", "89"],
+        visitor, "Hóspedes Vale", ["VISITANTE_VALE"], journal=ordered_lab.journal,
+        profile_update=lambda: ordered_lab.events.append("profile_update"),
+        auto_checkin=False)
+
+    sent = ordered_lab.writes[0]["visitorInfoList"][0]["VisitorInfo"]
+    assert ordered_lab.events == ["checkout", "profile_update", "reservation_update", "assign", "apply"]
+    assert "cards" not in sent and "faces" not in sent
+    assert result["checkin_state"] == "sem check-in"
+    assert result["confirmed_checkin_id"] == ""
 
 
 def test_refuses_to_continue_if_api_leaves_old_and_new_reservations(ordered_lab):
@@ -276,7 +308,7 @@ def test_finds_checked_out_reservation_by_code_when_unfiltered_list_omits_it(ord
 
     result = ordered_lab.run()
 
-    assert ordered_lab.events == ["checkout", "profile_update", "reservation_update", "checkin", "assign", "apply"]
+    assert ordered_lab.events == ["checkout", "profile_update", "reservation_update", "assign", "apply"]
     assert result["confirmed_appointment_id"] == "2000"
     assert ordered_lab.bookings["2502"]["appointStatus"] == 4
 

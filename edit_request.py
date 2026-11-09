@@ -5,7 +5,7 @@ import re
 from edit_errors import EditorFieldError
 
 
-def validate_edit_request(payload):
+def validate_edit_request(payload, *, require_credential=True):
     errors = {}
     entries = payload.get("visitorInfoList") or []
     info = entries[0].get("VisitorInfo", {}) if len(entries) == 1 and isinstance(entries[0], dict) else {}
@@ -27,7 +27,7 @@ def validate_edit_request(payload):
     if len(times) == 2 and times[1] <= times[0]:
         errors["exit"] = "A saída deve ser posterior à entrada."
     cards, faces = info.get("cards") or [], info.get("faces") or []
-    if not cards and not faces:
+    if require_credential and not cards and not faces:
         errors["credential"] = "Selecione foto, pulseira ou ambas e complete a credencial."
     if cards and (not isinstance(cards, list) or any(
             not isinstance(x, dict) or not re.fullmatch(r"[A-Za-z0-9]{1,32}", str(x.get("cardNo") or ""))

@@ -26,7 +26,7 @@ UPDATE_BOOKING = "/artemis/api/visitor/v2/appointment/update"
 CLOSED_STATES = {"1", "2", "3", "4"}
 STAGES = {"prepared", "checkout_inflight", "checked_out", "profile_inflight", "profile_updated",
           "update_inflight", "updated",
-          "checkin_inflight", "checked_in", "apply_inflight", "applied"}
+          "checkin_inflight", "checked_in", "checkin_skipped", "apply_inflight", "applied"}
 LEGACY_DESTRUCTIVE_STAGES = {"delete_inflight", "deleted", "create_inflight", "created",
                              "identity_conflict"}
 
@@ -228,9 +228,9 @@ def _reservation_update_body(client, original, payload, visitor_id, level):
 
 
 def change_reservation_dates(client, record, payload, selected, doors, visitor, group, requested_level,
-                             *, journal=None, profile_update=None):
-    """Check out if needed, update the linked reservation through OpenAPI, then check in."""
-    validate_edit_request(payload)
+                             *, journal=None, profile_update=None, auto_checkin=False):
+    """Check out if needed and update the linked reservation through OpenAPI."""
+    validate_edit_request(payload, require_credential=bool(auto_checkin))
     reservation_info = (payload.get("visitorInfoList") or [{}])[0].get("VisitorInfo") or {}
     if not str(reservation_info.get("remark") or "").strip():
         raise EditorFieldError({
@@ -254,7 +254,8 @@ def change_reservation_dates(client, record, payload, selected, doors, visitor, 
     journal = journal or select_edit_journal("troca:" + vid)
     scope = {"server": str(getattr(client, "url", "")), "visitor_id": vid,
              "start": start, "end": end, "group": group, "level_id": level["id"],
-             "doors": sorted(str(door) for door in doors)}
+             "doors": sorted(str(door) for door in doors),
+             "auto_checkin": bool(auto_checkin)}
 
     with _lock_transaction(journal):
         details = visitor_details(client, vid)
@@ -269,14 +270,16 @@ def change_reservation_dates(client, record, payload, selected, doors, visitor, 
         for key, value in saved_info.items():
             if key not in desired_info and key not in {"cards", "faces"}:
                 desired_info[key] = deepcopy(value)
-        validate_edit_request(complete_payload)
+        validate_edit_request(complete_payload, require_credential=bool(auto_checkin))
         return _update_linked_reservation(client, record, complete_payload, selected, doors, visitor,
                                           group, requested_level, scope, level, journal,
-                                          profile_update=profile_update)
+                                          profile_update=profile_update,
+                                          auto_checkin=bool(auto_checkin))
 
 
 def _update_linked_reservation(client, record, payload, selected, doors, visitor, group,
-                               requested_level, scope, level, journal, *, profile_update=None):
+                               requested_level, scope, level, journal, *, profile_update=None,
+                               auto_checkin=False):
     vid, start, end, group = (scope[key] for key in ("visitor_id", "start", "end", "group"))
     old_checkin = _id(record.get("registration_record_id"))
     old_start, old_end = record.get("entry_at"), record.get("exit_at")
@@ -294,7 +297,12 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
             plan = json.loads(journal.read_text(encoding="utf-8"))
             if plan.get("stage") in LEGACY_DESTRUCTIVE_STAGES:
                 raise HikError("Há uma tentativa antiga de excluir/recriar esta reserva. Confira o vínculo no HikCentral antes de continuar.")
-            valid = (all(plan.get(key) == value for key, value in scope.items())
+            # The check-in choice is captured when the operation starts. A later
+            # settings change must not alter a partially completed reservation edit.
+            plan.setdefault("auto_checkin", bool(scope.get("auto_checkin", False)))
+            auto_checkin = bool(plan.get("auto_checkin", False))
+            valid = (all(plan.get(key) == value for key, value in scope.items()
+                         if key != "auto_checkin")
                      and plan.get("stage") in STAGES
                      and plan.get("old_checkin") in {old_checkin, plan.get("new_checkin")}
                      and bool(re.fullmatch(r"\d{1,64}", str(plan.get("old_id") or "")))
@@ -329,10 +337,11 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
         active = client.find_registration_record(vid, start, end, active_only=True)
         if active:
             raise EditorFieldError({"visit": "Já existe uma visita ativa do visitante nas datas solicitadas."})
-        if ((record.get("expect_card") or (row.get("visitorCardInfo") or {}).get("cardNumber"))
+        if (auto_checkin and
+                (record.get("expect_card") or (row.get("visitorCardInfo") or {}).get("cardNumber"))
                 and not visitor.card_number):
             raise EditorFieldError({"card": "Informe a pulseira antes de alterar as datas."})
-        if record.get("expect_face") and not visitor.photo_jpeg:
+        if auto_checkin and record.get("expect_face") and not visitor.photo_jpeg:
             raise EditorFieldError({"photo": "Informe a foto antes de alterar as datas."})
         plan = {**scope, "stage": "prepared", "old_checkin": old_checkin,
                 "old_id": old_period["appointment_id"], "old_code": old_period["code"],
@@ -453,26 +462,34 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
     _confirm_original_period_moved(client, plan)
     period = _confirm_updated_booking(client, updated, start, end, [level])
     active = client.find_registration_record(vid, start, end, active_only=True)
-    if plan["stage"] == "updated" and active:
+    if plan["stage"] in {"updated", "checkin_skipped"} and active:
         save("checked_in", new_checkin=_id(active.get("recordId")), automatic_checkin=True)
-    elif plan["stage"] == "updated":
+    elif plan["stage"] == "updated" and plan.get("auto_checkin", False):
         save("checkin_inflight", automatic_checkin=False)
         returned, failure = _write_once(lambda: client.register_existing_visitor(
             vid, payload, selected, appointment_id=plan["new_id"]))
         if returned:
             save("checkin_inflight", new_checkin=_id(returned))
         active = client.find_registration_record(vid, start, end, active_only=True)
+    elif plan["stage"] == "updated":
+        save("checkin_skipped", new_checkin="", automatic_checkin=False)
     rid = _id((active or {}).get("recordId"))
-    if not rid or plan.get("new_checkin", rid) != rid:
-        raise HikError("A reserva foi atualizada pela API, mas o HikCentral ainda não confirmou o check-in. "
-                       "Confira a visita antes de repetir.") from failure
-    if plan["stage"] == "checkin_inflight":
-        save("checked_in", new_checkin=rid)
-    _confirmed_edit(client, vid, payload, visitor, group, rid)
+    no_checkin_expected = (
+        plan["stage"] == "checkin_skipped" or
+        (plan["stage"] in {"apply_inflight", "applied"} and
+         not plan.get("new_checkin") and not plan.get("auto_checkin", False)))
+    if not no_checkin_expected:
+        if not rid or (plan.get("new_checkin") and plan["new_checkin"] != rid):
+            raise HikError("A reserva foi atualizada pela API, mas o HikCentral ainda não confirmou o check-in. "
+                           "Confira a visita antes de repetir.") from failure
+        if plan["stage"] == "checkin_inflight":
+            save("checked_in", new_checkin=rid)
+    if rid:
+        _confirmed_edit(client, vid, payload, visitor, group, rid)
     if visitor.photo_jpeg and not same_photo(visitor.photo_jpeg, fetch_visitor_photo(client, vid)):
         raise EditorFieldError({"photo": "A foto no perfil ainda difere da foto informada."})
 
-    if plan["stage"] in {"checked_in", "apply_inflight"}:
+    if plan["stage"] in {"checked_in", "checkin_skipped", "apply_inflight"}:
         save("apply_inflight")
         current_levels = parse_access_levels(visitor_details(client, vid))
         if not any(str(item.get("id")) == level["id"] and item.get("name") == level["name"]
@@ -490,14 +507,18 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
                "first": visitor.first_name, "last": visitor.last_name, "reservation": visitor.reservation,
                "door_ids": list(doors), "access_names": list(requested_level),
                "expect_face": bool(visitor.photo_jpeg), "expect_card": bool(visitor.card_number),
-               "checkin_state": "check-in efetuado", "state": "submitted"}
+               "checkin_state": "check-in efetuado" if rid else "sem check-in",
+               "state": "submitted"}
     save_registration(history)
     journal.unlink()
     return {"state": "submitted",
-            "message": "A reserva foi atualizada pela OpenAPI; o HikCentral controla a distribuição do acesso.",
+            "message": ("A reserva foi atualizada pela OpenAPI; o HikCentral controla a distribuição do acesso."
+                        if rid else
+                        "A reserva foi atualizada pela OpenAPI sem solicitar check-in; o HikCentral controla o acesso."),
             "operation": "reservation_update", "rebooking_completed": True, "operation_completed": True,
             "automatic_checkin": bool(plan.get("automatic_checkin")), "confirmed_appointment_id": plan["new_id"],
-            "confirmed_checkin_id": rid, "confirmed_group": group, "reservation_period": period,
+            "confirmed_checkin_id": rid, "checkin_state": history["checkin_state"],
+            "confirmed_group": group, "reservation_period": period,
             "access_receipt_saved": False}
 
 
