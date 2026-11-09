@@ -90,6 +90,38 @@ def verify_pending_reservation(client, pending: dict, context: dict) -> None:
         raise HikError("Grupo da reserva divergente; revisão humana necessária.")
 
 
+def ensure_checkin_card(client, pending: dict, context: dict) -> None:
+    """Repara o cartão no check-in existente, sem criar outra reserva ou visita.
+
+    O HikCentral pode criar cartão virtual no check-in mesmo após gravarmos
+    o cartão real em Person. A edição só é tentada se registro e acesso ativo
+    forem recuperados inequivocamente pelas rotinas já homologadas.
+    """
+    from edit_errors import EditorFieldError
+    from visitor_profile import confirm_checkin_card, update_active_visitor_fields
+
+    visitor_id = str(pending["visitor_id"])
+    record_id = str(pending.get("registration_record_id") or "")
+    start, end = pending["entry_at"], pending["exit_at"]
+    card = context["card"]
+    try:
+        confirm_checkin_card(client, visitor_id, start, end, record_id, card)
+        return
+    except EditorFieldError as original:
+        row = client.find_registration_record(
+            visitor_id, start, end, active_only=True, record_id=record_id)
+        if not row or str(row.get("recordId") or "") != record_id:
+            raise original
+    record = {
+        "visitor_id": visitor_id, "registration_record_id": record_id,
+        "entry_at": start, "exit_at": end,
+        "group": str((row.get("visitorBaseInfo") or {}).get("visitorGroup") or ""),
+    }
+    update_active_visitor_fields(
+        client, record, card=card, photo=context.get("photo_bytes", b""))
+    confirm_checkin_card(client, visitor_id, start, end, record_id, card)
+
+
 def restore_pending_credentials(client, pending: dict, context: dict, *, verify_checkin_card: bool = True) -> bool:
     """Concilia perfil e pulseira do MESMO Visitor ID. Não cria outro registro."""
     from visitor_profile import update_profile, confirm_checkin_card
@@ -107,6 +139,5 @@ def restore_pending_credentials(client, pending: dict, context: dict, *, verify_
     if card and pending.get("checkin_requested", True) and verify_checkin_card:
         if not pending.get("registered") or not pending.get("registration_record_id"):
             raise HikError("Ainda não existe check-in confirmado para conferir a pulseira.")
-        confirm_checkin_card(client, visitor_id, pending["entry_at"],
-                             pending["exit_at"], pending["registration_record_id"], card)
+        ensure_checkin_card(client, pending, context)
     return True
