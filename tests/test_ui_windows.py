@@ -1594,7 +1594,7 @@ def test_missing_profile_remark_is_red_and_never_falls_back_to_reservation(monke
 @pytest.mark.skipif(os.name != "nt", reason="Editor de datas exige Tk Windows")
 def test_registered_reservation_editor_shows_only_dates_and_preserves_profile_data(monkeypatch):
     import io
-    import app
+    import customtkinter as ctk
     import remote_history
     import visitor_editor
     import visitor_profile
@@ -1602,9 +1602,6 @@ def test_registered_reservation_editor_shows_only_dates_and_preserves_profile_da
     from PIL import Image
     from core import default_settings
 
-    monkeypatch.setattr(app, "load_settings", default_settings)
-    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
-    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
     monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
     monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
@@ -1646,7 +1643,9 @@ def test_registered_reservation_editor_shows_only_dates_and_preserves_profile_da
             assert names == ["VISITANTE_VALE"]
             return [{"id": "7", "name": "VISITANTE_VALE"}], ["57", "64", "89"]
 
-    root = app.ValeApp()
+    root = ctk.CTk()
+    root.settings = default_settings()
+    root.busy = False
     root.client = lambda: FakeClient()
     root.task = lambda work, done: done(work(), None)
     root.refresh_history = lambda: None
