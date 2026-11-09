@@ -23,7 +23,6 @@ from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_se
                   mark_assigned, mark_card_confirmed, mark_registered, clear_pending,
                   save_last_delivery, load_last_delivery)
 from devices import list_readers, read_uid, to_card_number
-from credential_management import ensure_issued_card
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
 from settings_auth import verify_settings_password
 import modern_ui
@@ -37,7 +36,7 @@ from remote_history import (search_window, visitor_details,
 from access_passages import fetch_visitor_passages, load_reader_directions
 from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
 from registration_recovery import (seal_registration_context, open_registration_context,
-                                   restore_pending_credentials, ensure_checkin_card)
+                                   restore_pending_credentials)
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -760,7 +759,8 @@ class ValeApp(tk.Tk):
                              exit_at=payload["visitEndTime"],
                              access_names=[level["name"] for level in selected],
                              checkin_requested=checkin_requested,
-                             card_confirmed=not expect_card)
+                             card_confirmed=not expect_card,
+                             direct_checkin_nfc=bool(checkin_requested and expect_card))
                 registration_record_id = ""
                 history = {
                     "visitor_id": visitor_id, "appointment_id": appointment_id,
@@ -781,38 +781,26 @@ class ValeApp(tk.Tk):
                     pass  # Local history must never cause the reservation to be sent again.
                 from visitor_profile import confirm_checkin_card, update_profile
                 card = obj.card_number.strip() if expect_card else ""
-                # A reserva pode criar uma pulseira virtual e grupo genérico.
-                # Corrigir e reler o perfil ANTES do check-in, que usará estes
-                # dados, sem pedir confirmação manual durante o atendimento.
-                update_profile(client, visitor_id, obj.first_name, obj.last_name,
-                               card=card, group=group, new_photo=obj.photo_jpeg)
-                # A presença do número no payload ou editor NÃO comprova
-                # credencial física emitida. Conferir Person + Visitor Info.
-                if expect_card:
-                    ensure_issued_card(client, visitor_id, card)
-                if not checkin_requested and expect_card:
-                    mark_card_confirmed(visitor_id)
                 if checkin_requested:
+                    # Fluxo restaurado da preview.45, validada em campo:
+                    # reserva -> registerment com faces/cards NO MESMO payload.
+                    # Não editar Person, cartão nem face antes do registerment:
+                    # as escritas intermediárias inseridas após a preview.45
+                    # podem deixar o Visitor com cartão virtual/incompleto.
                     mark_checkin_started()
-                    registration_record_id = client.register_visitor(payload, selected,
-                                                                      appointment_id, visitor_id)
+                    registration_record_id = client.register_visitor(
+                        payload, selected, appointment_id, visitor_id)
                     mark_registered(registration_record_id)
                     try:
                         save_registration({**history, "registration_record_id": registration_record_id,
                                            "checkin_state": "check-in efetuado"})
                     except Exception:
                         pass
-                    if expect_card:
-                        ensure_checkin_card(client, {
-                            "visitor_id": visitor_id,
-                            "registration_record_id": registration_record_id,
-                            "entry_at": payload["visitStartTime"],
-                            "exit_at": payload["visitEndTime"],
-                        }, {
-                            "card": card, "photo_bytes": obj.photo_jpeg,
-                        })
-                        ensure_issued_card(client, visitor_id, card)
-                        mark_card_confirmed(visitor_id)
+                else:
+                    # Modo somente reserva: cartão no Person NÃO comprova
+                    # emissão em Credential Management; não marcar confirmado.
+                    update_profile(client, visitor_id, obj.first_name, obj.last_name,
+                                   card=card, group=group, new_photo=obj.photo_jpeg)
                 for level_id in access_ids:
                     client.assign_access(visitor_id, level_id)
                     mark_assigned(level_id)
@@ -821,6 +809,14 @@ class ValeApp(tk.Tk):
                 # orgIndexCode. Confirm group after every remote write.
                 from visitor_profile import confirm_visitor_group_after_edit
                 confirm_visitor_group_after_edit(client, visitor_id, group)
+                if checkin_requested and expect_card:
+                    # A única prova permitida nesta operação é o cartão no
+                    # check-in efetivamente criado. Releitura APENAS, sem
+                    # registerment/update e sem substituir Person.cards.
+                    confirm_checkin_card(
+                        client, visitor_id, payload["visitStartTime"],
+                        payload["visitEndTime"], registration_record_id, card)
+                    mark_card_confirmed(visitor_id)
                 save_last_delivery(visitor_id, door_ids,
                                    expect_face=expect_face, expect_card=expect_card,
                                    entry_at=payload["visitStartTime"],
@@ -862,8 +858,10 @@ class ValeApp(tk.Tk):
                 if result.get("card_saved_without_checkin"):
                     messagebox.showinfo("Reserva criada",
                         f"Visitor ID: {result['visitor_id']}\nReserva: {result['appointment_id']}\n\n"
-                        "A pulseira foi gravada no perfil. Para emitir a credencial de visitante, informe o número no check-in.")
-                    self.status.set("Reserva concluída. Pulseira gravada no perfil.")
+                        "Esta reserva NÃO executou check-in. O número NFC está no perfil, mas "
+                        "a credencial de visitante ainda não foi emitida. "
+                        "Confirme o check-in somente quando o visitante deve receber acesso.")
+                    self.status.set("Reserva concluída, mas emissão NFC pendente de check-in.")
                 elif report:
                     detail = "\n".join(f"• {d['name']}: face {d['faceState']}; pulseira {d['credentialState']}"
                                         for d in report["doors"])
@@ -2025,11 +2023,15 @@ class ValeApp(tk.Tk):
             context = open_registration_context(encrypted) if encrypted else None
             completed_identity = None
             if context:
-                # Reconciliar dados do MESMO Visitor ID e reserva confirmada.
-                # Nesta etapa não exigimos check-in porque ele pode ainda não
-                # ter sido enviado: o marcador separa essa situação da incerta.
-                restore_pending_credentials(
-                    client, pending, context, verify_checkin_card=False)
+                if pending.get("direct_checkin_nfc"):
+                    # Preview.45: preserva a reserva e envia cards/faces
+                    # diretamente no registerment. Uma recuperação NÃO deve
+                    # reintroduzir as Person writes removidas do fluxo novo.
+                    from registration_recovery import verify_pending_reservation
+                    verify_pending_reservation(client, pending, context)
+                else:
+                    restore_pending_credentials(
+                        client, pending, context, verify_checkin_card=False)
                 completed_identity = (
                     context["first"], context["last"], context["card"])
             elif pending.get("card_confirmed") is False:
@@ -2066,7 +2068,18 @@ class ValeApp(tk.Tk):
                 pending = load_pending()
             if context:
                 if pending.get("expect_card"):
-                    restore_pending_credentials(client, pending, context)
+                    if pending.get("direct_checkin_nfc"):
+                        if not pending.get("registered") or not pending.get("registration_record_id"):
+                            return {"unresolved": (
+                                "Check-in ainda não foi confirmado; não emitir NFC nem "
+                                "reenviar registro às cegas.")}
+                        from visitor_profile import confirm_checkin_card
+                        confirm_checkin_card(
+                            client, pending["visitor_id"], pending["entry_at"],
+                            pending["exit_at"], pending["registration_record_id"],
+                            context["card"])
+                    else:
+                        restore_pending_credentials(client, pending, context)
                     mark_card_confirmed(pending["visitor_id"])
                 pending = load_pending()
             for level in pending["access_ids"]:

@@ -594,3 +594,14 @@ Documentação oficial: [Hikvision – Access Level for Visitors](https://enpinf
 - A consulta de check-ins usa o ID selecionado e aceita todos os estados. Visitas antigas com datas iguais não impedem editar a visita escolhida. Retirado o limite local de 27 dias; a consulta continua paginada.
 - Os campos opcionais conhecidos, como gênero, empresa, documento, contato e campos customizados, são preservados quando não fazem parte da edição. `watchListInfo` e os padrões obrigatórios são incluídos antes da gravação.
 - Validação controlada no servidor real cobriu check-out e renovação de uma pessoa de teste, confirmou novo check-in ativo com o mesmo Visitor ID e manteve o vínculo da reserva original.
+
+
+## Preview.80 — Restauro do registro NFC que funcionava na preview.45
+
+Um teste em campo confirmou um visitante registrado pela preview.45 com **1 cartão e 1 face** no Credential Management, enquanto cadastros das previews .76–.79 exibiam **0 cartões e 1 face**. A comparação do código mostrou que a .45 chamava `/visitor/v2/appointment` e, imediatamente em seguida, `/visitor/v1/registerment` com o mesmo `VisitorInfo.cards`/`faces`, sem editar `Person` entre essas duas operações. As versões posteriores introduziram atualizações de perfil e verificações de `Person.cards` antes do check-in.
+
+Na preview.80, quando **Configurações > Check-in automático = Sim**, o novo cadastro recupera exatamente essa ordem de gravações remotas: criar reserva → registrar check-in na mesma reserva com cartão/foto → atribuir níveis Visitor → reaplicar acesso. A confirmação da pulseira usa uma **consulta do registro do check-in**, sem POST extra de cartão ou foto em Person. A recuperação de operação pendente segue o mesmo critério e não repete `registerment` quando o resultado é incerto. O ajuste de grupo pós-cadastro e o journal DPAPI continuam ativos.
+
+Com o check-in automático em **Não**, o programa continua apenas criando a reserva. O cartão eventualmente exibido no perfil **não é uma credencial emitida**, e isso é informado ao operador. Esta opção deve ser habilitada de forma consciente, pois o check-in também ativa o período de acesso ao visitante.
+
+**Limitações:** o pipeline Windows verifica o fluxo e o payload em testes simulados. Só o teste no HikCentral de campo determina se o cartão reaparece no Credential Management, como na preview.45. Nunca recrie ou reenvie os Visitors 2203/2243 com operações pendentes para testar; use uma nova credencial única e visite os registros existentes antes.
