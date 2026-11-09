@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.72"
+APP_VERSION = "1.0.0-preview.73"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -636,7 +636,7 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
                  registered: bool = True, expect_face: bool = True,
                  expect_card: bool = True, entry_at: str = "", exit_at: str = "",
                  access_names: list[str] | None = None,
-                 checkin_requested: bool = True) -> None:
+                 checkin_requested: bool = True, card_confirmed: bool | None = None) -> None:
     """Checkpoint mínimo após reserva; nunca armazena foto, cartão, segredo ou nome."""
     path = (base or app_dir()) / "pending.json"
     if not expect_face and not expect_card:
@@ -645,7 +645,7 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
         old = load_pending(base)
         if not (isinstance(old, dict) and old.get("stage") == "appointment_inflight"):
             raise RuntimeError("Há cadastro pendente. Confira o cadastro anterior antes de criar outro.")
-    _write_json_atomic(path, {
+    data = {
         "stage": "appointment_confirmed",
         "visitor_id": visitor_id, "appointment_id": appointment_id,
         "access_ids": access_ids, "door_ids": door_ids or [],
@@ -654,7 +654,18 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
         "registration_record_id": "", "registered": registered,
         "checkin_requested": bool(checkin_requested), "assigned": [],
         "entry_at": entry_at, "exit_at": exit_at
-    })
+    }
+    if card_confirmed is not None:
+        data["card_confirmed"] = card_confirmed
+    _write_json_atomic(path, data)
+
+
+def mark_card_confirmed(visitor_id: str, base: Path | None = None) -> None:
+    data = load_pending(base)
+    if not data or data.get("visitor_id") != visitor_id:
+        raise RuntimeError("A pendência da pulseira pertence a outro cadastro.")
+    data["card_confirmed"] = True
+    _write_json_atomic((base or app_dir()) / "pending.json", data)
 
 
 def mark_registered(registration_record_id: str = "", base: Path | None = None) -> None:

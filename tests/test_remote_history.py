@@ -793,11 +793,13 @@ def test_reserved_only_search_uses_appointment_endpoint_and_keeps_no_checkin():
 
 
 def test_combined_history_shows_checkins_and_reservations_together_with_real_register_time():
-    from remote_history import APPOINTMENTS_PATH
+    from remote_history import APPOINTMENTS_PATH, APPROVAL_DETAILS_PATH, history_time
 
     checkin = example_record(visitor="812", record="check-40")
     checkin["registerTime"] = "2026-11-02T13:19:42-03:00"
     booking = _test_appointment("512", "813")
+    booking["approvalFlowCode"] = "202611010001"
+    submitted_at = "2026-11-01T09:12:24-03:00"
     calls = []
 
     class Client:
@@ -805,6 +807,10 @@ def test_combined_history_shows_checkins_and_reservations_together_with_real_reg
             calls.append((path, dict(payload)))
             if path == CHECKINS_PATH:
                 return {"data": {"totalNum": 1, "list": [checkin]}}
+            if path == APPROVAL_DETAILS_PATH:
+                assert payload == {"approvalFlowCode": booking["approvalFlowCode"]}
+                return {"data": {"approvalFlowCode": booking["approvalFlowCode"],
+                                 "applicantTime": submitted_at}}
             assert path == APPOINTMENTS_PATH
             return {"data": {"total": 1, "list": [booking]}}
 
@@ -816,9 +822,35 @@ def test_combined_history_shows_checkins_and_reservations_together_with_real_reg
     checkin_row = next(row for row in result["rows"] if not row.get("_reservation_only"))
     reservation_row = next(row for row in result["rows"] if row.get("_reservation_only"))
     assert checkin_row["registered_at"] == checkin["registerTime"]
-    assert reservation_row.get("registered_at", "") == ""
+    assert reservation_row["registered_at"] == submitted_at
+    assert history_time(reservation_row["registered_at"]) == "01/11/2026 09:12:24"
     assert reservation_row["appointment_id"] == "512"
-    assert {path for path, _payload in calls} == {CHECKINS_PATH, APPOINTMENTS_PATH}
+    assert [path for path, _payload in calls] == [CHECKINS_PATH, APPOINTMENTS_PATH, APPROVAL_DETAILS_PATH]
+
+
+@pytest.mark.parametrize("flow", [None, {"approvalFlowCode": "other", "applicantTime": "2026-11-01T09:12:24-03:00"},
+                                  {"approvalFlowCode": "202611010001", "applicantTime": "2026-11-01"}])
+def test_combined_history_keeps_reservation_if_submission_time_cannot_be_confirmed(flow):
+    from remote_history import APPOINTMENTS_PATH, APPROVAL_DETAILS_PATH
+
+    booking = _test_appointment("512", "813")
+    booking["approvalFlowCode"] = "202611010001"
+
+    class Client:
+        def post(self, path, payload):
+            if path == CHECKINS_PATH:
+                return {"data": {"totalNum": 0}}
+            if path == APPOINTMENTS_PATH:
+                return {"data": {"total": 1, "list": [booking]}}
+            assert path == APPROVAL_DETAILS_PATH
+            if flow is None:
+                raise HikError("Consulta de fluxo indisponível")
+            return {"data": flow}
+
+    start, end = search_window("02/11/2026", "04/11/2026")
+    row, = fetch_combined_history(Client(), start, end)["rows"]
+    assert row["appointment_id"] == "512"
+    assert row["registered_at"] == ""
 
 
 def test_reservation_display_uses_given_and_family_names_when_server_joins_them():

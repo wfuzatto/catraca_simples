@@ -6,7 +6,7 @@ import reservation_replacement as replacement
 from hikcentral import HikCentral, HikError
 from remote_history import DETAIL_PATH, APPOINTMENTS_PATH
 from edit_errors import EditorFieldError
-from visitor_profile import (PERSON_INFO, PERSON_UPDATE, read_visitor_remark, update_profile,
+from visitor_profile import (PERSON_INFO, PERSON_UPDATE, read_profile, read_visitor_remark, update_profile,
                              validate_visitor_remark)
 
 
@@ -35,7 +35,6 @@ def test_apartment_validates_the_visitor_api_limit():
 def test_profile_updates_name_and_card_without_touching_visit_or_booking():
     names = ["Nome antigo", "Sobrenome antigo"]
     cards = ["1111"]
-    remarks = ["Apto antigo"]
     writes = []
 
     class Client:
@@ -45,74 +44,37 @@ def test_profile_updates_name_and_card_without_touching_visit_or_booking():
                                  "visitorFamilyName": names[1]}}
             if path == PERSON_INFO:
                 return {"data": {"personId": "1865", "personGivenName": names[0],
-                                 "personFamilyName": names[1], "remark": remarks[0],
+                                 "personFamilyName": names[1],
                                  "cards": [{"cardNo": cards[0]}]}}
             assert path == PERSON_UPDATE
             writes.append(payload)
             names[:] = [payload["personGivenName"], payload["personFamilyName"]]
             cards[:] = [payload["cards"][0]["cardNo"]]
-            remarks[:] = [payload["remark"]]
             return {"code": "0"}
 
     client = Client()
-    assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222",
-                          remark="Apto novo") == ["nome e sobrenome", "pulseira", "Remark"]
+    assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222") == ["nome e sobrenome", "pulseira"]
     assert writes == [{"personId": "1865", "personGivenName": "Nome novo",
-                       "personFamilyName": "Sobrenome novo", "cards": [{"cardNo": "2222"}],
-                       "remark": "Apto novo"}]
-    assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222",
-                          remark="Apto novo") == []
+                       "personFamilyName": "Sobrenome novo", "cards": [{"cardNo": "2222"}]}]
+    assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222") == []
     assert len(writes) == 1
 
 
-def test_profile_remark_comes_from_person_information_not_reservation_remark():
-    values = {"first": "Wesley", "last": "Teste", "person_remark": "Apto 1",
-              "visitor_remark": "Apto 1", "card": "1234"}
-    writes = []
+@pytest.mark.parametrize("visitor_remark, expected", [("Apto visitante", ("Apto visitante", True)),
+                                                      (None, ("", False))])
+def test_profile_remark_comes_from_visitor_information(visitor_remark, expected):
+    visitor = {"visitorId": "1865", "visitorGivenName": "Nome", "visitorFamilyName": "Teste"}
+    if visitor_remark is not None:
+        visitor["remark"] = visitor_remark
 
-    class Client:
-        def post(self, path, payload):
-            if path == DETAIL_PATH:
-                return {"data": {"VisitorInfo": {
-                    "visitorId": "1865", "visitorGivenName": values["first"],
-                    "visitorFamilyName": values["last"], "remark": values["visitor_remark"]}}}
-            if path == PERSON_INFO:
-                return {"data": {"personId": "1865", "personGivenName": values["first"],
-                                 "personFamilyName": values["last"], "remark": values["person_remark"],
-                                 "cards": [{"cardNo": values["card"]}]}}
-            assert path == PERSON_UPDATE
-            writes.append(payload)
-            values["person_remark"] = payload["remark"]
-            return {"code": "0"}
+    def post(path, _payload):
+        if path == DETAIL_PATH:
+            return {"data": {"VisitorInfo": visitor}}
+        assert path == PERSON_INFO
+        return {"data": {"personId": "1865", "personGivenName": "Nome", "personFamilyName": "Teste",
+                         "remark": "Apto pessoa", "cards": [{"cardNo": "1234"}]}}
 
-    assert update_profile(Client(), "1865", "Wesley", "Teste", card="1234",
-                          remark="Apto 2") == ["Remark"]
-    assert values["person_remark"] == "Apto 2"
-    assert values["visitor_remark"] == "Apto 1"
-    assert writes == [{"personId": "1865", "remark": "Apto 2"}]
-
-
-def test_profile_edit_does_not_report_success_when_person_remark_stays_old():
-    values = {"person_remark": "Apto 1", "visitor_remark": "Apto 1"}
-
-    class Client:
-        def post(self, path, payload):
-            if path == DETAIL_PATH:
-                return {"data": {"VisitorInfo": {"visitorId": "1865",
-                    "visitorGivenName": "Wesley", "visitorFamilyName": "Teste",
-                    "remark": "Remark da reserva que não é editado aqui"}}}
-            if path == PERSON_INFO:
-                return {"data": {"personId": "1865", "personGivenName": "Wesley",
-                                 "personFamilyName": "Teste", "remark": values["person_remark"], "cards": []}}
-            assert path == PERSON_UPDATE
-            # Simulate the HikCentral API accepting the request envelope while
-            # refusing to persist the profile Remark.
-            return {"code": "0"}
-
-    with pytest.raises(EditorFieldError) as exc:
-        update_profile(Client(), "1865", "Wesley", "Teste", remark="Apto 2")
-    assert "remark" in exc.value.fields
-    assert "Person Information" in exc.value.fields["remark"]
+    assert read_profile(SimpleNamespace(post=post), "1865")[2:] == (("1234",), *expected)
 
 
 def test_reservation_group_update_targets_visitor_info_and_preserves_its_dates():

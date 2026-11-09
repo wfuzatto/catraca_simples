@@ -398,7 +398,8 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
     """Edit Visitor Information fields; dates stay in the reservation editor."""
     import re
 
-    from visitor_profile import update_profile
+    from visitor_profile import read_visitor_remark, update_active_visitor_fields, update_profile
+    from visitor_remark import update_pending_visitor_remark
 
     active = getattr(app, "_active_visitor_editor", None)
     if active is not None and active.winfo_exists():
@@ -422,23 +423,16 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
     profile_group = str(visitor.get("visitorGroupName") or visitor.get("visitorGroup") or "").strip()
     record_group = str(record.get("group") or "").strip()
     source_group = profile_group or record_group
-    groups = list(dict.fromkeys(str(value).strip() for value in
-                                (available_groups or getattr(app, "connected_groups", []))
-                                if str(value).strip()))
-    group = next((value for value in groups
-                  if source_group and normalize(value) == normalize(source_group)), source_group)
-    # The profile details endpoint sometimes omits visitorGroupName. A group
-    # returned on this visitor's reservation is still an authoritative current
-    # value, so preserve it and avoid a spurious group migration on save.
-    group_known = bool(group)
-    group_options = list(groups)
-    if group and group not in group_options:
-        group_options.insert(0, group)
+    available = available_groups if available_groups is not None else getattr(app, "connected_groups", [])
+    live_group_names = {normalize(str(value).strip()) for value in available}
+    groups = [name for name in VALE_VISITOR_LEVELS if normalize(name) in live_group_names]
+    group = next((value for value in groups if normalize(value) == normalize(source_group)), source_group)
+    preserve_choice = group or "Manter grupo atual"
+    group_options = list(dict.fromkeys([preserve_choice, *groups]))
     if remark_known:
         remark = str(initial_remark or "").strip()
     else:
-        # Reservation Remark is a separate field; never use it as a fallback
-        # for the Visitor Information PersonInfo Remark being edited here.
+        # Only prefill from the confirmed Visitor Information response.
         remark = ""
 
     dialog = ctk.CTkToplevel(app)
@@ -458,27 +452,21 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
         wraplength=500, justify="left", text_color="#64748B").pack(fill="x", pady=(0, 10))
 
     fields, entries, errors = {}, {}, {}
-    group_border = ctk.CTkFrame(body, border_width=2,
-                                border_color="#9CA3AF" if group_known else "#DC2626")
+    group_border = ctk.CTkFrame(body, border_width=2, border_color="#9CA3AF")
     group_border.pack(fill="x", pady=(2, 4))
     ctk.CTkLabel(group_border, text="Grupo", anchor="w").pack(fill="x", padx=7, pady=(4, 0))
-    group_var = tk.StringVar(value=group)
+    group_var = tk.StringVar(value=preserve_choice)
     group_selector = ttk.Combobox(group_border, textvariable=group_var,
                                   state="readonly", values=group_options, font=("Segoe UI", 11))
     group_selector.pack(fill="x", padx=7, pady=4)
-    group_error = ctk.CTkLabel(
-        group_border,
-        text="" if group_known else "Grupo não retornado; selecione o grupo correto.",
-        text_color="#B91C1C", wraplength=500, justify="left")
+    if not group:
+        ctk.CTkLabel(group_border, text="O HikCentral não confirmou um grupo único para este perfil.",
+                     text_color="#64748B", wraplength=500, justify="left").pack(fill="x", padx=7)
+    group_error = ctk.CTkLabel(group_border, text="", text_color="#B91C1C",
+                               wraplength=500, justify="left")
     group_error.pack(fill="x", padx=7, pady=(0, 4))
     fields["group"] = group_var
     errors["group"] = group_error
-    group_confirmed = {"value": group_known}
-
-    def confirm_selected_group(_event=None):
-        group_confirmed["value"] = bool(group_var.get().strip())
-
-    group_selector.bind("<<ComboboxSelected>>", confirm_selected_group)
     for key, label, value in (("first", "Nome", first), ("last", "Sobrenome", last),
                               ("card", "Pulseira/NFC", card),
                               ("remark", "Apartamento / Remark (Visitor Information)", remark)):
@@ -568,9 +556,7 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
             entry.configure(border_color="#DC2626" if key in result else "#9CA3AF")
             errors[key].configure(text=result.get(key, ""))
         selected_group = group_var.get().strip()
-        known_current = group_known and normalize(selected_group) == normalize(group)
-        selected_live = any(normalize(selected_group) == normalize(value) for value in groups)
-        if not selected_group or not (selected_live or known_current) or not group_confirmed["value"]:
+        if selected_group not in group_options:
             result["group"] = "Selecione um grupo existente no HikCentral."
         group_border.configure(border_color="#DC2626" if "group" in result else "#9CA3AF")
         group_error.configure(text=result.get("group", ""))
@@ -599,8 +585,7 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
                     errors[key].configure(text=str(message))
             partial = getattr(error, "profile_saved", [])
             if partial:
-                status.set("Dados do perfil gravados (" + ", ".join(partial) + "); "
-                           "o grupo precisa ser confirmado. Ajuste o campo vermelho e salve novamente.")
+                status.set("Dados confirmados: " + ", ".join(partial) + ". " + str(error))
                 app.refresh_history()
             else:
                 status.set(str(error))
@@ -630,49 +615,49 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
         save_button.configure(state="disabled")
         cancel_button.configure(state="disabled")
         status.set("Salvando e conferindo os dados no Visitor Information...")
+        first_value = fields["first"].get().strip()
+        last_value = fields["last"].get().strip()
+        selected_group = fields["group"].get().strip()
+        card_value = fields["card"].get().strip()
+        remark_value = fields["remark"].get().strip()
+        requested_remark = None if remark_known and remark_value == remark else remark_value
+        photo = chosen_photo["bytes"]
+        new_photo = photo if chosen_photo["changed"] else b""
+        has_checkin = record.get("checkin_state") == "check-in efetuado"
 
         def work():
             client = app.client()
-            try:
-                live_groups = [str(value).strip() for value in client.visitor_groups()
-                               if str(value).strip() in VALE_VISITOR_LEVELS]
-            except Exception:
-                live_groups = [str(value).strip() for value in
-                               getattr(app, "connected_groups", [])
-                               if str(value).strip() in VALE_VISITOR_LEVELS]
-            selected_group = fields["group"].get().strip()
-            current_group = group
-            is_current = bool(group_known and normalize(selected_group) == normalize(current_group))
-            target_group = (current_group if is_current else next(
-                (value for value in live_groups if normalize(value) == normalize(selected_group)), ""))
-            group_change_requested = not is_current
-            if group_change_requested and not target_group:
-                raise EditorFieldError({"group": "O grupo não foi confirmado na consulta atual ao HikCentral."})
+            group_change_requested = selected_group != preserve_choice
             if group_change_requested:
-                requested = selected_editor_access(target_group, live_groups, app.settings)
+                live_groups = client.visitor_groups()
+                requested = selected_editor_access(selected_group, live_groups, app.settings)
                 selected, doors = client.resolve_levels(requested)
                 verify_visitor_access_plan(selected, doors, requested)
             changed = update_profile(
-                client, visitor_id, fields["first"].get(), fields["last"].get(),
-                card=fields["card"].get().strip(),
-                remark=fields["remark"].get(),
-                new_photo=chosen_photo["bytes"] if chosen_photo["changed"] else b"")
-            if group_change_requested:
-                try:
+                client, visitor_id, first_value, last_value,
+                card="" if has_checkin else card_value, new_photo=new_photo)
+            try:
+                if group_change_requested:
                     _save_visitor_group(
-                        client, app, record, group, target_group,
-                        first=fields["first"].get().strip(),
-                        last=fields["last"].get().strip(),
-                        card=fields["card"].get().strip(),
-                        photo=chosen_photo["bytes"],
-                        reservation_remark=str(record.get("reservation") or ""))
-                except Exception as exc:
-                    try:
-                        exc.profile_saved = list(changed)
-                    except Exception:
-                        pass
-                    raise
-                changed.append("grupo")
+                        client, app, record, group, selected_group,
+                        first=first_value, last=last_value, card=card_value, photo=photo,
+                        reservation_remark=remark_value)
+                    changed.append("grupo")
+                    if requested_remark is not None:
+                        if read_visitor_remark(client, visitor_id) != requested_remark:
+                            raise EditorFieldError({"remark": "O HikCentral não confirmou o Remark no perfil do visitante."})
+                        changed.append("Remark")
+                    if has_checkin and card_value:
+                        changed.append("pulseira")
+                elif has_checkin and (card_value or requested_remark is not None):
+                    changed.extend(update_active_visitor_fields(
+                        client, record, card=card_value or None, remark=requested_remark, photo=photo))
+                elif requested_remark is not None:
+                    if update_pending_visitor_remark(client, record, requested_remark):
+                        changed.append("Remark")
+            except Exception as exc:
+                exc.profile_saved = [*changed, *getattr(exc, "profile_saved", [])]
+                raise
             return changed
 
         app.task(work, done)
@@ -728,10 +713,9 @@ def _save_visitor_group(client, app, record, current_group, new_group, *,
         if not start or not end or not record.get("appointment_id") or not record.get("reservation_code"):
             raise EditorFieldError({"group": "Não há uma reserva vinculada confirmada para trocar o grupo."})
         record["entry_at"], record["exit_at"] = start, end
-        reschedule_unregistered_reservation(
-            client, record, start, end, str(record.get("reservation") or ""), selected,
+        return reschedule_unregistered_reservation(
+            client, record, start, end, reservation_remark, selected,
             allow_group_change=True)
-        return
 
     from remote_history import resolve_remote_edit_record
     from visitor_edit_transaction import update_existing_visit

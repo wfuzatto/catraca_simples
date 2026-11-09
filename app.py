@@ -20,7 +20,7 @@ from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_se
                   validate_ticket_period, require_confirmed_daily_schedule,
                   parse_visit_date, visitor_period_from_dates, visitor_validity_hours,
                   parse_ticket_lines, parse_access_lines, parse_schedule_lines, load_pending, save_pending,
-                  mark_assigned, mark_registered, clear_pending,
+                  mark_assigned, mark_card_confirmed, mark_registered, clear_pending,
                   save_last_delivery, load_last_delivery)
 from devices import list_readers, read_uid, to_card_number
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
@@ -715,7 +715,9 @@ class ValeApp(tk.Tk):
                  if expect_card else "\n\n") +
                 ("Ao confirmar, o aplicativo criará a reserva e registrará o check-in automaticamente.\n\n"
                  if checkin_requested else
-                 "Ao confirmar, o aplicativo criará a reserva sem solicitar check-in.\n\n")
+                 "Ao confirmar, o aplicativo criará a reserva sem solicitar check-in.\n" +
+                 ("A pulseira será gravada no perfil. Para emitir a credencial de visitante, informe o número no check-in.\n\n"
+                  if expect_card else "\n"))
                 + "Prosseguir?"
             )
             if not messagebox.askyesno("Confirmar níveis e catracas", confirmation, parent=self):
@@ -736,12 +738,44 @@ class ValeApp(tk.Tk):
                              entry_at=payload["visitStartTime"],
                              exit_at=payload["visitEndTime"],
                              access_names=[level["name"] for level in selected],
-                             checkin_requested=checkin_requested)
+                             checkin_requested=checkin_requested,
+                             card_confirmed=not expect_card)
                 registration_record_id = ""
+                history = {
+                    "visitor_id": visitor_id, "appointment_id": appointment_id,
+                    "first": obj.first_name, "last": obj.last_name,
+                    "group": group, "reservation": obj.reservation,
+                    "door_ids": door_ids, "access_names": [level["name"] for level in selected],
+                    "entry_at": payload["visitStartTime"], "exit_at": payload["visitEndTime"],
+                    "reservation_entry_at": payload["visitStartTime"],
+                    "reservation_exit_at": payload["visitEndTime"],
+                    "registered_at": datetime.now(TZ).isoformat(timespec="seconds"),
+                    "expect_face": expect_face, "expect_card": expect_card,
+                    "state": "em consulta",
+                    "checkin_state": "não solicitado" if not checkin_requested else "não verificado",
+                }
+                try:
+                    save_registration(history)
+                except Exception:
+                    pass  # Local history must never cause the reservation to be sent again.
                 if checkin_requested:
                     registration_record_id = client.register_visitor(payload, selected,
                                                                       appointment_id, visitor_id)
                     mark_registered(registration_record_id)
+                    try:
+                        save_registration({**history, "registration_record_id": registration_record_id,
+                                           "checkin_state": "check-in efetuado"})
+                    except Exception:
+                        pass
+                if expect_card:
+                    from visitor_profile import confirm_checkin_card, save_reserved_profile_card
+                    card = obj.card_number.strip()
+                    if checkin_requested:
+                        confirm_checkin_card(client, visitor_id, payload["visitStartTime"],
+                                             payload["visitEndTime"], registration_record_id, card)
+                    else:
+                        save_reserved_profile_card(client, visitor_id, obj.first_name, obj.last_name, card)
+                    mark_card_confirmed(visitor_id)
                 for level_id in access_ids:
                     client.assign_access(visitor_id, level_id)
                     mark_assigned(level_id)
@@ -753,23 +787,9 @@ class ValeApp(tk.Tk):
                                    appointment_id=appointment_id,
                                    registration_record_id=registration_record_id)
                 clear_pending()
-                try:
-                    save_registration({
-                        "visitor_id": visitor_id, "appointment_id": appointment_id,
-                        "registration_record_id": registration_record_id,
-                        "first": obj.first_name, "last": obj.last_name,
-                        "group": group, "reservation": obj.reservation,
-                        "door_ids": door_ids, "access_names": [level["name"] for level in selected],
-                        "entry_at": payload["visitStartTime"], "exit_at": payload["visitEndTime"],
-                        "reservation_entry_at": payload["visitStartTime"],
-                        "reservation_exit_at": payload["visitEndTime"],
-                        "registered_at": datetime.now(TZ).isoformat(timespec="seconds"),
-                        "expect_face": expect_face, "expect_card": expect_card,
-                        "state": "em consulta",
-                        "checkin_state": "não solicitado" if not checkin_requested else "não verificado"
-                    })
-                except Exception:
-                    pass  # remote registration was already completed; do not retry creation
+                if expect_card and not checkin_requested:
+                    return {"visitor_id": visitor_id, "appointment_id": appointment_id,
+                            "card_saved_without_checkin": True}
                 try:
                     report = self._poll_delivery(client, visitor_id, door_ids,
                                                  expect_face=expect_face, expect_card=expect_card)
@@ -793,6 +813,9 @@ class ValeApp(tk.Tk):
                             advice = ("O envio da reserva pode ter sido aceito, mas a resposta é incerta. "
                                       "Antes de repetir, consulte Visitor > Visitor Reservation no HikCentral. "
                                       "Nenhuma nova reserva será criada automaticamente.")
+                        elif pending.get("card_confirmed") is False:
+                            advice = ("A reserva já foi criada. Abra o mesmo visitante em Cadastros efetuados, "
+                                      "confira a pulseira e use Resolver pendência para revisar o cadastro.")
                         elif not pending.get("checkin_requested", True):
                             advice = ("A reserva foi criada sem solicitação de check-in. "
                                       "A recuperação concluirá os acessos sem registrar o visitante.")
@@ -811,8 +834,13 @@ class ValeApp(tk.Tk):
                     if pending:
                         self.after(4000, self._auto_resume_pending)
                     return
-                report = result["report"]
-                if report:
+                report = result.get("report")
+                if result.get("card_saved_without_checkin"):
+                    messagebox.showinfo("Reserva criada",
+                        f"Visitor ID: {result['visitor_id']}\nReserva: {result['appointment_id']}\n\n"
+                        "A pulseira foi gravada no perfil. Para emitir a credencial de visitante, informe o número no check-in.")
+                    self.status.set("Reserva concluída. Pulseira gravada no perfil.")
+                elif report:
                     detail = "\n".join(f"• {d['name']}: face {d['faceState']}; pulseira {d['credentialState']}"
                                         for d in report["doors"])
                     checkin_line = (f"Registro de check-in: {result['registration_record_id']}\n"
@@ -1166,7 +1194,7 @@ class ValeApp(tk.Tk):
             description = (
                 f"HikCentral: {len(rows)} cadastro(s) nesta página, incluindo check-ins e reservas sem check-in. "
                 "De/Até filtram o início da visita ou da reserva; as datas exibidas vêm da reserva vinculada. "
-                "Cadastrado em usa registerTime do HikCentral ou o horário local quando o ID do registro/reserva corresponde. "
+                "Cadastrado em mostra o horário do check-in ou do pedido da reserva no HikCentral. "
                 f"As duas consultas retornaram {result['total']} registro(s)."
                 + (f" {excluded} registro(s) fora da seleção descartado(s) "
                    "nesta página." if excluded else "")
@@ -1436,8 +1464,10 @@ class ValeApp(tk.Tk):
             remark, remark_known = "", False
             try:
                 from visitor_profile import read_profile
-                _details, _names, _cards, remark, remark_known = read_profile(
+                _details, _names, cards, remark, remark_known = read_profile(
                     client, record["visitor_id"], details=detail)
+                if len(cards) == 1 and not record.get("card_number"):
+                    record["card_number"] = cards[0]
             except Exception as exc:
                 issue = (issue + "\n" if issue else "") + (
                     "Não foi possível consultar o Remark em Visitor Information: " + str(exc))
@@ -1447,14 +1477,18 @@ class ValeApp(tk.Tk):
                 try:
                     from remote_history import find_original_appointment
                     booking = find_original_appointment(client, record)
-                    booking_info = booking.get("visitorInfo") or booking.get("VisitorInfo") or {}
-                    reservation_group = str(booking_info.get("visitorGroupName") or
-                                            booking_info.get("visitorGroup") or "").strip()
-                    if reservation_group:
-                        record["group"] = reservation_group
-                except Exception as exc:
-                    issue = (issue + "\n" if issue else "") + (
-                        "O grupo não foi confirmado no perfil nem na reserva vinculada: " + str(exc))
+                    info = booking.get("visitorInfo") or booking.get("VisitorInfo") or {}
+                    record["group"] = str(info.get("visitorGroupName") or info.get("visitorGroup") or "").strip()
+                except Exception:
+                    pass  # The editor preserves the current group if the API cannot identify it.
+                if not record.get("group"):
+                    try:
+                        from remote_history import read_profile_group
+                        record["group"] = read_profile_group(
+                            client, record["visitor_id"],
+                            profile.get("visitorGivenName") or record.get("first") or "")
+                    except Exception:
+                        pass
             try:
                 groups = selectable_visitor_groups(client.visitor_groups())
             except Exception as exc:
@@ -1957,6 +1991,8 @@ class ValeApp(tk.Tk):
         def work():
             client = self.client()
             pending = load_pending()
+            if pending.get("card_confirmed") is False:
+                return {"unresolved": "Confira a pulseira deste cadastro no histórico antes de resolver a pendência."}
             # Nunca recuperar pendência desconhecida com permissões presumidas.
             approved_names = pending.get("access_names")
             if not isinstance(approved_names, list) or len(approved_names) != 1:
