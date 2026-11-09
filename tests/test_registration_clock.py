@@ -148,9 +148,13 @@ def test_missing_one_day_ticket_blocks_reuse_of_previous_multi_day():
 
 def test_success_reset_cannot_run_before_error_handler():
     source = inspect.getsource(app.ValeApp.register)
-    assert source.count("self._reset_registration_period_after_success()") == 1
+    reset = inspect.getsource(app.ValeApp._clear_registration_after_success)
+    # Tanto o cadastro novo quanto a reconciliação reaproveitam o mesmo
+    # reset, executado apenas depois da confirmação de sucesso.
+    assert source.count("self._clear_registration_after_success()") == 1
+    assert reset.count("self._reset_registration_period_after_success()") == 1
     assert source.index("if error:") < source.index(
-        "self._reset_registration_period_after_success()")
+        "self._clear_registration_after_success()")
     assert "if pending:" in source
     assert "return" in source
 
