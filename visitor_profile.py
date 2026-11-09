@@ -106,6 +106,36 @@ def set_visitor_group(client, visitor_id, group):
     return True
 
 
+
+def confirm_visitor_group_after_edit(client, visitor_id, group):
+    """Last-write-wins correction: Person and Visitor must retain the selected group.
+
+    HikCentral can silently reset orgIndexCode to Visitors on person, NFC,
+    appointment and check-in updates. Restore only the explicitly validated
+    group, then read BOTH remote representations. A missing Visitor group is
+    not inferred; an explicitly contradictory one blocks false success.
+    """
+    expected = str(group or "").strip()
+    if not expected or normalize(expected) == normalize("Visitors"):
+        raise EditorFieldError({"group": "Selecione um grupo Visitor autorizado antes de concluir a edição."})
+    set_visitor_group(client, str(visitor_id), expected)
+    actual = read_visitor_group(client, str(visitor_id))
+    if normalize(actual) != normalize(expected):
+        raise EditorFieldError({"group": (
+            f"O HikCentral não manteve o grupo {expected} na ficha Person "
+            f"(atual: {actual or 'não informado'}). Cadastro ainda pendente.")})
+    details = visitor_details(client, str(visitor_id))
+    info = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    if not isinstance(info, dict) or str(info.get("visitorId") or "") != str(visitor_id):
+        raise EditorFieldError({"group": "Visitor Information não confirmou a identidade do mesmo visitante."})
+    visitor_group = str(info.get("visitorGroupName") or info.get("visitorGroup") or "").strip()
+    if visitor_group and normalize(visitor_group) != normalize(expected):
+        raise EditorFieldError({"group": (
+            f"A ficha Person mostra {expected}, mas Visitor Information retornou "
+            f"{visitor_group}. O grupo NÃO foi confirmado; revise no HikCentral.")})
+    return expected
+
+
 def confirm_checkin_card(client, visitor_id, start, end, record_id, card):
     row = client.find_registration_record(visitor_id, start, end, record_id=record_id)
     if not row or str((row.get("visitorCardInfo") or {}).get("cardNumber") or "").strip() != card:
@@ -252,13 +282,6 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b"", g
             failure = EditorFieldError(mismatches)
             failure.profile_saved = list(changed)
             raise failure from write_error
-    if group:
-        try:
-            if set_visitor_group(client, visitor_id, group):
-                changed.append("grupo")
-        except Exception as exc:
-            exc.profile_saved = [*changed, *getattr(exc, "profile_saved", [])]
-            raise
     if new_photo:
         try:
             previous = fetch_visitor_photo(client, visitor_id, details=details)
@@ -281,4 +304,13 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b"", g
                 prefix = "Dados já conferidos: " + ", ".join(changed) + ". " if changed else ""
                 raise EditorFieldError({"photo": prefix + "A foto não foi confirmada na consulta ao perfil. " + error})
             changed.append("foto")
+    # Persist group only AFTER all other profile/face writes; HikCentral's
+    # partial Person updates can silently fall back to its default Visitors.
+    if group:
+        try:
+            if set_visitor_group(client, visitor_id, group):
+                changed.append("grupo")
+        except Exception as exc:
+            exc.profile_saved = [*changed, *getattr(exc, "profile_saved", [])]
+            raise
     return changed
