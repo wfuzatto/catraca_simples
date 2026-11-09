@@ -208,12 +208,20 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b"", g
     if errors:
         raise EditorFieldError(errors)
     details, old_names, old_cards, _, _ = read_profile(client, visitor_id)
+    person = _person_info(client, visitor_id)
+    profile = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    document_no = str(person.get("certificateNo") or
+                      (profile.get("certificateNo") if isinstance(profile, dict) else "") or "").strip()
+    document_was_card = bool(card and document_no and
+                             document_no.casefold() == card.casefold())
     changed = []
     update = {}
     if (first, last) != old_names:
         update.update(personGivenName=first, personFamilyName=last)
-    if card and old_cards != (card,):
+    if card and (old_cards != (card,) or document_was_card):
         update["cards"] = [{"cardNo": card}]
+    if document_was_card:
+        update["certificateNo"] = ""
     if update:
         write_error = None
         try:
@@ -231,6 +239,15 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b"", g
             mismatches["card"] = "O HikCentral não confirmou a pulseira solicitada."
         elif "cards" in update:
             changed.append("pulseira")
+        if document_was_card:
+            confirmed_person = _person_info(client, visitor_id)
+            confirmed_profile = details.get("VisitorInfo") or details.get("visitorInfo") or details
+            observed_document = str(confirmed_person.get("certificateNo") or
+                                    (confirmed_profile.get("certificateNo")
+                                     if isinstance(confirmed_profile, dict) else "") or "").strip()
+            if observed_document and observed_document.casefold() == card.casefold():
+                mismatches["card"] = (
+                    "O HikCentral ainda retorna a pulseira no campo de identificação do documento.")
         if mismatches:
             failure = EditorFieldError(mismatches)
             failure.profile_saved = list(changed)

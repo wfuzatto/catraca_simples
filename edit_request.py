@@ -5,6 +5,24 @@ import re
 from edit_errors import EditorFieldError
 
 
+def separate_card_from_document(info, card_numbers=None):
+    """Never copy an NFC card number into the visitor's ID document field."""
+    if not isinstance(info, dict):
+        return False
+    document_no = str(info.get("certificateNo") or "").strip()
+    if not document_no:
+        return False
+    if card_numbers is None:
+        cards = info.get("cards") or []
+        card_numbers = [card.get("cardNo") for card in cards if isinstance(card, dict)] \
+            if isinstance(cards, list) else []
+    known_cards = {str(value or "").strip().casefold() for value in card_numbers if str(value or "").strip()}
+    if document_no.casefold() not in known_cards:
+        return False
+    info["certificateNo"] = ""
+    return True
+
+
 def validate_edit_request(payload, *, require_credential=True):
     errors = {}
     entries = payload.get("visitorInfoList") or []
@@ -53,4 +71,5 @@ def preserve_visitor_metadata(payload, details):
     info.setdefault("gender", 0)
     if not info.get("watchListInfo"):
         info["watchListInfo"] = [{"enableRegister": 1, "ID": "0", "Type": "1"}]
+    separate_card_from_document(info)
     return result

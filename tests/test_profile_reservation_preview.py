@@ -60,6 +60,42 @@ def test_profile_updates_name_and_card_without_touching_visit_or_booking():
     assert len(writes) == 1
 
 
+def test_profile_editor_moves_misfiled_card_from_document_to_nfc_card():
+    state = {"first": "Mauro", "last": "Bello", "cards": [],
+             "certificateNo": "2884250122"}
+    writes = []
+
+    class Client:
+        def post(self, path, payload):
+            if path == DETAIL_PATH:
+                return {"data": {"VisitorInfo": {
+                    "visitorId": "1870", "visitorGivenName": state["first"],
+                    "visitorFamilyName": state["last"],
+                    "certificateNo": state["certificateNo"],
+                }}}
+            if path == PERSON_INFO:
+                return {"data": {
+                    "personId": "1870", "personGivenName": state["first"],
+                    "personFamilyName": state["last"], "cards": list(state["cards"]),
+                    "certificateNo": state["certificateNo"],
+                }}
+            assert path == PERSON_UPDATE
+            writes.append(payload.copy())
+            state["first"] = payload.get("personGivenName", state["first"])
+            state["last"] = payload.get("personFamilyName", state["last"])
+            state["cards"] = payload.get("cards", state["cards"])
+            state["certificateNo"] = payload.get("certificateNo", state["certificateNo"])
+            return {"code": "0"}
+
+    changed = update_profile(Client(), "1870", "Mauro", "Bello", card="2884250122")
+
+    assert changed == ["pulseira"]
+    assert writes == [{"personId": "1870", "cards": [{"cardNo": "2884250122"}],
+                       "certificateNo": ""}]
+    assert state["cards"] == [{"cardNo": "2884250122"}]
+    assert state["certificateNo"] == ""
+
+
 def test_profile_group_uses_person_org_index_code_and_is_verified():
     state = {"group_id": "1"}
     writes = []
