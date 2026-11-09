@@ -7,8 +7,8 @@ from edit_errors import EditorFieldError
 from hikcentral import HikError
 
 
-def test_reservation_card_is_written_and_verified_in_person_profile(monkeypatch):
-    stored = []
+def test_reservation_card_replaces_virtual_card_and_is_verified(monkeypatch):
+    stored = [{"cardNo": "VIRTUAL-RESERVATION-CARD"}]
     writes = []
     monkeypatch.setattr(profiles, "visitor_details", lambda *_: {"VisitorInfo": {
         "visitorId": "2118", "visitorGivenName": "Nome", "visitorFamilyName": "Teste"}})
@@ -25,10 +25,17 @@ def test_reservation_card_is_written_and_verified_in_person_profile(monkeypatch)
     profiles.save_reserved_profile_card(client, "2118", "Nome", "Teste", "12345678")
     profiles.save_reserved_profile_card(client, "2118", "Nome", "Teste", "12345678")
     assert writes == [{"personId": "2118", "cards": [{"cardNo": "12345678"}]}]
+    profiles.save_reserved_profile_card(client, "2118", "Nome", "Teste", "12345679")
+    assert writes[-1] == {"personId": "2118", "cards": [{"cardNo": "12345679"}]}
+    assert len(writes) == 2
+
+
+def test_reservation_card_refuses_only_when_profile_identity_is_different(monkeypatch):
+    monkeypatch.setattr(profiles, "read_profile", lambda *_: (
+        {}, ("Outro", "Perfil"), ("VIRTUAL",), "", False))
     with pytest.raises(EditorFieldError) as error:
-        profiles.save_reserved_profile_card(client, "2118", "Nome", "Teste", "12345679")
+        profiles.save_reserved_profile_card(SimpleNamespace(), "2118", "Nome", "Teste", "12345678")
     assert "card" in error.value.fields
-    assert len(writes) == 1
 
 
 @pytest.mark.parametrize("saved_card", ["12345678", ""])

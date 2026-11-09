@@ -7,7 +7,7 @@ from hikcentral import HikCentral, HikError
 from remote_history import DETAIL_PATH, APPOINTMENTS_PATH
 from edit_errors import EditorFieldError
 from visitor_profile import (PERSON_INFO, PERSON_UPDATE, read_profile, read_visitor_remark, update_profile,
-                             validate_visitor_remark)
+                             read_visitor_group, set_visitor_group, validate_visitor_remark)
 
 
 def test_apartment_uses_visitor_information_and_does_not_write():
@@ -57,6 +57,33 @@ def test_profile_updates_name_and_card_without_touching_visit_or_booking():
     assert writes == [{"personId": "1865", "personGivenName": "Nome novo",
                        "personFamilyName": "Sobrenome novo", "cards": [{"cardNo": "2222"}]}]
     assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222") == []
+    assert len(writes) == 1
+
+
+def test_profile_group_uses_person_org_index_code_and_is_verified():
+    state = {"group_id": "1"}
+    writes = []
+
+    class Client:
+        def visitor_group_catalog(self):
+            return [{"id": "1", "name": "Visitors"},
+                    {"id": "3", "name": "Hóspedes Vale"}]
+
+        def post(self, path, payload):
+            if path == PERSON_INFO:
+                return {"data": {"personId": "1865", "orgIndexCode": state["group_id"]}}
+            assert path == PERSON_UPDATE
+            writes.append(payload)
+            state["group_id"] = str(payload["orgIndexCode"])
+            return {"code": "0"}
+
+    client = Client()
+    assert read_visitor_group(client, "1865") == "Visitors"
+    assert set_visitor_group(client, "1865", "Hóspedes Vale") is True
+    assert state["group_id"] == "3"
+    assert read_visitor_group(client, "1865") == "Hóspedes Vale"
+    assert writes == [{"personId": "1865", "orgIndexCode": "3"}]
+    assert set_visitor_group(client, "1865", "Hóspedes Vale") is False
     assert len(writes) == 1
 
 

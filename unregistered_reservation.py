@@ -12,10 +12,19 @@ from hikcentral import HikError, normalize
 from ordered_reservation_change import _lock_transaction, _write_once
 from remote_history import compare_reservation_period, parse_access_levels, visitor_details
 from reservation_replacement import _booking_by_code
-from visitor_profile import validate_visitor_remark
+from visitor_profile import set_visitor_group, validate_visitor_remark
 
 
 UPDATE_BOOKING = "/artemis/api/visitor/v2/appointment/update"
+
+
+def _default_group_reset(actual, expected, level=None):
+    """Recognize HCP's known Visitors fallback only when our target is mapped."""
+    expected = str(expected or "").strip()
+    mapped_level = VALE_VISITOR_LEVELS.get(expected)
+    if not mapped_level or normalize(str(actual or "")) != normalize("Visitors"):
+        return False
+    return level is None or normalize(str(level.get("name") or "")) == normalize(mapped_level)
 
 
 def _period(start, end):
@@ -48,7 +57,8 @@ def _confirm_reserved(client, row, vid, level, group, *, allow_registered=False,
     if parse_access_levels(row) != [level]:
         raise EditorFieldError({"group": "O nível de acesso da reserva difere do nível Visitor selecionado."})
     returned_group = str(info.get("visitorGroupName") or info.get("visitorGroup") or "").strip()
-    if group is not None and returned_group and normalize(returned_group) != normalize(group):
+    if (group is not None and returned_group and normalize(returned_group) != normalize(group)
+            and not _default_group_reset(returned_group, group, level)):
         raise EditorFieldError({"group": "O HikCentral retornou outro grupo para a reserva."})
     if not allow_registered and client.find_registration_record(vid, row["appointStartTime"], row["appointEndTime"]):
         raise EditorFieldError({"appointment": "O HikCentral já tem um check-in nesse período. Abra a visita no histórico."})
@@ -62,7 +72,9 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
     profile_group = str(profile.get("visitorGroupName") or profile.get("visitorGroup") or "").strip()
     group_change_requested = expected_profile_group is not None
     expected_profile_group = group if expected_profile_group is None else expected_profile_group
-    if expected_profile_group and profile_group and normalize(profile_group) != normalize(expected_profile_group):
+    if (group_change_requested and expected_profile_group and profile_group and
+            normalize(profile_group) != normalize(expected_profile_group) and
+            not _default_group_reset(profile_group, expected_profile_group)):
         raise EditorFieldError({"group": "O grupo do perfil difere do grupo da reserva."})
     saved = original["visitorInfo"]
     source = {**profile, **{key: value for key, value in saved.items() if value is not None}}
@@ -70,8 +82,8 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
         str(saved.get("visitorGroupName") or saved.get("visitorGroup") or "").strip() or profile_group)
     if not all(str(source.get(key) or "").strip() for key in ("visitorGivenName", "visitorFamilyName")):
         raise EditorFieldError({"appointment": "O HikCentral não retornou nome e sobrenome do perfil."})
-    # Reuse the reservation's data and preserve its access settings. The edit
-    # endpoint takes profile fields but card and face writes belong to a separate flow.
+    # Reuse the reservation's data and preserve its access settings. Cards and
+    # face data belong to the separate Visitor Information person API.
     info = {key: deepcopy(source[key]) for key in (
         "visitorGivenName", "visitorFamilyName", "gender", "email", "phoneNo", "plateNo",
         "companyName", "certificateType", "certificateNo", "customField", "additionalInfo",
@@ -82,19 +94,13 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
     info.setdefault("gender", 0)
     prior_access = {**(original.get("accessInfo") or {}), **(profile.get("accessInfo") or {}),
                     **(saved.get("accessInfo") or {})}
-    # The booking API makes group optional. If the server omitted it, preserve
-    # the exact access level without submitting an inferred group assignment.
-    if group_change_requested:
-        # A deliberate group migration must send the new Visitor group.
-        info["visitorGroupName"] = group
-    else:
-        # Preserve a group explicitly returned by the profile/reservation.
-        # Do not infer and write one from an access-level name when the API
-        # omitted the Visitor group; the original level is verified separately.
-        confirmed_group = str(saved.get("visitorGroupName") or saved.get("visitorGroup") or
-                              profile_group).strip()
-        if confirmed_group:
-            info["visitorGroupName"] = confirmed_group
+    # For Vale groups this exact name is derived from the verified access-level
+    # mapping. Sending it keeps the reservation aligned even when profile and
+    # reservation reads omit the group. Unmapped levels still preserve only an
+    # explicitly returned group and are never guessed.
+    confirmed_group = actual_group
+    if confirmed_group:
+        info["visitorGroupName"] = confirmed_group
     info.update(visitorId=vid, remark=remark, accessInfo={
         "electrostaticDetectionType": prior_access.get("electrostaticDetectionType", 0),
         "qrCodeValidNum": prior_access.get("qrCodeValidNum", 0),
@@ -219,6 +225,7 @@ def reschedule_unregistered_reservation(client, record, start, end, remark, sele
                                 allow_registered=allow_group_change)
             if not result:
                 raise HikError("O HikCentral ainda não confirmou a edição anterior. Confira a reserva pelo código.")
+            set_visitor_group(client, vid, group)
             journal.unlink()
             return result
 
@@ -231,11 +238,12 @@ def reschedule_unregistered_reservation(client, record, start, end, remark, sele
         original_info = original.get("visitorInfo") or {}
         original_group = str(original_info.get("visitorGroupName") or
                              original_info.get("visitorGroup") or "").strip()
-        if record_group and original_group and normalize(record_group) != normalize(original_group):
-            raise EditorFieldError({"group": "O grupo original mudou no HikCentral; confira antes de salvar."})
         original_levels = parse_access_levels(original)
         if not original_levels:
             raise EditorFieldError({"group": "O HikCentral não retornou o nível de acesso original da reserva."})
+        if (record_group and original_group and normalize(record_group) != normalize(original_group)
+                and not _default_group_reset(original_group, record_group, original_levels[0])):
+            raise EditorFieldError({"group": "O grupo original mudou no HikCentral; confira antes de salvar."})
         old_names, old_ids = record.get("access_names") or [], record.get("access_level_ids") or []
         if old_names and (len(old_names) != len(original_levels) or
                           any(normalize(str(name)) != normalize(str(level_row["name"]))
@@ -251,6 +259,7 @@ def reschedule_unregistered_reservation(client, record, start, end, remark, sele
             allow_registered=allow_group_change,
             expected_status=original_status if allow_group_change else None)
         if result:
+            set_visitor_group(client, vid, group)
             return result
         if group_changed:
             if not original_group:
@@ -276,5 +285,6 @@ def reschedule_unregistered_reservation(client, record, start, end, remark, sele
         if not result:
             raise HikError("O HikCentral não confirmou as novas datas, o Remark e o grupo da reserva. "
                            "Confira a reserva pelo código antes de continuar.") from write_error
+        set_visitor_group(client, vid, group)
         journal.unlink()
         return result
