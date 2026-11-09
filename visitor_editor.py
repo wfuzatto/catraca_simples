@@ -391,6 +391,31 @@ def open_editor_camera(dialog, settings, on_accept):
         raise
 
 
+
+def choose_editor_group(profile_group, record):
+    """Prefer an explicitly verified visitor access level over HCP's Visitors fallback.
+
+    A missing or unrelated level cannot authorize a guess; in that case the
+    operator must select a real group. Never override a non-default group.
+    """
+    from hikcentral import normalize
+    remote = str(profile_group or "").strip()
+    history = str(record.get("group") or "").strip()
+    if normalize(remote) != normalize("Visitors"):
+        return remote or history
+    access = record.get("access_names") or []
+    approved = [
+        group for group, level in VALE_VISITOR_LEVELS.items()
+        if isinstance(access, list) and len(access) == 1
+        and normalize(str(access[0])) == normalize(level)
+    ]
+    if len(approved) == 1 and (
+            not history or normalize(history) == normalize("Visitors")
+            or normalize(history) == normalize(approved[0])):
+        return approved[0]
+    return remote or history
+
+
 def open_visitor_information_editor(app, record, *, remote_details=None,
                                    initial_photo=b"", photo_error="",
                                    initial_remark="", remark_known=False,
@@ -398,7 +423,8 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
     """Edit Visitor Information fields; dates stay in the reservation editor."""
     import re
 
-    from visitor_profile import read_visitor_remark, update_active_visitor_fields, update_profile
+    from visitor_profile import (read_visitor_remark, update_active_visitor_fields,
+                                 update_profile, confirm_visitor_group_after_edit)
     from credential_management import ensure_issued_card
     from visitor_remark import update_pending_visitor_remark
 
@@ -423,7 +449,7 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
 
     profile_group = str(visitor.get("visitorGroupName") or visitor.get("visitorGroup") or "").strip()
     record_group = str(record.get("group") or "").strip()
-    source_group = profile_group or record_group
+    source_group = choose_editor_group(profile_group, record)
     available = available_groups if available_groups is not None else getattr(app, "connected_groups", [])
     live_group_names = {normalize(str(value).strip()) for value in available}
     groups = [name for name in VALE_VISITOR_LEVELS if normalize(name) in live_group_names]
@@ -668,6 +694,9 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
                     ensure_issued_card(client, visitor_id, card_value)
                     if "pulseira" not in changed:
                         changed.append("pulseira NFC confirmada")
+                # Always last, AFTER updates to card/check-in/remark/booking.
+                # Person writes can revert orgIndexCode to default Visitors.
+                confirm_visitor_group_after_edit(client, visitor_id, selected_group)
             except Exception as exc:
                 exc.profile_saved = [*changed, *getattr(exc, "profile_saved", [])]
                 raise
