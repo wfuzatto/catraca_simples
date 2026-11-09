@@ -6,6 +6,7 @@ from edit_errors import EditorFieldError
 from hikcentral import HikCentral, HikError
 from remote_history import APPOINTMENTS_PATH, DETAIL_PATH
 from visitor_remark import UPDATE_BOOKING, update_pending_visitor_remark
+from visitor_profile import PERSON_INFO, PERSON_UPDATE
 
 
 START = "2026-11-10T02:05:00-03:00"
@@ -30,12 +31,23 @@ class FakeHikCentral:
         self.writes = []
         self.confirm_profile = True
         self.lost_response = False
+        self.person_group_id = "3"
+
+    def visitor_group_catalog(self):
+        return [{"id": "1", "name": "Visitors"},
+                {"id": "3", "name": "Hóspedes Vale"}]
 
     def find_registration_record(self, vid, start, end):
         assert (vid, start, end) == ("2118", START, END)
         return self.active
 
     def post(self, path, request):
+        if path == PERSON_INFO:
+            return {"data": {"personId": "2118", "orgIndexCode": self.person_group_id}}
+        if path == PERSON_UPDATE:
+            assert request.get("personId") == "2118"
+            self.person_group_id = str(request["orgIndexCode"])
+            return {"data": {}}
         if path == APPOINTMENTS_PATH:
             assert request["appointCode"] == "2735"
             return {"data": {"list": [deepcopy(self.booking)]}}
@@ -46,6 +58,7 @@ class FakeHikCentral:
         updated = request["visitorInfoList"][0]["VisitorInfo"]
         self.booking["appointID"] = "2000"
         self.booking["visitorInfo"].update(updated)
+        self.person_group_id = "1"  # Appointment update resets group to Visitors.
         if self.confirm_profile:
             self.profile.update(updated)
         if self.lost_response:
@@ -117,3 +130,5 @@ def test_reencodes_access_level_list_from_live_response_shape(tmp_path):
         "electrostaticDetectionType": 0, "qrCodeValidNum": 7,
         "accessLevelList": [{"accessLevel": {"id": 7, "baseInfo": {"name": "VISITANTE_VALE"}}}],
     }
+    assert request["visitorInfoList"][0]["VisitorInfo"]["visitorGroupName"] == "Hóspedes Vale"
+    assert client.person_group_id == "3"  # Restored after remark update.
