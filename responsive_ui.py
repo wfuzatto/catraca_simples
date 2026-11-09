@@ -65,7 +65,6 @@ def apply(app, width: int) -> None:
         app.registration_footer.configure(height=101)
         app.registration_status_widget.pack(side="top", fill="x", padx=14, pady=(7, 0))
         app.register_button.pack(side="right", padx=(6, 14), pady=(2, 7))
-        app.delivery_button.pack(side="right", padx=(6, 0), pady=(2, 7))
         app.settings_footer.configure(height=102)
         app.settings_notice.pack(side="top", fill="x", padx=14, pady=(7, 0))
         app.save_button.pack(side="right", padx=(6, 14), pady=(2, 7))
@@ -74,13 +73,13 @@ def apply(app, width: int) -> None:
     else:
         app.registration_footer.configure(height=73)
         app.register_button.pack(side="right", padx=(8, 18), pady=13)
-        app.delivery_button.pack(side="right", padx=(8, 0), pady=13)
         app.registration_status_widget.pack(side="left", fill="x", expand=True, padx=18)
         app.settings_footer.configure(height=75)
         app.save_button.pack(side="right", padx=(9, 18), pady=13)
         app.settings_test_button.pack(side="right", padx=(9, 0), pady=13)
         app.settings_diagnostic_button.pack(side="right", padx=(9, 0), pady=13)
         app.settings_notice.pack(side="left", padx=18)
+    app._refresh_pending_button()
 
 
 def on_resize(app, event) -> None:

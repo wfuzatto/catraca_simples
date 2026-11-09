@@ -6,7 +6,7 @@ from PIL import Image
 import pytest
 from remote_history import (
     CHECKINS_PATH, PHOTO_PATH, DETAIL_PATH, search_window,
-    fetch_checkins, fetch_visitor_photo, normalize_checkin,
+    fetch_checkins, fetch_combined_history, fetch_visitor_photo, normalize_checkin,
     decode_photo_response, visitor_details,
 )
 from hikcentral import HikError
@@ -462,8 +462,15 @@ def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monke
     next_day["visitorBaseInfo"]["visitEndTime"] = "2026-11-06T23:59:59-03:00"
     # Simula API com semântica de sobreposição, que devolve também 06/11.
     # O app precisa filtrar novamente para cumprir exatamente o recorte.
-    client = FakeClient({"code": "0", "data": {
-        "list": [current, next_day], "totalNum": 2}})
+    class CombinedClient(FakeClient):
+        def post(self, path, payload, **options):
+            self.calls.append((path, payload, options))
+            if path == CHECKINS_PATH:
+                return {"code": "0", "data": {
+                    "list": [current, next_day], "totalNum": 2}}
+            return {"data": {"list": [], "total": 0}}
+
+    client = CombinedClient(None)
     monkeypatch.setattr(app, "list_history", lambda: [
         {"visitor_id": "1655", "entry_at": "2026-11-06T00:00:00-03:00",
          "registered_at": "2026-11-05T14:15:00-03:00",
@@ -473,6 +480,8 @@ def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monke
                             "Visitor Information nao deve fazer parte da lista"))
     monkeypatch.setattr(modern_ui, "start_history_loading", lambda *a, **kw: None)
     monkeypatch.setattr(modern_ui, "stop_history_loading", lambda *a, **kw: None)
+    monkeypatch.setattr(app, "enrich_checkins_with_reservation_periods",
+                        lambda _client, rows, *_args, **_kwargs: rows)
 
     class Value:
         def __init__(self, value=""):
@@ -517,6 +526,7 @@ def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monke
     reservation_path, reservation_payload, _ = client.calls[1]
     assert reservation_path.endswith("appointment/appointmentlist")
     assert reservation_payload["visitorName"] == "TOALHEIRO"
+    assert reservation_payload["appointState"] == 0
 
 
 def test_original_appointment_identifier_not_checkin_id_or_reservation_code():
@@ -780,6 +790,35 @@ def test_reserved_only_search_uses_appointment_endpoint_and_keeps_no_checkin():
     assert params["appointState"] == 0 and params["visitorName"] == "Maria"
     assert params["appointStartTime"] == start and params["appointEndTime"] == end
     assert params["pageNo"] == 1 and params["pageSize"] == 10
+
+
+def test_combined_history_shows_checkins_and_reservations_together_with_real_register_time():
+    from remote_history import APPOINTMENTS_PATH
+
+    checkin = example_record(visitor="812", record="check-40")
+    checkin["registerTime"] = "2026-11-02T13:19:42-03:00"
+    booking = _test_appointment("512", "813")
+    calls = []
+
+    class Client:
+        def post(self, path, payload, **options):
+            calls.append((path, dict(payload)))
+            if path == CHECKINS_PATH:
+                return {"data": {"totalNum": 1, "list": [checkin]}}
+            assert path == APPOINTMENTS_PATH
+            return {"data": {"total": 1, "list": [booking]}}
+
+    start, end = search_window("02/11/2026", "04/11/2026")
+    result = fetch_combined_history(Client(), start, end, name="Maria", page_size=10)
+
+    assert len(result["rows"]) == 2
+    assert result["total"] == 2 and not result["has_next"]
+    checkin_row = next(row for row in result["rows"] if not row.get("_reservation_only"))
+    reservation_row = next(row for row in result["rows"] if row.get("_reservation_only"))
+    assert checkin_row["registered_at"] == checkin["registerTime"]
+    assert reservation_row.get("registered_at", "") == ""
+    assert reservation_row["appointment_id"] == "512"
+    assert {path for path, _payload in calls} == {CHECKINS_PATH, APPOINTMENTS_PATH}
 
 
 def test_reservation_display_uses_given_and_family_names_when_server_joins_them():

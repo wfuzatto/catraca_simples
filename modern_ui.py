@@ -23,8 +23,6 @@ MUTED = "#687A95"
 LINE = "#E3EAF4"
 CYAN = "#22B9C6"
 GREEN = "#20B978"
-HISTORY_MODE_CHECKINS = "Histórico de check-ins"
-HISTORY_MODE_RESERVATIONS = "Reservas sem check-in"
 
 
 def _text(parent, value, *, size=13, color=INK, bold=False, **grid):
@@ -178,7 +176,8 @@ def start_registration_loading(app):
     overlay.deiconify()
     overlay.lift(app)
     app.register_button.configure(state="disabled")
-    app.delivery_button.configure(state="disabled")
+    if app.delivery_button.winfo_manager():
+        app.delivery_button.configure(state="disabled")
     app.nav_registration.configure(state="disabled")
     app.nav_settings.configure(state="disabled")
     app.nav_history.configure(state="disabled")
@@ -221,8 +220,7 @@ def _registration(app):
     app.register_button.configure(text="CADASTRAR VISITANTE")
     app.register_button.pack(side="right", padx=(8, 18), pady=13)
     app.delivery_button = _secondary(
-        footer, "Verificar última entrega", app.verify_last_delivery, width=187)
-    app.delivery_button.pack(side="right", padx=(8, 0), pady=13)
+        footer, "", app.show_pending_recovery, width=187)
     app.registration_footer = footer
     app.registration_status_widget = ctk.CTkLabel(
         footer, textvariable=app.status, anchor="w",
@@ -402,16 +400,9 @@ def _history(app):
     heading = ctk.CTkFrame(inner, fg_color="transparent")
     heading.pack(fill="x", padx=17, pady=(18, 10))
     _text(heading, "Cadastros e reservas", size=19, bold=True).pack(side="left")
-    app.history_mode = tk.StringVar(value=HISTORY_MODE_CHECKINS)
-    app.history_mode_box = ttk.Combobox(
-        heading, textvariable=app.history_mode, state="readonly", width=24,
-        values=(HISTORY_MODE_CHECKINS, HISTORY_MODE_RESERVATIONS))
-    app.history_mode_box.pack(side="right")
-    app.history_mode_box.bind("<<ComboboxSelected>>", lambda _event: app.history_mode_changed())
-    _text(heading, "Exibir", size=12).pack(side="right", padx=(0, 6))
     _text(inner,
-          "De/Até filtram o início da visita ou da reserva. No histórico, as colunas de datas vêm da reserva vinculada; o status continua vindo do check-in. Inclui check-outs. "
-          "Selecione Reservas sem check-in para encontrar reservas ainda não registradas.",
+          "Todos os check-ins e reservas sem check-in aparecem juntos. De/Até filtram o início da visita ou da reserva. "
+          "As datas vêm da reserva vinculada; o status vem do check-in. Cadastrado em usa registerTime do HikCentral ou o horário local quando Visitor ID e registro/reserva correspondem. Reserva sem check-in e sem histórico local fica sem esse horário.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     app.history_loading_frame = ctk.CTkFrame(inner, fg_color="#E9F2FF", corner_radius=8)
     app.history_loading_label = ctk.CTkLabel(

@@ -1,8 +1,10 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.70` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.71` (prévia técnica para testes).
 
 Na Preview 70, os campos clicáveis abrem dois editores separados: clique nas datas para editar somente o período da reserva, tanto com ou sem check-in; clique no nome para editar Visitor Information (nome, sobrenome, grupo, Apartamento/Remark, foto e pulseira), sem datas. O grupo atual aparece selecionado e pode ser trocado para outro grupo compatível. Apartamento/Remark nesta tela vem do Remark do perfil; a edição das datas preserva o Remark próprio da reserva.
+
+Na Preview 71, check-ins e reservas sem check-in aparecem na mesma lista. A data **Cadastrado em** continua usando o registro real de check-in da API, com contingência local do mesmo registro; reservas sem check-in não têm esse horário. O botão de consulta da última entrega foi removido; a ação **Resolver pendência** só aparece quando há uma operação interrompida.
 
 No **Histórico de check-ins**, as colunas **Início da reserva** e **Término da reserva** vêm diretamente da Visitor Reservation. Quando o HikCentral omite o ID da reserva no check-in, a aplicação procura um vínculo único pelo Visitor ID, grupo e período; se houver mais de uma possibilidade, não inventa as datas. O status e as passagens continuam vinculados ao check-in.
 
@@ -12,7 +14,7 @@ Na Preview 68, a edição de uma reserva sem check-in preserva o nível Visitor 
 
 Na Preview 66, a consulta também tenta resolver o vínculo ausente antes de deixar as datas em branco. O editor aceita a reserva única e sobreposta do mesmo visitante mesmo depois do check-out; se houver várias reservas possíveis, permite escolher pelo código e período.
 
-Em **Cadastros efetuados**, escolha **Reservas sem check-in** para consultar as reservas pendentes e abrir o editor de datas. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**.
+Em **Cadastros efetuados**, check-ins e reservas sem check-in aparecem juntos. Clique nas datas para editar a reserva; clique no nome para editar Visitor Information. A coluna **Cadastrado em** usa `registerTime` do check-in retornado pela OpenAPI ou a hora local quando o Visitor ID e o ID do registro/reserva correspondem. Uma reserva sem check-in e sem histórico local correspondente não tem esse horário.
 
 Em **Cadastros efetuados**, clique no nome para editar nome, sobrenome, grupo, Remark do perfil, foto e pulseira diretamente em Visitor Information. Clique nas datas da reserva para abrir o formulário separado de período. Os campos de perfil não são exibidos nesse formulário.
 
