@@ -462,8 +462,15 @@ def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monke
     next_day["visitorBaseInfo"]["visitEndTime"] = "2026-11-06T23:59:59-03:00"
     # Simula API com semântica de sobreposição, que devolve também 06/11.
     # O app precisa filtrar novamente para cumprir exatamente o recorte.
-    client = FakeClient({"code": "0", "data": {
-        "list": [current, next_day], "totalNum": 2}})
+    class CombinedClient(FakeClient):
+        def post(self, path, payload, **options):
+            self.calls.append((path, payload, options))
+            if path == CHECKINS_PATH:
+                return {"code": "0", "data": {
+                    "list": [current, next_day], "totalNum": 2}}
+            return {"data": {"list": [], "total": 0}}
+
+    client = CombinedClient(None)
     monkeypatch.setattr(app, "list_history", lambda: [
         {"visitor_id": "1655", "entry_at": "2026-11-06T00:00:00-03:00",
          "registered_at": "2026-11-05T14:15:00-03:00",
@@ -473,6 +480,8 @@ def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monke
                             "Visitor Information nao deve fazer parte da lista"))
     monkeypatch.setattr(modern_ui, "start_history_loading", lambda *a, **kw: None)
     monkeypatch.setattr(modern_ui, "stop_history_loading", lambda *a, **kw: None)
+    monkeypatch.setattr(app, "enrich_checkins_with_reservation_periods",
+                        lambda _client, rows, *_args, **_kwargs: rows)
 
     class Value:
         def __init__(self, value=""):
@@ -517,6 +526,7 @@ def test_history_tab_does_not_mix_general_directory_with_filtered_checkins(monke
     reservation_path, reservation_payload, _ = client.calls[1]
     assert reservation_path.endswith("appointment/appointmentlist")
     assert reservation_payload["visitorName"] == "TOALHEIRO"
+    assert reservation_payload["appointState"] == 0
 
 
 def test_original_appointment_identifier_not_checkin_id_or_reservation_code():
