@@ -60,6 +60,7 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
     if str(profile.get("visitorId") or "") != vid:
         raise EditorFieldError({"appointment": "O HikCentral não confirmou o mesmo perfil da reserva."})
     profile_group = str(profile.get("visitorGroupName") or profile.get("visitorGroup") or "").strip()
+    group_change_requested = expected_profile_group is not None
     expected_profile_group = group if expected_profile_group is None else expected_profile_group
     if expected_profile_group and profile_group and normalize(profile_group) != normalize(expected_profile_group):
         raise EditorFieldError({"group": "O grupo do perfil difere do grupo da reserva."})
@@ -82,7 +83,7 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
     prior_access = {**(profile.get("accessInfo") or {}), **(saved.get("accessInfo") or {})}
     # The booking API makes group optional. If the server omitted it, preserve
     # the exact access level without submitting an inferred group assignment.
-    if expected_profile_group is not None:
+    if group_change_requested:
         # A deliberate group migration must send the new Visitor group.
         info["visitorGroupName"] = group
     else:
