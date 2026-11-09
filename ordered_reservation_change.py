@@ -9,7 +9,7 @@ import re
 from core import _write_json_atomic, VALE_VISITOR_LEVELS, TZ, verify_visitor_access_plan
 from edit_errors import EditorFieldError
 from edit_journal import select_edit_journal
-from edit_request import validate_edit_request
+from edit_request import separate_card_from_document, validate_edit_request
 from hikcentral import HikError, normalize
 from remote_history import (
     APPOINTMENTS_PATH, compare_reservation_period, fetch_visitor_photo,
@@ -270,6 +270,7 @@ def change_reservation_dates(client, record, payload, selected, doors, visitor, 
         for key, value in saved_info.items():
             if key not in desired_info and key not in {"cards", "faces"}:
                 desired_info[key] = deepcopy(value)
+        separate_card_from_document(desired_info, [visitor.card_number])
         validate_edit_request(complete_payload, require_credential=bool(auto_checkin))
         return _update_linked_reservation(client, record, complete_payload, selected, doors, visitor,
                                           group, requested_level, scope, level, journal,

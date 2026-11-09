@@ -319,7 +319,7 @@ def test_valid_times_setting_is_visible_saved_and_reopened_without_live_api(monk
 
 @pytest.mark.skipif(os.name != "nt", reason="Spinner precisa do Tk no Windows")
 @pytest.mark.parametrize("fails", [False, True])
-def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monkeypatch, fails):
+def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monkeypatch, tmp_path, fails):
     import app
     import threading
     from core import default_settings
@@ -327,6 +327,8 @@ def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monk
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    # Isolate the operator's real pending-recovery file from this UI test.
+    monkeypatch.setattr("core.app_dir", lambda: tmp_path)
     root = app.ValeApp()
     release = threading.Event()
     outcomes = []

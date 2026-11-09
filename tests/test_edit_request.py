@@ -4,7 +4,8 @@ from copy import deepcopy
 import pytest
 
 from edit_errors import EditorFieldError
-from edit_request import preserve_visitor_metadata, validate_edit_request
+from edit_request import (preserve_visitor_metadata, separate_card_from_document,
+                          validate_edit_request)
 
 
 def valid_request():
@@ -63,6 +64,30 @@ def test_missing_remote_optional_value_does_not_overwrite_payload_default():
         "gender": None, "companyName": None, "certificateNo": None}})
     assert complete["visitorInfoList"][0]["VisitorInfo"]["gender"] == 0
     assert complete["visitorInfoList"][0]["VisitorInfo"]["companyName"] == "Vale"
+
+
+def test_edit_does_not_copy_nfc_card_into_document_number():
+    payload = valid_request()
+    details = {"VisitorInfo": {
+        "certificateType": 111, "certificateNo": "12345678",
+        "cards": [{"cardNo": "12345678"}],
+    }}
+
+    complete = preserve_visitor_metadata(payload, details)
+
+    info = complete["visitorInfoList"][0]["VisitorInfo"]
+    assert info["cards"] == [{"cardNo": "12345678"}]
+    assert info["certificateNo"] == ""
+
+
+def test_card_document_cleanup_is_exact_and_preserves_other_document_numbers():
+    info = {"certificateNo": "12345678"}
+    assert separate_card_from_document(info, [" 12345678 "])
+    assert info["certificateNo"] == ""
+
+    info = {"certificateNo": "DOC-12345678"}
+    assert not separate_card_from_document(info, ["12345678"])
+    assert info["certificateNo"] == "DOC-12345678"
 
 
 @pytest.mark.parametrize("field,value,error_field", [

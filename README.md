@@ -1,6 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.74` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.75` (prévia técnica para testes).
+
+Na Preview 75, o número da pulseira é enviado somente como credencial NFC (`cards[].cardNo`). Se uma edição encontrar o mesmo número no campo de documento, ela o remove dali e o grava no cartão do perfil. A edição de Visitor Information e a alteração de datas preservam essa separação.
 
 Na Preview 74, o cadastro grava e confere a pulseira no Visitor Information mesmo quando a reserva já criou um cartão virtual. O grupo é resolvido pelo `orgIndexCode` da pessoa e restaurado após edições de reserva, que podem redefini-lo para `Visitors`.
 

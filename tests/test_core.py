@@ -34,6 +34,8 @@ def test_payload_visitor_group_photo_card_remark():
     assert body["visitorGroupName"] == "Hóspedes Serra"
     assert body["remark"] == "RES00001"
     assert body["cards"][0]["cardNo"] == "12345678"
+    assert body["certificateNo"] == ""
+    assert body["certificateNo"] != body["cards"][0]["cardNo"]
     assert len(body["faces"][0]["faceData"]) > 10
     assert payload["visitEndTime"].endswith("-03:00")
 
@@ -49,6 +51,8 @@ def test_registration_payload_accepts_face_only_card_only_or_both():
     card = registration_payload(Visitor("Joao", "Silva", "Day use", b"", "CARD123", start, end))
     card_info = card["visitorInfoList"][0]["VisitorInfo"]
     assert "cards" in card_info and "faces" not in card_info
+    assert card_info["cards"] == [{"cardNo": "CARD123"}]
+    assert card_info["certificateNo"] == ""
 
     both = registration_payload(Visitor("Joao", "Silva", "Day use", jpeg(), "CARD123", start, end))
     both_info = both["visitorInfoList"][0]["VisitorInfo"]
