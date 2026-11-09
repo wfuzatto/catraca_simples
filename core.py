@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.75"
+APP_VERSION = "1.0.0-preview.76"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -614,7 +614,7 @@ def _write_json_atomic(path: Path, data: dict) -> None:
 
 
 
-def mark_appointment_inflight(base: Path | None = None) -> None:
+def mark_appointment_inflight(base: Path | None = None, *, encrypted_context: str = "") -> None:
     """Persist a non-personal checkpoint BEFORE the first remote write.
 
     If the response to appointment is lost, do not automatically resubmit.
@@ -626,7 +626,8 @@ def mark_appointment_inflight(base: Path | None = None) -> None:
         "stage": "appointment_inflight",
         "visitor_id": "", "appointment_id": "",
         "access_ids": [], "door_ids": [], "registered": False,
-        "assigned": [], "expect_face": False, "expect_card": False
+        "assigned": [], "expect_face": False, "expect_card": False,
+        "encrypted_context": encrypted_context,
     })
 
 
@@ -657,6 +658,10 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
     }
     if card_confirmed is not None:
         data["card_confirmed"] = card_confirmed
+    # O contexto permanece cifrado com DPAPI ao longo de todos os checkpoints.
+    # Nunca copiá-lo em histórico, logs ou mensagens de erro.
+    if isinstance(old, dict) and old.get("encrypted_context"):
+        data["encrypted_context"] = old["encrypted_context"]
     _write_json_atomic(path, data)
 
 
