@@ -767,7 +767,7 @@ class ValeApp(tk.Tk):
                                            "checkin_state": "check-in efetuado"})
                     except Exception:
                         pass
-                from visitor_profile import confirm_checkin_card, update_profile
+                from visitor_profile import update_profile
                 card = obj.card_number.strip() if expect_card else ""
                 # Appointment registration can create a virtual card and leave
                 # the person in the default Visitors group. Save and verify the
@@ -775,9 +775,9 @@ class ValeApp(tk.Tk):
                 update_profile(client, visitor_id, obj.first_name, obj.last_name,
                                card=card, group=group)
                 if expect_card:
-                    if checkin_requested:
-                        confirm_checkin_card(client, visitor_id, payload["visitStartTime"],
-                                             payload["visitEndTime"], registration_record_id, card)
+                    # update_profile confirms the card from Visitor Information
+                    # (PersonInfo.cards[].cardNo). The check-in endpoint may omit
+                    # this field even when the profile card is already present.
                     mark_card_confirmed(visitor_id)
                 for level_id in access_ids:
                     client.assign_access(visitor_id, level_id)

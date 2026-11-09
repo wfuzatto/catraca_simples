@@ -1,12 +1,14 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.75` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.76` (prévia técnica para testes).
+
+Na Preview 76, a pulseira do cadastro é confirmada no Visitor Information (`cards[].cardNo`). O registro de check-in pode não repetir esse número mesmo quando o cartão já está no perfil; essa ausência não gera mais um falso aviso de cadastro parcial.
 
 Na Preview 75, o número da pulseira é enviado somente como credencial NFC (`cards[].cardNo`). Se uma edição encontrar o mesmo número no campo de documento, ela o remove dali e o grava no cartão do perfil. A edição de Visitor Information e a alteração de datas preservam essa separação.
 
 Na Preview 74, o cadastro grava e confere a pulseira no Visitor Information mesmo quando a reserva já criou um cartão virtual. O grupo é resolvido pelo `orgIndexCode` da pessoa e restaurado após edições de reserva, que podem redefini-lo para `Visitors`.
 
-Na Preview 73, **Cadastrado em** mostra o horário do pedido para reservas sem check-in quando o HikCentral devolve o fluxo de aprovação. O editor oferece **Manter grupo atual** quando as consultas não identificam um único grupo. O Remark é confirmado na ficha do visitante, e a pulseira é conferida no perfil antes do check-in e no registro de visitante após o check-in.
+Na Preview 73, **Cadastrado em** mostra o horário do pedido para reservas sem check-in quando o HikCentral devolve o fluxo de aprovação. O editor oferece **Manter grupo atual** quando as consultas não identificam um único grupo. O Remark é confirmado na ficha do visitante, e a pulseira é conferida no perfil do visitante.
 
 Na Preview 70, os campos clicáveis abrem dois editores separados: clique nas datas para editar somente o período da reserva, tanto com ou sem check-in; clique no nome para editar Visitor Information (nome, sobrenome, grupo, Apartamento/Remark, foto e pulseira), sem datas. O grupo atual aparece selecionado e pode ser trocado para outro grupo compatível. Apartamento/Remark nesta tela vem do Remark do perfil; a edição das datas preserva o Remark próprio da reserva.
 

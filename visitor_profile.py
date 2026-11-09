@@ -106,12 +106,6 @@ def set_visitor_group(client, visitor_id, group):
     return True
 
 
-def confirm_checkin_card(client, visitor_id, start, end, record_id, card):
-    row = client.find_registration_record(visitor_id, start, end, record_id=record_id)
-    if not row or str((row.get("visitorCardInfo") or {}).get("cardNumber") or "").strip() != card:
-        raise EditorFieldError({"card": "O HikCentral ainda não confirmou a pulseira no check-in. Confira este cadastro pelo histórico."})
-
-
 def save_reserved_profile_card(client, visitor_id, first, last, card):
     """A reserva pode descartar cards; confirme a pulseira na ficha da pessoa."""
     _, names, cards, _, _ = read_profile(client, visitor_id)
