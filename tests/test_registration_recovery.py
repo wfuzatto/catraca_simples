@@ -149,3 +149,47 @@ def test_appointment_mismatch_fails_closed(monkeypatch):
                         lambda client, record: wrong)
     with pytest.raises(HikError, match="Reserva"):
         recovery.verify_pending_reservation(object(), pending(), context())
+
+
+
+def test_virtual_card_is_fixed_on_existing_checkin_without_new_reservation(monkeypatch):
+    from edit_errors import EditorFieldError
+    import visitor_profile
+    calls = []
+    attempts = {"count": 0}
+
+    def confirm(*args):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise EditorFieldError({"card": "Pulseira virtual"})
+        calls.append(("confirmed", args))
+
+    def read_record(*args, **kwargs):
+        assert kwargs == {"active_only": True, "record_id": "check-2138"}
+        return {"recordId": "check-2138",
+                "visitorBaseInfo": {"visitorGroup": "Hóspedes Vale"}}
+
+    def update(*args, **kwargs):
+        calls.append(("updated", args, kwargs))
+
+    monkeypatch.setattr(visitor_profile, "confirm_checkin_card", confirm)
+    monkeypatch.setattr(visitor_profile, "update_active_visitor_fields", update)
+    api = SimpleNamespace(find_registration_record=read_record)
+    recovery.ensure_checkin_card(api, pending(), context())
+    assert [item[0] for item in calls] == ["updated", "confirmed"]
+    assert calls[0][2]["card"] == "32131231231231"
+    assert calls[0][1][1]["registration_record_id"] == "check-2138"
+
+
+def test_virtual_card_does_not_update_unverified_checkin(monkeypatch):
+    from edit_errors import EditorFieldError
+    import visitor_profile
+    monkeypatch.setattr(visitor_profile, "confirm_checkin_card",
+                        lambda *a: (_ for _ in ()).throw(
+                            EditorFieldError({"card": "Pulseira virtual"})))
+    monkeypatch.setattr(visitor_profile, "update_active_visitor_fields",
+                        lambda *a, **kw: pytest.fail("wrong check-in must not be edited"))
+    api = SimpleNamespace(find_registration_record=lambda *a, **kw: {
+        "recordId": "checkin-of-another-visitor"})
+    with pytest.raises(EditorFieldError):
+        recovery.ensure_checkin_card(api, pending(), context())
