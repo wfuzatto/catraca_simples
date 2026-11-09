@@ -760,7 +760,8 @@ class ValeApp(tk.Tk):
                              exit_at=payload["visitEndTime"],
                              access_names=[level["name"] for level in selected],
                              checkin_requested=checkin_requested,
-                             card_confirmed=not expect_card)
+                             card_confirmed=not expect_card,
+                             direct_checkin_nfc=bool(checkin_requested and expect_card))
                 registration_record_id = ""
                 history = {
                     "visitor_id": visitor_id, "appointment_id": appointment_id,
@@ -2023,11 +2024,15 @@ class ValeApp(tk.Tk):
             context = open_registration_context(encrypted) if encrypted else None
             completed_identity = None
             if context:
-                # Reconciliar dados do MESMO Visitor ID e reserva confirmada.
-                # Nesta etapa não exigimos check-in porque ele pode ainda não
-                # ter sido enviado: o marcador separa essa situação da incerta.
-                restore_pending_credentials(
-                    client, pending, context, verify_checkin_card=False)
+                if pending.get("direct_checkin_nfc"):
+                    # Preview.45: preserva a reserva e envia cards/faces
+                    # diretamente no registerment. Uma recuperação NÃO deve
+                    # reintroduzir as Person writes removidas do fluxo novo.
+                    from registration_recovery import verify_pending_reservation
+                    verify_pending_reservation(client, pending, context)
+                else:
+                    restore_pending_credentials(
+                        client, pending, context, verify_checkin_card=False)
                 completed_identity = (
                     context["first"], context["last"], context["card"])
             elif pending.get("card_confirmed") is False:
@@ -2064,7 +2069,18 @@ class ValeApp(tk.Tk):
                 pending = load_pending()
             if context:
                 if pending.get("expect_card"):
-                    restore_pending_credentials(client, pending, context)
+                    if pending.get("direct_checkin_nfc"):
+                        if not pending.get("registered") or not pending.get("registration_record_id"):
+                            return {"unresolved": (
+                                "Check-in ainda não foi confirmado; não emitir NFC nem "
+                                "reenviar registro às cegas.")}
+                        from visitor_profile import confirm_checkin_card
+                        confirm_checkin_card(
+                            client, pending["visitor_id"], pending["entry_at"],
+                            pending["exit_at"], pending["registration_record_id"],
+                            context["card"])
+                    else:
+                        restore_pending_credentials(client, pending, context)
                     mark_card_confirmed(pending["visitor_id"])
                 pending = load_pending()
             for level in pending["access_ids"]:
