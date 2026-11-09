@@ -716,7 +716,7 @@ class ValeApp(tk.Tk):
                 ("Ao confirmar, o aplicativo criará a reserva e registrará o check-in automaticamente.\n\n"
                  if checkin_requested else
                  "Ao confirmar, o aplicativo criará a reserva sem solicitar check-in.\n" +
-                 ("A pulseira será gravada no perfil e emitida para o visitante no check-in.\n\n"
+                 ("A pulseira será gravada no perfil. Para emitir a credencial de visitante, informe o número no check-in.\n\n"
                   if expect_card else "\n"))
                 + "Prosseguir?"
             )
@@ -838,7 +838,7 @@ class ValeApp(tk.Tk):
                 if result.get("card_saved_without_checkin"):
                     messagebox.showinfo("Reserva criada",
                         f"Visitor ID: {result['visitor_id']}\nReserva: {result['appointment_id']}\n\n"
-                        "A pulseira foi gravada no perfil. O HikCentral emite a credencial de visitante no check-in.")
+                        "A pulseira foi gravada no perfil. Para emitir a credencial de visitante, informe o número no check-in.")
                     self.status.set("Reserva concluída. Pulseira gravada no perfil.")
                 elif report:
                     detail = "\n".join(f"• {d['name']}: face {d['faceState']}; pulseira {d['credentialState']}"
