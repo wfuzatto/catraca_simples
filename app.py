@@ -14,7 +14,7 @@ from PIL import Image, ImageTk
 from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_settings, save_settings, load_api_keys,
                   initial_visitor_group, validate_visitor_group_selection, validate_valid_times,
                   visitor_levels_for_group, verify_visitor_access_plan,
-                  mark_appointment_inflight,
+                  mark_appointment_inflight, mark_checkin_started,
                   save_api_keys, parse_local, end_for_ticket, registration_payload,
                   prepare_face_jpeg, face_cover_preview, normalize_ticket_start, default_ticket_start,
                   validate_ticket_period, require_confirmed_daily_schedule,
@@ -788,6 +788,7 @@ class ValeApp(tk.Tk):
                 if not checkin_requested and expect_card:
                     mark_card_confirmed(visitor_id)
                 if checkin_requested:
+                    mark_checkin_started()
                     registration_record_id = client.register_visitor(payload, selected,
                                                                       appointment_id, visitor_id)
                     mark_registered(registration_record_id)
@@ -2004,6 +2005,21 @@ class ValeApp(tk.Tk):
                 return {"unresolved": "Pendência com nível/pontos diferentes do registro original. "
                                       "Revisão manual necessária; nenhum acesso foi alterado."}
             checkin_requested = pending.get("checkin_requested", True)
+            encrypted = pending.get("encrypted_context")
+            context = open_registration_context(encrypted) if encrypted else None
+            completed_identity = None
+            if context:
+                # Reconciliar dados do MESMO Visitor ID e reserva confirmada.
+                # Nesta etapa não exigimos check-in porque ele pode ainda não
+                # ter sido enviado: o marcador separa essa situação da incerta.
+                restore_pending_credentials(
+                    client, pending, context, verify_checkin_card=False)
+                completed_identity = (
+                    context["first"], context["last"], context["card"])
+            elif pending.get("card_confirmed") is False:
+                return {"unresolved": (
+                    "Pendência de versão antiga sem pulseira protegida. "
+                    "Confira somente este cadastro antes de liberar a estação.")}
             if checkin_requested and not pending.get("registered", False):
                 entry_at, exit_at = pending.get("entry_at"), pending.get("exit_at")
                 if not entry_at or not exit_at:
@@ -2011,24 +2027,32 @@ class ValeApp(tk.Tk):
                 record_id = client.find_existing_registration(
                     pending["visitor_id"], entry_at, exit_at)
                 if not record_id:
-                    return {"unresolved": "Check-in não confirmado na consulta de leitura. "
-                                          "Revisar a visita no HikCentral; nenhuma nova reserva foi criada."}
+                    if context is None or pending.get("checkin_inflight", True):
+                        return {"unresolved": (
+                            "Check-in anterior com resultado incerto. "
+                            "Não é seguro reenviar; confira a visita no HikCentral.")}
+                    # Na versão nova, o journal comprova que nenhum POST de
+                    # check-in foi iniciado: enviar UMA vez, na reserva existente.
+                    from datetime import datetime as _dt
+                    recovered = Visitor(
+                        context["first"], context["last"], context["group"],
+                        context["photo_bytes"], context["card"],
+                        _dt.fromisoformat(entry_at), _dt.fromisoformat(exit_at))
+                    recovered_payload = registration_payload(recovered)
+                    if (recovered_payload["visitStartTime"] != entry_at or
+                            recovered_payload["visitEndTime"] != exit_at):
+                        raise ValueError("Período recuperado diferente do journal.")
+                    mark_checkin_started()
+                    record_id = client.register_visitor(
+                        recovered_payload, selected, pending["appointment_id"],
+                        pending["visitor_id"])
                 mark_registered(record_id)
                 pending = load_pending()
-            encrypted = pending.get("encrypted_context")
-            completed_identity = None
-            if encrypted:
-                context = open_registration_context(encrypted)
-                restore_pending_credentials(client, pending, context)
+            if context:
                 if pending.get("expect_card"):
+                    restore_pending_credentials(client, pending, context)
                     mark_card_confirmed(pending["visitor_id"])
-                completed_identity = (
-                    context["first"], context["last"], context["card"])
                 pending = load_pending()
-            elif pending.get("card_confirmed") is False:
-                return {"unresolved": (
-                    "Pendência criada por versão antiga, sem a pulseira original "
-                    "protegida. Conferência manual necessária apenas neste cadastro.")}
             for level in pending["access_ids"]:
                 if level not in pending["assigned"]:
                     client.assign_access(pending["visitor_id"], level)
