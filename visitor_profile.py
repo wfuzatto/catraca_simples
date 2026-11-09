@@ -190,6 +190,12 @@ def update_active_visitor_fields(client, record, *, card=None, remark=None, phot
         returned_id = client.update_registered_visitor(checkin_id, visitor_id, payload, levels)
     except HikError as exc:
         failure = exc
+    # Do not wait for the check-in readback to restore orgIndexCode: if HCP
+    # returns Visitors, the readback fails and the old code left the group
+    # silently changed. Restore the original approved group first.
+    from core import VALE_VISITOR_LEVELS
+    if group in VALE_VISITOR_LEVELS:
+        set_visitor_group(client, visitor_id, group)
     observed = client.find_registration_record(visitor_id, start, end, active_only=True,
                                                record_id=returned_id)
     mismatches = {}
