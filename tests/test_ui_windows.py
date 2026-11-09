@@ -1696,10 +1696,14 @@ def test_profile_editor_preserves_group_without_migration(
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
     monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
     monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
-    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
+    errors = []
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror",
+                        lambda *a, **k: errors.append(str(a)))
     writes = []
     monkeypatch.setattr(visitor_profile, "update_profile",
                         lambda *args, **kwargs: writes.append((args, kwargs)) or [])
+    monkeypatch.setattr(visitor_profile, "confirm_visitor_group_after_edit",
+                        lambda _client, _id, group: group)
 
     class FakeClient:
         @staticmethod
@@ -1725,9 +1729,17 @@ def test_profile_editor_preserves_group_without_migration(
         assert expected in dialog._visitor_information_group_selector.cget("values")
         assert dialog._visitor_information_group_error.cget("text") == ""
         dialog._visitor_information_save_button.invoke()
-        assert len(writes) == 1
-        assert "remark" not in writes[0][1]
-        assert not dialog.winfo_exists()
+        if expected not in ("Hóspedes Vale",):
+            # A fallback to Visitors or an unknown group is no longer a valid
+            # implicit selection; do not send even a partial Person write.
+            assert not writes
+            assert errors
+            assert dialog.winfo_exists()
+        else:
+            assert not errors
+            assert len(writes) == 1
+            assert "remark" not in writes[0][1]
+            assert not dialog.winfo_exists()
     finally:
         root.destroy()
 
