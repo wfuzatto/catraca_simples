@@ -248,6 +248,69 @@ def fetch_unchecked_reservations(client, start_iso, end_iso, page=1, name="", pa
             "page_size": page_size, "has_next": page < MAX_PAGES and page * page_size < (total or 0)}
 
 
+def fetch_combined_history(client, start_iso, end_iso, page=1, name="", page_size=PAGE_SIZE):
+    """Show check-ins and still-pending reservations in one paginated list.
+
+    HikCentral exposes these as separate APIs. Read the same leading range
+    from both sources, combine by reservation time, then apply one UI page so
+    a page never contains twice the selected number of rows.
+    """
+    _history_query(page, page_size, name)
+    limit = page * page_size
+    batch_size = min(500, limit)
+    batch_count = (limit + batch_size - 1) // batch_size
+
+    def read_prefix(fetcher):
+        rows = []
+        total = None
+        for source_page in range(1, batch_count + 1):
+            result = fetcher(client, start_iso, end_iso, page=source_page,
+                             name=name, page_size=batch_size)
+            if total is not None and result["total"] != total:
+                raise HikError("O total de cadastros mudou durante a consulta. Clique em Buscar novamente.")
+            total = result["total"]
+            rows.extend(result["rows"])
+            if not result["has_next"]:
+                break
+        return rows, total or 0
+
+    checkins, checkin_total = read_prefix(fetch_checkins)
+    reservations, reservation_total = read_prefix(fetch_unchecked_reservations)
+
+    # A reservation can be returned by both endpoints on HikCentral builds
+    # that have not yet changed its state after check-in. Keep the check-in
+    # row because it carries the authoritative status and registerTime.
+    checkin_appointment_ids = {
+        str(row.get("appointment_id") or "").strip()
+        for row in checkins if row.get("appointment_id")
+    }
+    merged = list(checkins)
+    duplicate_count = 0
+    for reservation in reservations:
+        appointment_id = str(reservation.get("appointment_id") or "").strip()
+        if appointment_id and appointment_id in checkin_appointment_ids:
+            duplicate_count += 1
+            continue
+        merged.append(reservation)
+
+    def sort_time(row):
+        value = row.get("reservation_entry_at") or row.get("entry_at") or ""
+        try:
+            return datetime.fromisoformat(str(value)).timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return float("-inf")
+
+    merged.sort(key=sort_time, reverse=True)
+    offset = (page - 1) * page_size
+    total = max(0, checkin_total + reservation_total - duplicate_count)
+    return {
+        "rows": merged[offset:offset + page_size], "total": total,
+        "page": page, "page_size": page_size,
+        "has_next": page < MAX_PAGES and page * page_size < total,
+        "checkin_total": checkin_total, "reservation_total": reservation_total,
+    }
+
+
 def _normalize_unchecked_reservation(item):
     if not isinstance(item, dict) or str(item.get("appointStatus")) != "0":
         return None

@@ -4,11 +4,13 @@ import pytest
 
 
 @pytest.mark.skipif(os.name != "nt", reason="O teste de geometria exige Windows com Tk.")
-def test_register_button_visible_and_form_is_simplified(monkeypatch):
+def test_register_button_visible_and_delivery_check_button_removed(monkeypatch, tmp_path):
     import app
+    import core
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(core, "app_dir", lambda: tmp_path)
     monkeypatch.setattr(app.simpledialog, "askstring", lambda *a, **kw: "test-only-password")
     monkeypatch.setattr(app, "verify_settings_password", lambda _: True)
     root = app.ValeApp()
@@ -17,11 +19,8 @@ def test_register_button_visible_and_form_is_simplified(monkeypatch):
         root.update_idletasks()
         assert root.register_button.winfo_manager() == "pack"
         assert root.register_button.cget("text") == "CADASTRAR VISITANTE"
-        assert root.delivery_button.cget("text") == "Verificar última entrega"
-        assert root.delivery_button.winfo_manager() == "pack"
-        assert root.delivery_button.master is root.register_button.master
-        assert (root.delivery_button.winfo_rootx() + root.delivery_button.winfo_width()
-                <= root.register_button.winfo_rootx())
+        assert root.delivery_button.cget("text") == ""
+        assert root.delivery_button.winfo_manager() == ""
         assert root.register_button.winfo_rooty() + root.register_button.winfo_height() <= (
             root.winfo_rooty() + root.winfo_height())
         buttons = [c.cget("text") for c in root.registration_tab.winfo_children()
@@ -48,7 +47,7 @@ def test_register_button_visible_and_form_is_simplified(monkeypatch):
         root.book.select(root.registration_tab)
         root.update()
         assert root.register_button.winfo_manager() == "pack"
-        assert root.delivery_button.winfo_manager() == "pack"
+        assert root.delivery_button.winfo_manager() == ""
     finally:
         root.destroy()
 
@@ -189,11 +188,13 @@ def test_preferred_group_change_saves_and_is_reselected(monkeypatch, tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Geometria requer Windows")
-def test_modern_dashboard_keeps_all_original_actions_and_visible_settings_save(monkeypatch):
+def test_modern_dashboard_hides_delivery_check_and_keeps_settings_save(monkeypatch, tmp_path):
     import app
+    import core
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(core, "app_dir", lambda: tmp_path)
     monkeypatch.setattr(app.simpledialog, "askstring", lambda *a, **kw: "test-password")
     monkeypatch.setattr(app, "verify_settings_password", lambda candidate: candidate == "test-password")
     root = app.ValeApp()
@@ -203,7 +204,7 @@ def test_modern_dashboard_keeps_all_original_actions_and_visible_settings_save(m
         assert root.nav_registration.winfo_exists()
         assert root.nav_settings.winfo_exists()
         assert root.register_button.winfo_manager() == "pack"
-        assert root.delivery_button.winfo_manager() == "pack"
+        assert root.delivery_button.winfo_manager() == ""
         assert root.connection_label_var.get() != "Conectado"
         assert root.first_entry.winfo_exists()
         assert str(root.groups_box.cget("state")) == "readonly"
@@ -224,7 +225,7 @@ def test_modern_dashboard_keeps_all_original_actions_and_visible_settings_save(m
         root.book.select(root.registration_tab)
         root.update()
         assert root.register_button.winfo_manager() == "pack"
-        assert root.delivery_button.winfo_manager() == "pack"
+        assert root.delivery_button.winfo_manager() == ""
     finally:
         root.destroy()
 
@@ -252,12 +253,14 @@ def test_only_combo_is_visible_and_group_is_free_without_preference(monkeypatch)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Tk requer Windows")
-def test_responsive_ui_compact_screen_and_settings_footer(monkeypatch):
+def test_responsive_ui_compact_screen_and_settings_footer(monkeypatch, tmp_path):
     import app
+    import core
     import responsive_ui
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(core, "app_dir", lambda: tmp_path)
     monkeypatch.setattr(app.simpledialog, "askstring", lambda *a, **kw: "test")
     monkeypatch.setattr(app, "verify_settings_password", lambda _: True)
     root = app.ValeApp()
@@ -270,7 +273,7 @@ def test_responsive_ui_compact_screen_and_settings_footer(monkeypatch):
             assert root.registration_footer.winfo_exists()
             assert root.registration_status_widget.winfo_manager() == "pack"
             assert root.register_button.winfo_manager() == "pack"
-            assert root.delivery_button.winfo_manager() == "pack"
+            assert root.delivery_button.winfo_manager() == ""
             assert root.register_button.winfo_rootx() + root.register_button.winfo_width() <= root.winfo_rootx() + root.winfo_width()
         root.book.select(root.settings_tab)
         root.update()
@@ -544,12 +547,14 @@ def test_history_table_uses_reservation_dates_and_keeps_actual_passage_columns(m
         }], "Teste offline")
         values = root.history_table.item("0")["values"]
         assert len(values) == 8
+        assert values[0] == "03/11/2026 10:00:00"
         assert values[1] == "04/11/2026 09:00:00"
         assert values[2] == "06/11/2026 17:00:00"
         assert values[6] == "03/11/2026 10:15:00"
         assert values[7] == "03/11/2026 16:15:00"
         assert root._history_records["0"]["entry_at"] == "2026-11-03T09:00:00-03:00"
         unlinked_values = root.history_table.item("1")["values"]
+        assert unlinked_values[0] == "—"
         assert unlinked_values[1:3] == ["—", "—"]
     finally:
         root.destroy()
@@ -632,18 +637,34 @@ def test_history_has_two_separate_cell_edit_actions(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Teste do editor exige Tk Windows")
-def test_reservation_history_mode_searches_and_opens_unchecked_booking(monkeypatch):
+def test_combined_history_shows_pending_reservations_and_checkins_together(monkeypatch):
     import app
-    import modern_ui
     import visitor_editor
     from core import default_settings
-    from remote_history import APPOINTMENTS_PATH
+    from remote_history import APPOINTMENTS_PATH, CHECKINS_PATH
 
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(app, "list_history", lambda: [{
+        "visitor_id": "715", "appointment_id": "8312",
+        "registration_record_id": "checkin-715", "entry_at": "2026-11-12T00:00:00-03:00",
+        "exit_at": "2026-11-13T23:59:59-03:00",
+        "registered_at": "2026-11-12T08:45:00-03:00", "first": "Visita",
+        "last": "Teste", "full_name": "Visita Teste",
+    }])
     from types import SimpleNamespace
-    calls, opened_dates, opened_profiles = [], [], []
+    calls, opened_dates, opened_profiles, loaded_passages = [], [], [], []
+    checkin = {
+        "recordId": "checkin-716", "visitorStatus": "1",
+        "registerTime": "2026-11-12T09:15:00-03:00",
+        "visitorBaseInfo": {
+            "visitorId": "716", "fullName": "Hóspede Teste",
+            "visitStartTime": "2026-11-12T00:00:00-03:00",
+            "visitEndTime": "2026-11-12T23:59:59-03:00",
+            "visitorGroup": "Hóspedes Vale",
+        },
+    }
     booking = {
         "appointStatus": 0, "appointID": "8312", "appointCode": "5400",
         "appointStartTime": "2026-11-12T00:00:00-03:00",
@@ -655,12 +676,16 @@ def test_reservation_history_mode_searches_and_opens_unchecked_booking(monkeypat
 
     class Client:
         def post(self, path, request):
+            calls.append((path, request))
+            if path == CHECKINS_PATH:
+                return {"data": {"totalNum": 1, "list": [checkin]}}
             assert path == APPOINTMENTS_PATH
-            calls.append(request)
             return {"data": {"total": 1, "list": [booking]}}
 
     monkeypatch.setattr(visitor_editor, "open_unregistered_reservation_editor",
                         lambda _app, record: opened_dates.append(record))
+    monkeypatch.setattr(app, "enrich_checkins_with_reservation_periods",
+                        lambda _client, rows, *_args, **_kwargs: rows)
     root = app.ValeApp()
     try:
         root.geometry("1500x900")
@@ -670,32 +695,38 @@ def test_reservation_history_mode_searches_and_opens_unchecked_booking(monkeypat
         monkeypatch.setattr(root, "client", Client)
         monkeypatch.setattr(root, "task", lambda work, finish: finish(work(), None))
         monkeypatch.setattr(root, "_load_history_passages",
-                            lambda *_: pytest.fail("Uma reserva sem check-in não tem passagens."))
-        assert root.history_mode.get() == modern_ui.HISTORY_MODE_CHECKINS
-        root.history_mode_box.set(modern_ui.HISTORY_MODE_RESERVATIONS)
-        root.history_mode_box.event_generate("<<ComboboxSelected>>")
-        root.update()
-        assert not calls and root._history_page == 1
+                            lambda rows, *_: loaded_passages.extend(rows))
+        assert not hasattr(root, "history_mode_box")
+        assert not hasattr(root, "history_mode")
         root.history_start.set("12/11/2026")
         root.history_end.set("12/11/2026")
-        root.history_name.set("Visita")
         root.history_apply_filters()
-        assert len(calls) == 1
-        assert calls[0]["appointState"] == 0 and calls[0]["visitorName"] == "Visita"
+        assert {path for path, _request in calls} == {CHECKINS_PATH, APPOINTMENTS_PATH}
+        assert len(root._history_records) == 2
+        checkin_row = next(row for row in root._history_records.values()
+                           if not row.get("_reservation_only"))
+        reservation_row = next(row for row in root._history_records.values()
+                               if row.get("_reservation_only"))
+        assert checkin_row["registered_at"] == checkin["registerTime"]
+        assert reservation_row["appointment_id"] == "8312"
+        assert reservation_row["registered_at"] == "2026-11-12T08:45:00-03:00"
+        assert loaded_passages == [checkin_row]
         root.edit_history_visitor_information = lambda record: opened_profiles.append(record)
-        for column, expected_action in (("#2", "reservation"), ("#4", "profile")):
-            x, y, width, height = root.history_table.bbox("0", column)
-            assert width and height
-            event = SimpleNamespace(widget=root.history_table, x=x + width // 2,
-                                    y=y + height // 2)
-            root.view_history_selection(event)
-            if expected_action == "reservation":
-                record, = opened_dates
-                assert record["_reservation_only"] and not record["registration_record_id"]
-                assert record["appointment_id"] == "8312" and record["reservation_code"] == "5400"
-            else:
-                record, = opened_profiles
-                assert record["_reservation_only"] and record["visitor_id"] == "715"
+        reservation_iid = next(iid for iid, row in root._history_records.items()
+                               if row.get("_reservation_only"))
+        x, y, width, height = root.history_table.bbox(reservation_iid, "#2")
+        event = SimpleNamespace(widget=root.history_table, x=x + width // 2,
+                                y=y + height // 2)
+        root.view_history_selection(event)
+        record, = opened_dates
+        assert record["_reservation_only"] and not record["registration_record_id"]
+        assert record["appointment_id"] == "8312" and record["reservation_code"] == "5400"
+        x, y, width, height = root.history_table.bbox(reservation_iid, "#4")
+        event = SimpleNamespace(widget=root.history_table, x=x + width // 2,
+                                y=y + height // 2)
+        root.view_history_selection(event)
+        record, = opened_profiles
+        assert record["_reservation_only"] and record["visitor_id"] == "715"
     finally:
         root.destroy()
 
@@ -929,7 +960,7 @@ def test_history_is_lazy_and_never_autofetches_on_tab_change(monkeypatch):
     monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
     monkeypatch.setattr(app, "list_history", lambda: (
         pytest.fail("Historical DPAPI read should be explicit")))
-    monkeypatch.setattr(app, "fetch_checkins", lambda *a, **kw: (
+    monkeypatch.setattr(app, "fetch_combined_history", lambda *a, **kw: (
         pytest.fail("Remote history should not be fetched automatically")))
     root = app.ValeApp()
     try:

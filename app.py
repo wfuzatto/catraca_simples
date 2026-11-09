@@ -27,8 +27,8 @@ from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normal
 from settings_auth import verify_settings_password
 import modern_ui
 from visitor_history import list_history, save_registration, set_history_status, get_history
-from remote_history import (search_window, fetch_checkins, visitor_details,
-                            fetch_unchecked_reservations, fetch_visitor_photo, history_time,
+from remote_history import (search_window, visitor_details,
+                            fetch_combined_history, fetch_visitor_photo, history_time,
                             enrich_checkins_with_appointment_levels,
                             enrich_checkins_with_reservation_periods,
                             resolve_remote_edit_record, filter_local_history_by_entry_date,
@@ -471,8 +471,7 @@ class ValeApp(tk.Tk):
             self._settings_unlocked = False
             if not self.register_button.winfo_manager():
                 self.register_button.pack(side="right", padx=(8, 18), pady=8)
-            if not self.delivery_button.winfo_manager():
-                self.delivery_button.pack(side="right", padx=(8, 0), pady=8)
+            self._refresh_pending_button()
         else:
             self.register_button.pack_forget()
             self.delivery_button.pack_forget()
@@ -798,21 +797,20 @@ class ValeApp(tk.Tk):
                                         for d in report["doors"])
                     text = (f"Visitor ID: {result['visitor_id']}\nReserva: {result['appointment_id']}\n"
                             f"Registro de check-in (confirmado pela API ou consulta): {result['registration_record_id']}\n"
-                            "Para comprovar o registro na base Visitor, use Verificar última entrega.\n\n"
+                            "A distribuição dos dados às catracas é acompanhada pelo HikCentral.\n\n"
                             f"{report['message']}\n{detail}")
                     if report["state"] == "confirmed":
                         messagebox.showinfo("Entrega confirmada", text)
                     elif report["state"] == "failed":
                         messagebox.showwarning("Falha de entrega", text)
                     else:
-                        messagebox.showwarning("Entrega pendente", text +
-                                               "\n\nUse Verificar última entrega para consultar novamente.")
+                        messagebox.showwarning("Entrega pendente", text)
                     self.status.set(f"Cadastro concluído; entrega {report['state']}.")
                 else:
                     messagebox.showwarning("Entrega não verificada",
                         f"Visitor ID: {result['visitor_id']}\nSolicitação de reaplicação enviada.\n"
                         f"A consulta de entrega falhou: {result['report_error']}\n\n"
-                        "Use Verificar última entrega para repetir somente a consulta.")
+                        "A distribuição dos dados às catracas é acompanhada pelo HikCentral.")
                     self.status.set("Cadastro concluído; entrega ainda não verificada.")
                 for var in (self.first, self.last, self.card, self.reservation):
                     var.set("")
@@ -1033,11 +1031,8 @@ class ValeApp(tk.Tk):
     def refresh_history(self):
         # Por padrão sempre consulta o HikCentral. Histórico DPAPI é somente
         # uma contingência identificada quando o servidor está indisponível.
-        mode = getattr(self, "history_mode", None)
-        selected_mode = mode.get() if mode is not None else ""
-        reservation_only = selected_mode == modern_ui.HISTORY_MODE_RESERVATIONS
         try:
-            local_source_rows = [] if reservation_only else list_history()
+            local_source_rows = list_history()
         except Exception:
             local_source_rows = []
         local_rows = list(local_source_rows)
@@ -1060,12 +1055,9 @@ class ValeApp(tk.Tk):
             self.history_status.set("Filtro inválido: " + str(exc))
             return
         if not self.key or not self.secret:
-            if reservation_only:
-                self._show_history_rows([], "Configure a conexão HikCentral para consultar reservas.")
-                return
             self._show_history_rows(
                 local_rows,
-                f"{len(local_rows)} cadastro(s) LOCAIS no período: configure a conexão HikCentral.")
+                f"{len(local_rows)} cadastro(s) LOCAIS no período: conecte ao HikCentral para consultar também reservas sem check-in.")
             return
 
         self.history_status.set("Consultando registros compartilhados do HikCentral...")
@@ -1074,23 +1066,18 @@ class ValeApp(tk.Tk):
             self, "Carregando cadastros do HikCentral...", phase="records")
         def work():
             client = self.client()
-            fetch = fetch_unchecked_reservations if reservation_only else fetch_checkins
-            result = fetch(client, start_iso, end_iso, page, name, page_size=page_size)
-            if not reservation_only:
-                result["rows"] = enrich_checkins_with_reservation_periods(
-                    client, result["rows"], local_source_rows, start_iso, end_iso,
-                    name=name)
+            result = fetch_combined_history(
+                client, start_iso, end_iso, page, name, page_size=page_size)
+            checkins = [row for row in result["rows"] if not row.get("_reservation_only")]
+            enriched = iter(enrich_checkins_with_reservation_periods(
+                client, checkins, local_source_rows, start_iso, end_iso, name=name))
+            result["rows"] = [next(enriched) if not row.get("_reservation_only") else row
+                               for row in result["rows"]]
             return result
 
         def finish(result, error):
             modern_ui.stop_history_loading(self, phase="records")
-            if mode is not None and mode.get() != selected_mode:
-                return
             if error:
-                if reservation_only:
-                    self._show_history_rows([], "Não foi possível consultar reservas no HikCentral: " + str(error))
-                    self.history_page_label.set("Consulta central indisponível")
-                    return
                 self._show_history_rows(
                     local_rows, "HikCentral indisponível: exibindo SOMENTE histórico LOCAL. " +
                     str(error))
@@ -1104,12 +1091,23 @@ class ValeApp(tk.Tk):
                 result["rows"], start_iso, end_iso, name)
             excluded = len(result["rows"]) - len(verified_rows)
             without_booking = sum(not row.get("reservation_entry_at") or not row.get("reservation_exit_at")
-                                  for row in verified_rows)
+                                  for row in verified_rows if not row.get("_reservation_only"))
             local_index = {r["visitor_id"]: r for r in local_rows}
+            local_booking_index = {
+                str(row.get("appointment_id") or ""): row
+                for row in local_source_rows if row.get("appointment_id")
+            }
             rows = []
             for remote in verified_rows:
-                if reservation_only:
-                    rows.append(remote)
+                if remote.get("_reservation_only"):
+                    row = dict(remote)
+                    local_booking = local_booking_index.get(
+                        str(remote.get("appointment_id") or ""))
+                    if (local_booking and
+                            str(local_booking.get("visitor_id") or "") == str(remote.get("visitor_id") or "") and
+                            not row.get("registered_at")):
+                        row["registered_at"] = local_booking.get("registered_at", "")
+                    rows.append(row)
                     continue
                 local = local_index.get(remote["visitor_id"])
                 # Os privilégios locais só podem ser usados se o mesmo registro
@@ -1142,34 +1140,27 @@ class ValeApp(tk.Tk):
                     row["_local_verified"] = True
                     row["state"] = local.get("state", "não verificada")
                 rows.append(row)
-            row_type = "reservas sem check-in" if reservation_only else "check-ins"
-            filtered_by = "início da reserva" if reservation_only else "início do check-in"
             description = (
-                f"HikCentral: {len(rows)} {row_type} nesta página após filtro pelo "
-                f"{filtered_by} e nome. As datas da tabela vêm da reserva vinculada. "
-                f"API retornou {result['total']} registro(s) antes da conferência local."
+                f"HikCentral: {len(rows)} cadastro(s) nesta página, incluindo check-ins e reservas sem check-in. "
+                "De/Até filtram o início da visita ou da reserva; as datas exibidas vêm da reserva vinculada. "
+                "Cadastrado em usa registerTime do HikCentral ou o horário local quando o ID do registro/reserva corresponde. "
+                f"As duas consultas retornaram {result['total']} registro(s)."
                 + (f" {excluded} registro(s) fora da seleção descartado(s) "
                    "nesta página." if excluded else "")
                 + (f" {without_booking} linha(s) sem reserva vinculada confirmada." if without_booking else ""))
             self._show_history_rows(rows, description)
             # Somente visitas confirmadas no período entram na consulta ACS.
-            if not reservation_only:
-                self._load_history_passages(rows, description)
+            checkin_rows = [row for row in rows if not row.get("_reservation_only")]
+            if checkin_rows:
+                self._load_history_passages(checkin_rows, description)
             self.history_page_label.set(
-                f"Página {page} • {result['total']} registro(s) na API, antes da "
-                f"validação de datas • {page_size} por página")
+                f"Página {page} • {result['total']} resultado(s) nas consultas do HikCentral • "
+                f"{page_size} por página")
             self.history_next_button.configure(
                 state="normal" if result["has_next"] else "disabled")
             self.history_previous_button.configure(
                 state="normal" if page > 1 else "disabled")
         self.task(work, finish)
-
-    def history_mode_changed(self):
-        self._history_page = 1
-        self._show_history_rows([], "Clique em Buscar para consultar.")
-        self.history_page_label.set("Página 1")
-        self.history_previous_button.configure(state="disabled")
-        self.history_next_button.configure(state="disabled")
 
     def history_page_size_changed(self):
         """Changing page size is local until the operator explicitly searches."""
@@ -1684,16 +1675,22 @@ class ValeApp(tk.Tk):
             parent=self)
 
     def _refresh_pending_button(self):
-        """O rodapé mostra a ação correta: entrega ou recuperação pendente."""
+        """Mostra a ação de recuperação apenas enquanto houver pendência."""
         if not hasattr(self, "delivery_button"):
             return
         from core import app_dir
-        if (app_dir() / "pending.json").is_file():
-            self.delivery_button.configure(
-                text="Resolver pendência", command=self.show_pending_recovery)
+        has_pending = (app_dir() / "pending.json").is_file()
+        current = self.book.select() if hasattr(self, "book") else ""
+        if not has_pending or current != str(self.registration_tab):
+            self.delivery_button.pack_forget()
+            self.delivery_button.configure(text="")
+            return
+        self.delivery_button.configure(
+            text="Resolver pendência", command=self.show_pending_recovery)
+        if getattr(self, "_responsive_mode", "wide") in ("compact", "narrow"):
+            self.delivery_button.pack(side="right", padx=(6, 0), pady=(2, 7))
         else:
-            self.delivery_button.configure(
-                text="Verificar última entrega", command=self.verify_last_delivery)
+            self.delivery_button.pack(side="right", padx=(8, 0), pady=13)
 
     def show_pending_recovery(self):
         """Explica a operação local sem disparar um novo cadastro.
