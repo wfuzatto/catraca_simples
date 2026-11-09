@@ -191,6 +191,14 @@ class ValeApp(tk.Tk):
         ttk.Label(
             local, text="Carregado do HikCentral. Apenas sugere o grupo inicial; operador pode mudar."
         ).pack(side="left")
+        checkin = ttk.Frame(self.settings_tab)
+        checkin.pack(fill="x", pady=(3, 4))
+        ttk.Label(checkin, text="Check-in automático").pack(side="left", padx=(10, 8))
+        self.s_auto_checkin = tk.StringVar(value="Não")
+        ttk.Combobox(checkin, textvariable=self.s_auto_checkin, state="readonly",
+                     values=("Não", "Sim"), width=10).pack(side="left")
+        ttk.Label(checkin, text="Sim: o aplicativo solicita check-in. Não: não solicita; o HikCentral ainda pode fazê-lo automaticamente.").pack(
+            side="left", padx=8)
 
         options = ttk.Frame(self.settings_tab)
         options.pack(fill="both", expand=True, pady=9)
@@ -222,6 +230,7 @@ class ValeApp(tk.Tk):
         self.s_key.set(self.key)
         self.s_secret.set(self.secret)
         self.s_cert_pin.set(s.get("cert_pin_sha256", ""))
+        self.s_auto_checkin.set("Sim" if s.get("auto_checkin", False) else "Não")
         self.s_valid_times.set("0")
         self.s_validity_start.set(s.get("validity_start_time", "00:00:00"))
         self.s_validity_end.set(s.get("validity_end_time", "23:59:59"))
@@ -312,6 +321,7 @@ class ValeApp(tk.Tk):
                 "ca_file": self.s_ca.get().strip(),
                 "cert_pin_sha256": normalize_pin(self.s_cert_pin.get()),
                 "preferred_group": preferred,
+                "auto_checkin": self.s_auto_checkin.get() == "Sim",
                 "card_format": self.s_format.get(),
                 "camera_index": int(self.s_camera.get()),
                 "face_auto_capture": bool(self.s_face_enabled.get()),
@@ -663,6 +673,7 @@ class ValeApp(tk.Tk):
             return
 
         self._recovery_attempts = 0
+        checkin_requested = bool(self.settings.get("auto_checkin", False))
 
         def preflight():
             selected, door_ids = self.client().resolve_levels(requested_levels)
@@ -702,8 +713,10 @@ class ValeApp(tk.Tk):
                 f"\n\nCredencial(is) a enviar: {credentials}. " +
                 ("Confirme que a pulseira de teste n\u00e3o est\u00e1 vinculada a outro visitante.\n\n"
                  if expect_card else "\n\n") +
-                "Ao confirmar, o aplicativo criará a reserva e registrará o check-in automaticamente.\n\n"
-                "Prosseguir?"
+                ("Ao confirmar, o aplicativo criará a reserva e registrará o check-in automaticamente.\n\n"
+                 if checkin_requested else
+                 "Ao confirmar, o aplicativo criará a reserva sem solicitar check-in.\n\n")
+                + "Prosseguir?"
             )
             if not messagebox.askyesno("Confirmar níveis e catracas", confirmation, parent=self):
                 self.status.set("Cadastro cancelado antes do envio.")
@@ -722,10 +735,13 @@ class ValeApp(tk.Tk):
                              expect_face=expect_face, expect_card=expect_card,
                              entry_at=payload["visitStartTime"],
                              exit_at=payload["visitEndTime"],
-                             access_names=[level["name"] for level in selected])
-                registration_record_id = client.register_visitor(payload, selected,
-                                                                  appointment_id, visitor_id)
-                mark_registered(registration_record_id)
+                             access_names=[level["name"] for level in selected],
+                             checkin_requested=checkin_requested)
+                registration_record_id = ""
+                if checkin_requested:
+                    registration_record_id = client.register_visitor(payload, selected,
+                                                                      appointment_id, visitor_id)
+                    mark_registered(registration_record_id)
                 for level_id in access_ids:
                     client.assign_access(visitor_id, level_id)
                     mark_assigned(level_id)
@@ -749,7 +765,8 @@ class ValeApp(tk.Tk):
                         "reservation_exit_at": payload["visitEndTime"],
                         "registered_at": datetime.now(TZ).isoformat(timespec="seconds"),
                         "expect_face": expect_face, "expect_card": expect_card,
-                        "state": "em consulta", "checkin_state": "não verificado"
+                        "state": "em consulta",
+                        "checkin_state": "não solicitado" if not checkin_requested else "não verificado"
                     })
                 except Exception:
                     pass  # remote registration was already completed; do not retry creation
@@ -776,6 +793,9 @@ class ValeApp(tk.Tk):
                             advice = ("O envio da reserva pode ter sido aceito, mas a resposta é incerta. "
                                       "Antes de repetir, consulte Visitor > Visitor Reservation no HikCentral. "
                                       "Nenhuma nova reserva será criada automaticamente.")
+                        elif not pending.get("checkin_requested", True):
+                            advice = ("A reserva foi criada sem solicitação de check-in. "
+                                      "A recuperação concluirá os acessos sem registrar o visitante.")
                         elif not pending.get("registered", True):
                             advice = ("Existe uma reserva, mas o check-in não está confirmado. "
                                       "Confira o estado no HikCentral antes de retomar ou repetir.")
@@ -795,8 +815,11 @@ class ValeApp(tk.Tk):
                 if report:
                     detail = "\n".join(f"• {d['name']}: face {d['faceState']}; pulseira {d['credentialState']}"
                                         for d in report["doors"])
+                    checkin_line = (f"Registro de check-in: {result['registration_record_id']}\n"
+                                    if result["registration_record_id"] else
+                                    "Check-in automático: não solicitado\n")
                     text = (f"Visitor ID: {result['visitor_id']}\nReserva: {result['appointment_id']}\n"
-                            f"Registro de check-in (confirmado pela API ou consulta): {result['registration_record_id']}\n"
+                            + checkin_line +
                             "A distribuição dos dados às catracas é acompanhada pelo HikCentral.\n\n"
                             f"{report['message']}\n{detail}")
                     if report["state"] == "confirmed":
@@ -1418,6 +1441,20 @@ class ValeApp(tk.Tk):
             except Exception as exc:
                 issue = (issue + "\n" if issue else "") + (
                     "Não foi possível consultar o Remark em Visitor Information: " + str(exc))
+            profile = detail.get("VisitorInfo") or detail.get("visitorInfo") or detail
+            profile_group = str(profile.get("visitorGroupName") or profile.get("visitorGroup") or "").strip()
+            if not profile_group and not str(record.get("group") or "").strip():
+                try:
+                    from remote_history import find_original_appointment
+                    booking = find_original_appointment(client, record)
+                    booking_info = booking.get("visitorInfo") or booking.get("VisitorInfo") or {}
+                    reservation_group = str(booking_info.get("visitorGroupName") or
+                                            booking_info.get("visitorGroup") or "").strip()
+                    if reservation_group:
+                        record["group"] = reservation_group
+                except Exception as exc:
+                    issue = (issue + "\n" if issue else "") + (
+                        "O grupo não foi confirmado no perfil nem na reserva vinculada: " + str(exc))
             try:
                 groups = selectable_visitor_groups(client.visitor_groups())
             except Exception as exc:
@@ -1931,7 +1968,8 @@ class ValeApp(tk.Tk):
                     or set(pending.get("door_ids", [])) != set(expected_doors)):
                 return {"unresolved": "Pendência com nível/pontos diferentes do registro original. "
                                       "Revisão manual necessária; nenhum acesso foi alterado."}
-            if not pending.get("registered", False):
+            checkin_requested = pending.get("checkin_requested", True)
+            if checkin_requested and not pending.get("registered", False):
                 entry_at, exit_at = pending.get("entry_at"), pending.get("exit_at")
                 if not entry_at or not exit_at:
                     return {"unresolved": "Cadastro anterior sem intervalo para conferir check-in."}
@@ -1961,7 +1999,8 @@ class ValeApp(tk.Tk):
                 status = report["state"]
             except Exception:
                 status = "não verificada"
-            return {"visitor_id": pending["visitor_id"], "state": status}
+            return {"visitor_id": pending["visitor_id"], "state": status,
+                    "checkin_requested": bool(checkin_requested)}
 
         def finish(value, error):
             self._refresh_pending_button()
@@ -1980,8 +2019,9 @@ class ValeApp(tk.Tk):
                 self.status.set("Cadastro pendente recuperado automaticamente; entrega " + value["state"] + ".")
                 if notify:
                     messagebox.showinfo("Pendência resolvida",
-                        "Check-in anterior conciliado, sem nova reserva. "
-                        "Entrega da credencial: " + value["state"], parent=self)
+                        ("Check-in anterior conciliado, sem nova reserva. " if value.get("checkin_requested", True) else
+                         "Reserva anterior conciliada sem criar check-in. ")
+                        + "Entrega da credencial: " + value["state"], parent=self)
                 return
             self._recovery_attempts += 1
             if self._recovery_attempts < 3:

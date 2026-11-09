@@ -90,3 +90,13 @@ def test_request_validation_identifies_the_missing_person_field(key, value, erro
     with pytest.raises(EditorFieldError) as error:
         validate_edit_request(payload)
     assert error_field in error.value.fields
+
+
+def test_reservation_date_update_does_not_require_unedited_credentials():
+    payload = valid_request()
+    info = payload["visitorInfoList"][0]["VisitorInfo"]
+    info.pop("cards")
+    validate_edit_request(payload, require_credential=False)
+    with pytest.raises(EditorFieldError) as error:
+        validate_edit_request(payload, require_credential=True)
+    assert "credential" in error.value.fields

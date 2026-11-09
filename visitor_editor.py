@@ -157,6 +157,7 @@ def open_registered_reservation_editor(app, record, *, reservation_info=None,
         return
 
     record = dict(record)
+    auto_checkin = bool(app.settings.get("auto_checkin", False))
     booking = reservation_info if isinstance(reservation_info, dict) else {}
     code = str(booking.get("appointCode") or record.get("reservation_code") or "")
     booking_id = original_appointment_identifier(booking) if booking else str(
@@ -165,10 +166,10 @@ def open_registered_reservation_editor(app, record, *, reservation_info=None,
     end_value = (record.get("reservation_exit_at") or record.get("exit_at") or "")
     card_number = str(record.get("card_number") or "").strip()
     has_card = any(str(value or "").strip() for value in cards) or bool(card_number)
-    if record.get("expect_card") and not has_card:
+    if auto_checkin and record.get("expect_card") and not has_card:
         context_error = (str(context_error).strip() + "\n" if context_error else "") + (
             "A pulseira do perfil não foi retornada pela API. Confirme a credencial em Visitor Information pelo nome.")
-    if record.get("expect_face") and not initial_photo:
+    if auto_checkin and record.get("expect_face") and not initial_photo:
         context_error = (str(context_error).strip() + "\n" if context_error else "") + (
             "A foto não foi retornada pela API. Se necessário, edite a foto em Visitor Information pelo nome.")
 
@@ -266,7 +267,10 @@ def open_registered_reservation_editor(app, record, *, reservation_info=None,
             f"Reserva {code or booking_id} do Visitor ID {record.get('visitor_id')}:\n"
             f"{start:%d/%m/%Y %H:%M:%S} a {end:%d/%m/%Y %H:%M:%S}\n\n"
             "A API seguirá o fluxo da reserva: checkout se necessário, atualização da reserva e "
-            "check-in se o HikCentral não o fizer automaticamente. Nome, grupo, apartamento/Remark "
+            + ("check-in conforme a opção Check-in automático das Configurações. "
+               if app.settings.get("auto_checkin", False) else
+               "sem solicitar check-in. ")
+            + "Nome, grupo, apartamento/Remark "
             "e credenciais serão mantidos.")
         if not messagebox.askyesno("Confirmar datas da reserva", summary, parent=dialog):
             return
@@ -311,7 +315,7 @@ def open_registered_reservation_editor(app, record, *, reservation_info=None,
                                             record.get("photo_url", ""), details=details)
             except Exception as exc:
                 photo, photo_issue = b"", str(exc)
-            if not photo and record.get("expect_face"):
+            if auto_checkin and not photo and record.get("expect_face"):
                 raise EditorFieldError({"photo": "A foto necessária não foi retornada pela API. "
                                          "Abra Visitor Information pelo nome e selecione uma foto antes de alterar as datas. "
                                          + photo_issue})
@@ -324,7 +328,8 @@ def open_registered_reservation_editor(app, record, *, reservation_info=None,
                                   "Abra Visitor Information pelo nome, informe Apartamento/Remark e tente novamente."})
             visitor = Visitor(names[0], names[1], current_group, photo, card, start, end,
                               reservation_value)
-            payload = registration_payload(visitor, 0, editing=True)
+            payload = registration_payload(visitor, 0, editing=True,
+                                           require_credential=auto_checkin)
             requested = list(verified.get("access_names") or [])
             original_ids = [str(value) for value in (verified.get("access_level_ids") or [])]
             if len(requested) != 1 or len(original_ids) != 1:
@@ -335,7 +340,8 @@ def open_registered_reservation_editor(app, record, *, reservation_info=None,
                 raise EditorFieldError({"group": "O nível Visitor mudou desde a consulta. Busque novamente."})
             from ordered_reservation_change import change_reservation_dates
             return change_reservation_dates(
-                client, verified, payload, selected, doors, visitor, current_group, requested)
+                client, verified, payload, selected, doors, visitor, current_group, requested,
+                auto_checkin=bool(app.settings.get("auto_checkin", False)))
 
         status.set("Conferindo perfil, reserva e nível Visitor no HikCentral...")
         status_label.configure(text_color="#64748B")
@@ -411,13 +417,23 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
     card = next((str(item.get("cardNo") or "") for item in cards
                  if isinstance(item, dict) and item.get("cardNo")), "")
     card = card or str(record.get("card_number") or "")
+    from hikcentral import normalize
+
     profile_group = str(visitor.get("visitorGroupName") or visitor.get("visitorGroup") or "").strip()
-    group = profile_group or str(record.get("group") or "").strip()
+    record_group = str(record.get("group") or "").strip()
+    source_group = profile_group or record_group
     groups = list(dict.fromkeys(str(value).strip() for value in
                                 (available_groups or getattr(app, "connected_groups", []))
                                 if str(value).strip()))
-    if group and group not in groups:
-        groups.insert(0, group)
+    group = next((value for value in groups
+                  if source_group and normalize(value) == normalize(source_group)), source_group)
+    # The profile details endpoint sometimes omits visitorGroupName. A group
+    # returned on this visitor's reservation is still an authoritative current
+    # value, so preserve it and avoid a spurious group migration on save.
+    group_known = bool(group)
+    group_options = list(groups)
+    if group and group not in group_options:
+        group_options.insert(0, group)
     if remark_known:
         remark = str(initial_remark or "").strip()
     else:
@@ -442,14 +458,13 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
         wraplength=500, justify="left", text_color="#64748B").pack(fill="x", pady=(0, 10))
 
     fields, entries, errors = {}, {}, {}
-    group_known = bool(profile_group)
     group_border = ctk.CTkFrame(body, border_width=2,
                                 border_color="#9CA3AF" if group_known else "#DC2626")
     group_border.pack(fill="x", pady=(2, 4))
     ctk.CTkLabel(group_border, text="Grupo", anchor="w").pack(fill="x", padx=7, pady=(4, 0))
     group_var = tk.StringVar(value=group)
     group_selector = ttk.Combobox(group_border, textvariable=group_var,
-                                  state="readonly", values=groups, font=("Segoe UI", 11))
+                                  state="readonly", values=group_options, font=("Segoe UI", 11))
     group_selector.pack(fill="x", padx=7, pady=4)
     group_error = ctk.CTkLabel(
         group_border,
@@ -553,7 +568,9 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
             entry.configure(border_color="#DC2626" if key in result else "#9CA3AF")
             errors[key].configure(text=result.get(key, ""))
         selected_group = group_var.get().strip()
-        if not selected_group or selected_group not in groups or not group_confirmed["value"]:
+        known_current = group_known and normalize(selected_group) == normalize(group)
+        selected_live = any(normalize(selected_group) == normalize(value) for value in groups)
+        if not selected_group or not (selected_live or known_current) or not group_confirmed["value"]:
             result["group"] = "Selecione um grupo existente no HikCentral."
         group_border.configure(border_color="#DC2626" if "group" in result else "#9CA3AF")
         group_error.configure(text=result.get("group", ""))
@@ -616,11 +633,20 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
 
         def work():
             client = app.client()
-            live_groups = [str(value).strip() for value in client.visitor_groups()
-                           if str(value).strip() in VALE_VISITOR_LEVELS]
-            target_group = fields["group"].get().strip()
-            group_change_requested = target_group != group or not group_known
-            if group_change_requested and target_group not in live_groups:
+            try:
+                live_groups = [str(value).strip() for value in client.visitor_groups()
+                               if str(value).strip() in VALE_VISITOR_LEVELS]
+            except Exception:
+                live_groups = [str(value).strip() for value in
+                               getattr(app, "connected_groups", [])
+                               if str(value).strip() in VALE_VISITOR_LEVELS]
+            selected_group = fields["group"].get().strip()
+            current_group = group
+            is_current = bool(group_known and normalize(selected_group) == normalize(current_group))
+            target_group = (current_group if is_current else next(
+                (value for value in live_groups if normalize(value) == normalize(selected_group)), ""))
+            group_change_requested = not is_current
+            if group_change_requested and not target_group:
                 raise EditorFieldError({"group": "O grupo não foi confirmado na consulta atual ao HikCentral."})
             if group_change_requested:
                 requested = selected_editor_access(target_group, live_groups, app.settings)
@@ -639,7 +665,7 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
                         last=fields["last"].get().strip(),
                         card=fields["card"].get().strip(),
                         photo=chosen_photo["bytes"],
-                        reservation_remark=str(visitor.get("remark") or record.get("reservation") or ""))
+                        reservation_remark=str(record.get("reservation") or ""))
                 except Exception as exc:
                     try:
                         exc.profile_saved = list(changed)
@@ -659,6 +685,7 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
     cancel_button.pack(side="left", padx=5)
     dialog._visitor_information_fields = fields
     dialog._visitor_information_group_selector = group_selector
+    dialog._visitor_information_group_error = group_error
     dialog._visitor_information_save_button = save_button
 
 
@@ -1211,7 +1238,8 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     client, edit_record, payload, selected, doors, obj, new_group, requested_level,
                     profile_update=lambda: update_profile(
                         client, str(record["visitor_id"]), obj.first_name, obj.last_name,
-                        card=obj.card_number, new_photo=selected_profile_photo))
+                        card=obj.card_number, new_photo=selected_profile_photo),
+                    auto_checkin=bool(app.settings.get("auto_checkin", False)))
             update_profile(client, str(record["visitor_id"]), obj.first_name, obj.last_name,
                            card=obj.card_number, new_photo=selected_profile_photo)
             from copy import deepcopy
@@ -1300,14 +1328,17 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
             if result.get("rebooking_completed"):
                 new_appointment = str(result.get("confirmed_appointment_id") or "")
                 new_checkin = str(result.get("confirmed_checkin_id") or "")
+                checkin_state = str(result.get("checkin_state") or
+                                    ("check-in efetuado" if new_checkin else "sem check-in"))
                 booking_period = result.get("reservation_period") or {}
                 record.update(appointment_id=new_appointment, _original_appointment_id=new_appointment,
                               registration_record_id=new_checkin, entry_at=payload["visitStartTime"],
                               exit_at=payload["visitEndTime"], first=obj.first_name.strip(),
                               last=obj.last_name.strip(), reservation=obj.reservation.strip(), group=new_group,
-                              checkin_state="check-in efetuado", _edit_operation="update",
+                              checkin_state=checkin_state, _edit_operation="update",
                               _reservation_period=booking_period)
-                select_confirmed_active_visit()
+                if new_checkin:
+                    select_confirmed_active_visit()
                 appointment_choices.clear()
                 appointment_selector.configure(values=[new_appointment], state="normal")
                 appointment_var.set(new_appointment)
@@ -1322,10 +1353,13 @@ def open_visitor_editor(app, record, *, remote_details=None, initial_photo=b"",
                     period_label.configure(text=booking_note, text_color="#64748B")
                     period_label.pack(fill="x", pady=(4, 5), before=summary_label)
                 remote_errors.clear()
+                checkin_notice = (
+                    "O HikCentral fez o check-in automaticamente.\n" if result.get("automatic_checkin") else
+                    "O check-in foi confirmado após atualizar a reserva.\n" if new_checkin else
+                    "O aplicativo não solicitou check-in.\n")
                 messagebox.showinfo("Edição concluída",
-                    f"A reserva {booking_period.get('code') or new_appointment} e o check-in foram confirmados.\n"
-                    + ("O HikCentral fez o check-in automaticamente.\n" if result.get("automatic_checkin")
-                       else "O check-in foi confirmado após criar a reserva.\n")
+                    f"A reserva {booking_period.get('code') or new_appointment} foi atualizada.\n"
+                    + checkin_notice
                     + "O HikCentral recebeu a solicitação de acesso e controla a distribuição.", parent=app)
                 if dialog.winfo_exists():
                     dialog.destroy()

@@ -1020,6 +1020,9 @@ def test_new_registration_date_fields_do_not_include_or_autofill_clock(monkeypat
     from core import default_settings
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    saved = []
+    monkeypatch.setattr(app, "save_api_keys", lambda *_args: None)
+    monkeypatch.setattr(app, "save_settings", lambda conf: saved.append(dict(conf)))
     root = app.ValeApp()
     try:
         root.update()
@@ -1036,6 +1039,13 @@ def test_new_registration_date_fields_do_not_include_or_autofill_clock(monkeypat
         root.update_idletasks()
         assert root.s_validity_start.get() == "00:00:00"
         assert root.s_validity_end.get() == "23:59:59"
+        assert root.s_auto_checkin.get() == "Não"
+        root.s_auto_checkin.set("Sim")
+        assert root.s_auto_checkin.get() == "Sim"
+        root.s_key.set("offline-test-key")
+        root.s_secret.set("offline-test-secret")
+        assert root.save_config(silent=True)
+        assert saved[-1]["auto_checkin"] is True
         root.book.select(root.registration_tab)
         root.update_idletasks()
         assert root.start.get() == "05/11/2099"
@@ -1350,12 +1360,13 @@ def test_editing_reservation_dates_uses_single_save_and_openapi_transaction(monk
     monkeypatch.setattr(visitor_profile, "update_profile", update_profile)
 
     def replace(_client, record, payload, selected, doors, visitor, group, requested_level,
-                *, journal=None, profile_update=None):
+                *, journal=None, profile_update=None, auto_checkin=False):
         assert record["visitor_id"] == "1649"
         assert selected == [{"id": "7", "name": "VISITANTE_VALE"}]
         assert doors == ["57", "64", "89"]
         assert group == "Hóspedes Vale"
         assert requested_level == ["VISITANTE_VALE"]
+        assert auto_checkin is False
         captured.update(visitor_id=record["visitor_id"], payload=payload)
         profile_update()
         events.append("ordered-transaction")
@@ -1616,11 +1627,58 @@ def test_missing_profile_remark_is_red_and_never_falls_back_to_reservation(monke
         dialog = root._active_visitor_editor
         assert dialog._visitor_information_fields["remark"].get() == ""
         assert dialog._visitor_information_fields["group"].get() == "Hóspedes Vale"
+        assert dialog._visitor_information_group_error.cget("text") == ""
         assert dialog._visitor_information_fields["group"] is not None
         assert dialog._visitor_information_group_selector.cget("values") == ("Hóspedes Vale",)
         dialog._visitor_information_group_selector.event_generate("<<ComboboxSelected>>")
         dialog._visitor_information_save_button.invoke()
         assert errors and "Remark" in str(errors[0])
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Visitor Information exige Tk Windows")
+def test_profile_editor_preserves_group_from_remote_reservation_without_migration(monkeypatch):
+    import app
+    import visitor_editor
+    import visitor_profile
+    from core import default_settings
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
+    writes = []
+    monkeypatch.setattr(visitor_profile, "update_profile",
+                        lambda *args, **kwargs: writes.append((args, kwargs)) or [])
+
+    class FakeClient:
+        @staticmethod
+        def visitor_groups():
+            return ["Hóspedes Vale"]
+
+    root = app.ValeApp()
+    root.client = lambda: FakeClient()
+    root.task = lambda work, done: done(work(), None)
+    root.refresh_history = lambda: None
+    try:
+        visitor_editor.open_visitor_information_editor(
+            root,
+            {"visitor_id": "715", "first": "Visita", "last": "Teste",
+             "group": "Hóspedes Vale", "reservation": "Remark da reserva"},
+            remote_details={"VisitorInfo": {"visitorId": "715",
+                "visitorGivenName": "Visita", "visitorFamilyName": "Teste"}},
+            initial_remark="Remark do perfil", remark_known=True,
+            available_groups=["Hóspedes Vale"])
+        dialog = root._active_visitor_editor
+        assert dialog._visitor_information_fields["group"].get() == "Hóspedes Vale"
+        assert dialog._visitor_information_group_error.cget("text") == ""
+        dialog._visitor_information_save_button.invoke()
+        assert len(writes) == 1
+        assert writes[0][1]["remark"] == "Remark do perfil"
+        assert not dialog.winfo_exists()
     finally:
         root.destroy()
 
@@ -1694,6 +1752,7 @@ def test_registered_reservation_editor_shows_only_dates_and_preserves_profile_da
         popup._save_reservation_button.invoke()
         assert len(calls) == 1
         args, _kwargs = calls[0]
+        assert _kwargs["auto_checkin"] is False
         saved_record, payload, selected, doors, visitor, group, levels = args[1:]
         assert saved_record["visitor_id"] == "1865"
         info = payload["visitorInfoList"][0]["VisitorInfo"]

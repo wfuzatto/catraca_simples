@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.71"
+APP_VERSION = "1.0.0-preview.72"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -49,6 +49,7 @@ def default_settings() -> dict:
         "host": "127.0.0.1", "port": 443, "ca_file": "",
         "cert_pin_sha256": "",
         "preferred_group": "",  # Sugestão local, nunca substitui consulta da OpenAPI.
+        "auto_checkin": False,
         "valid_times": VALE_VALID_TIMES,  # Travado em zero para não limitar a utilização.
         # Horários do PERÍODO de validade do ingresso; só nas Configurações.
         # Agenda de catraca ACQUAVALE (09–17) é independente.
@@ -492,13 +493,14 @@ def prepare_face_jpeg(image_bytes: bytes, max_bytes: int = 2_000_000) -> bytes:
     raise ValueError("A foto não pôde ser reduzida para menos de 2 MB.")
 
 
-def validate_visitor(v: Visitor, now: datetime | None = None, *, allow_expired=False) -> None:
+def validate_visitor(v: Visitor, now: datetime | None = None, *, allow_expired=False,
+                     require_credential=True) -> None:
     if len(v.first_name.strip()) < 2 or len(v.last_name.strip()) < 2:
         raise ValueError("Informe nome e sobrenome.")
     if not v.group.strip():
         raise ValueError("Escolha um grupo de visitantes.")
     card_number = v.card_number.strip()
-    if not v.photo_jpeg and not card_number:
+    if require_credential and not v.photo_jpeg and not card_number:
         raise ValueError("Informe reconhecimento facial, pulseira/cart\u00e3o ou ambos.")
     if v.photo_jpeg:
         try:
@@ -535,8 +537,9 @@ def validate_valid_times(value: int) -> int:
     return value
 
 
-def registration_payload(v: Visitor, valid_times: int = 0, *, editing=False) -> dict:
-    validate_visitor(v, allow_expired=editing)
+def registration_payload(v: Visitor, valid_times: int = 0, *, editing=False,
+                         require_credential=True) -> dict:
+    validate_visitor(v, allow_expired=editing, require_credential=require_credential)
     validate_valid_times(valid_times)  # Contrato legado; nenhuma limitação é aplicada.
     valid_times = VALE_VALID_TIMES  # Regra obrigatória independentemente do perfil local.
     visitor_info = {
@@ -632,7 +635,8 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
                  *, appointment_id: str = "", door_ids: list[str] | None = None,
                  registered: bool = True, expect_face: bool = True,
                  expect_card: bool = True, entry_at: str = "", exit_at: str = "",
-                 access_names: list[str] | None = None) -> None:
+                 access_names: list[str] | None = None,
+                 checkin_requested: bool = True) -> None:
     """Checkpoint mínimo após reserva; nunca armazena foto, cartão, segredo ou nome."""
     path = (base or app_dir()) / "pending.json"
     if not expect_face and not expect_card:
@@ -647,7 +651,8 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
         "access_ids": access_ids, "door_ids": door_ids or [],
         "access_names": access_names or [],
         "expect_face": bool(expect_face), "expect_card": bool(expect_card),
-        "registration_record_id": "", "registered": registered, "assigned": [],
+        "registration_record_id": "", "registered": registered,
+        "checkin_requested": bool(checkin_requested), "assigned": [],
         "entry_at": entry_at, "exit_at": exit_at
     })
 
