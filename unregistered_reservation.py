@@ -82,8 +82,17 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
     prior_access = {**(profile.get("accessInfo") or {}), **(saved.get("accessInfo") or {})}
     # The booking API makes group optional. If the server omitted it, preserve
     # the exact access level without submitting an inferred group assignment.
-    if actual_group:
-        info["visitorGroupName"] = actual_group
+    if expected_profile_group is not None:
+        # A deliberate group migration must send the new Visitor group.
+        info["visitorGroupName"] = group
+    else:
+        # Preserve a group explicitly returned by the profile/reservation.
+        # Do not infer and write one from an access-level name when the API
+        # omitted the Visitor group; the original level is verified separately.
+        confirmed_group = str(saved.get("visitorGroupName") or saved.get("visitorGroup") or
+                              profile_group).strip()
+        if confirmed_group:
+            info["visitorGroupName"] = confirmed_group
     info.update(visitorId=vid, remark=remark, accessInfo={
         "electrostaticDetectionType": prior_access.get("electrostaticDetectionType", 0),
         "qrCodeValidNum": prior_access.get("qrCodeValidNum", 0),

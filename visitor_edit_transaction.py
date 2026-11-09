@@ -85,12 +85,14 @@ def update_existing_visit(client, record: dict, payload: dict,
     original_checkin = str(record.get("_selected_checkin_id") or record.get("registration_record_id") or "")
     original_group = str(record.get("_original_group") or record.get("group") or "").strip()
     allow_group_migration = bool(record.get("_allow_group_migration"))
+    requested_group_change = bool(original_group and
+                                  str(group).strip().casefold() != original_group.casefold())
     group_changed = bool(allow_group_migration and
-                         (not original_group or str(group).strip().casefold() != original_group.casefold()))
+                         (not original_group or requested_group_change))
     if record.get("_operator_selected_group") and not original_group and not allow_group_migration:
         original_group = group
         group_changed = False
-    if (not original_group and not allow_group_migration) or (group_changed and not allow_group_migration):
+    if (not original_group and not allow_group_migration) or (requested_group_change and not allow_group_migration):
         raise EditorFieldError({"group": "O grupo do visitante diverge do original. Alteração de grupo exige conferir o grupo atual."},
                                choices={"group": [original_group] if original_group else []})
     original_level_ids = (record.get("_original_access_level_ids") or

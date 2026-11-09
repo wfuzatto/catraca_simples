@@ -29,7 +29,7 @@ def test_apartment_validates_the_visitor_api_limit():
     assert len(validate_visitor_remark("ã" * 128)) == 128
     with pytest.raises(EditorFieldError) as exc:
         validate_visitor_remark("A" * 129)
-    assert "reservation" in exc.value.fields
+    assert "remark" in exc.value.fields
 
 
 def test_profile_updates_name_and_card_without_touching_visit_or_booking():
