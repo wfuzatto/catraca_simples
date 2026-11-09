@@ -562,6 +562,13 @@ class HikCentral:
             "list": [{"id": visitor_id}]
         })
 
+    def remove_access(self, visitor_id: str, level_id: str) -> None:
+        """Remove a visitor from a previous type=2 access level."""
+        self.post("/artemis/api/acs/v1/privilege/group/single/deletePersons", {
+            "privilegeGroupId": level_id, "type": 2,
+            "list": [{"id": visitor_id}]
+        })
+
     def apply(self, visitor_id: str, doors: list[str]) -> None:
         if not visitor_id or not doors:
             raise HikError("IDs do visitante/catracas não foram recebidos.")

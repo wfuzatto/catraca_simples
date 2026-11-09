@@ -1419,23 +1419,112 @@ class ValeApp(tk.Tk):
                 detail = visitor_details(client, record["visitor_id"])
             except Exception as exc:
                 issue = str(exc)
+            remark, remark_known = "", False
+            try:
+                from visitor_profile import read_profile
+                _details, _names, _cards, remark, remark_known = read_profile(
+                    client, record["visitor_id"], details=detail)
+            except Exception as exc:
+                issue = (issue + "\n" if issue else "") + (
+                    "Não foi possível consultar o Remark em Visitor Information: " + str(exc))
+            try:
+                groups = selectable_visitor_groups(client.visitor_groups())
+            except Exception as exc:
+                groups = list(getattr(self, "connected_groups", []))
+                issue = (issue + "\n" if issue else "") + (
+                    "Não foi possível atualizar os grupos do HikCentral: " + str(exc))
             try:
                 photo = fetch_visitor_photo(
                     client, record["visitor_id"], record.get("photo_url", ""), details=detail)
             except Exception as exc:
                 issue = (issue + "\n" if issue else "") + str(exc)
-            return detail, photo, issue
+            return detail, photo, issue, remark, remark_known, groups
 
         def finish(result, error):
             modern_ui.stop_history_loading(self, phase="editor")
             if error:
-                detail, photo, issue = {}, b"", str(error)
+                detail, photo, issue, remark, remark_known, groups = {}, b"", str(error), "", False, []
             else:
-                detail, photo, issue = result
+                detail, photo, issue, remark, remark_known, groups = result
             open_visitor_information_editor(
-                self, record, remote_details=detail, initial_photo=photo, photo_error=issue)
-            self.history_status.set("Visitor Information aberto; datas e apartamento continuam na reserva.")
+                self, record, remote_details=detail, initial_photo=photo, photo_error=issue,
+                initial_remark=remark, remark_known=remark_known, available_groups=groups)
+            self.history_status.set("Visitor Information aberto; as datas continuam no editor da reserva.")
 
+        self.task(work, finish)
+
+    def edit_history_reservation(self, record):
+        """Open the dates-only editor with reservation data confirmed by OpenAPI."""
+        from visitor_editor import open_registered_reservation_editor
+        from remote_history import (compare_reservation_period, find_original_appointment,
+                                    original_appointment_identifier)
+
+        record = dict(record)
+        if self.busy:
+            self.history_status.set("Aguarde a operação atual terminar antes de abrir a reserva.")
+            return
+
+        def work():
+            client = self.client()
+            verified, details = resolve_remote_edit_record(client, record)
+            booking = find_original_appointment(client, verified)
+            booking_info = booking.get("visitorInfo") or {}
+            if not isinstance(booking_info, dict) or str(booking_info.get("visitorId") or "") != str(record.get("visitor_id") or ""):
+                raise ValueError("A reserva retornada não pertence ao visitante selecionado.")
+            period = compare_reservation_period(
+                booking, booking.get("appointStartTime"), booking.get("appointEndTime"))
+            verified.update(
+                appointment_id=period["appointment_id"],
+                reservation_code=period["code"],
+                reservation_entry_at=period["entry_at"],
+                reservation_exit_at=period["exit_at"],
+                _reservation_period=period)
+            if (record.get("appointment_id") and
+                    str(record["appointment_id"]) != original_appointment_identifier(booking)):
+                raise ValueError("O vínculo da reserva mudou; busque a lista novamente.")
+            from visitor_profile import read_profile
+            _details, _names, cards, _person_remark, _remark_present = read_profile(
+                client, record["visitor_id"], details=details)
+            try:
+                photo = fetch_visitor_photo(
+                    client, record["visitor_id"], record.get("photo_url", ""), details=details)
+                photo_issue = ""
+            except Exception as exc:
+                photo, photo_issue = b"", str(exc)
+            if not photo and verified.get("expect_face"):
+                photo_issue = ("A foto é necessária para concluir o check-in após alterar as datas. "
+                               "Edite a foto pelo nome do visitante. " + photo_issue)
+            return verified, booking, cards, photo, photo_issue
+
+        def finish(result, error):
+            modern_ui.stop_history_loading(self, phase="editor")
+            if error:
+                verified, booking, cards, photo, issue = dict(record), {}, (), b"", str(error)
+            else:
+                verified, booking, cards, photo, issue = result
+                if verified.get("_requires_access_confirmation"):
+                    levels = ", ".join(verified.get("access_names") or []) or "nível Visitor"
+                    if not messagebox.askyesno(
+                            "Confirmar nível Visitor",
+                            "O HikCentral não comprovou o nível original diretamente. "
+                            f"O nível {levels} foi conferido pelo grupo e será preservado ao editar a reserva. "
+                            "Confirma esse nível para este visitante?", parent=self):
+                        self.history_status.set("Edição cancelada; nenhum dado foi alterado.")
+                        return
+                    verified["_operator_access_confirmed"] = True
+                    verified["_operator_access_confirmed_level_ids"] = list(
+                        verified.get("access_level_ids") or [])
+            open_registered_reservation_editor(
+                self, verified, reservation_info=booking, cards=cards,
+                initial_photo=photo, context_error=issue)
+            self.history_status.set("Editor de datas da reserva aberto; os dados do perfil ficam no nome.")
+
+        if not self.key or not self.secret:
+            open_registered_reservation_editor(
+                self, record, context_error="Conecte ao HikCentral para confirmar a reserva e salvar.")
+            return
+        self.history_status.set("Consultando a reserva original no HikCentral...")
+        modern_ui.start_history_loading(self, "Confirmando perfil, reserva e nível Visitor...", phase="editor")
         self.task(work, finish)
 
     def view_history_selection(self, _event=None):
@@ -1459,6 +1548,9 @@ class ValeApp(tk.Tk):
         record = dict(record)
         if action == "profile":
             self.edit_history_visitor_information(record)
+            return "break"
+        if action == "reservation" and not record.get("_reservation_only"):
+            self.edit_history_reservation(record)
             return "break"
         if record.get("_reservation_only"):
             if _event is not None and action != "reservation":

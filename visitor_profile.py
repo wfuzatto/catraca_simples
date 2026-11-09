@@ -17,10 +17,10 @@ FACE_UPDATE = "/artemis/api/resource/v1/person/face/update"
 
 
 def validate_visitor_remark(value):
-    """Return the apartment text accepted by the Visitor endpoints."""
+    """Return the remark accepted by Visitor Information."""
     remark = str(value or "").strip()
     if len(remark) > 128:
-        raise EditorFieldError({"reservation": "Informe até 128 caracteres em reserva/apartamento."})
+        raise EditorFieldError({"remark": "Informe até 128 caracteres no Remark do visitante."})
     return remark
 
 
@@ -33,10 +33,15 @@ def read_visitor_remark(client, visitor_id):
     return str(visitor.get("remark") or "").strip()
 
 
-def read_profile(client, visitor_id):
-    details = visitor_details(client, visitor_id)
+def read_profile(client, visitor_id, *, details=None):
+    details = details if isinstance(details, dict) else visitor_details(client, visitor_id)
     visitor = details.get("VisitorInfo") or details.get("visitorInfo") or details
-    person = client.post(PERSON_INFO, {"personId": visitor_id}).get("data") or {}
+    if not isinstance(visitor, dict):
+        raise HikError("Visitor Information retornou um perfil em formato inesperado.")
+    response = client.post(PERSON_INFO, {"personId": visitor_id})
+    person = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(person, dict):
+        raise HikError("A consulta de pessoa não retornou dados utilizáveis.")
     if str(visitor.get("visitorId")) != visitor_id or str(person.get("personId")) != visitor_id:
         raise HikError("O HikCentral não confirmou o mesmo Visitor ID nas duas consultas.")
     names = (str(visitor.get("visitorGivenName") or "").strip(),
@@ -47,7 +52,11 @@ def read_profile(client, visitor_id):
     cards = person.get("cards") or []
     if not isinstance(cards, list) or any(not isinstance(card, dict) for card in cards):
         raise HikError("O HikCentral retornou pulseiras em formato inesperado.")
-    return details, names, tuple(str(card.get("cardNo") or "").strip() for card in cards)
+    remark_present = "remark" in person
+    remark = str(person.get("remark") or "").strip()
+    return (details, names,
+            tuple(str(card.get("cardNo") or "").strip() for card in cards),
+            remark, remark_present)
 
 
 def same_photo(left, right):
@@ -59,9 +68,10 @@ def same_photo(left, right):
         return max(ImageStat.Stat(ImageChops.difference(a, b)).mean) <= 8
 
 
-def update_profile(client, visitor_id, first, last, *, card="", new_photo=b""):
+def update_profile(client, visitor_id, first, last, *, card="", remark=None, new_photo=b""):
     visitor_id, first, last, card = (str(value or "").strip()
                                      for value in (visitor_id, first, last, card))
+    remark = None if remark is None else validate_visitor_remark(remark)
     errors = {}
     if not re.fullmatch(r"[0-9]{1,64}", visitor_id):
         errors["visit"] = "Selecione um perfil de visitante com ID válido."
@@ -77,11 +87,13 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b""):
             errors["photo"] = "Selecione ou capture uma foto válida."
     if errors:
         raise EditorFieldError(errors)
-    details, old_names, old_cards = read_profile(client, visitor_id)
+    details, old_names, old_cards, old_remark, remark_present = read_profile(client, visitor_id)
     changed = []
     update = {}
     if (first, last) != old_names:
         update.update(personGivenName=first, personFamilyName=last)
+    if remark is not None and (not remark_present or remark != old_remark):
+        update["remark"] = remark
     if card and card not in old_cards:
         if len(old_cards) > 1:
             raise EditorFieldError({"card": "O perfil tem mais de uma pulseira. Selecione a substituição no HikCentral."})
@@ -92,13 +104,17 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b""):
             client.post(PERSON_UPDATE, {"personId": visitor_id, **update})
         except HikError as exc:
             error = str(exc)
-        details, names, cards = read_profile(client, visitor_id)
-        if names != (first, last) or cards != ((card,) if "cards" in update else old_cards):
+        details, names, cards, saved_remark, saved_remark_present = read_profile(client, visitor_id)
+        if (names != (first, last) or cards != ((card,) if "cards" in update else old_cards) or
+                ("remark" in update and
+                 (not saved_remark_present or saved_remark != remark))):
             raise HikError("A conferência do perfil não confirmou os dados solicitados. " + error)
         if "personGivenName" in update:
             changed.append("nome e sobrenome")
         if "cards" in update:
             changed.append("pulseira")
+        if "remark" in update:
+            changed.append("Remark")
     if new_photo:
         try:
             previous = fetch_visitor_photo(client, visitor_id, details=details)
@@ -113,7 +129,7 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b""):
             except HikError as exc:
                 error = str(exc)
             try:
-                details, _, _ = read_profile(client, visitor_id)
+                details, _, _, _, _ = read_profile(client, visitor_id)
                 confirmed = same_photo(new_photo, fetch_visitor_photo(client, visitor_id, details=details))
             except (HikError, OSError, ValueError):
                 confirmed = False

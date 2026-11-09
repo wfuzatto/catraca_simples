@@ -488,7 +488,7 @@ def _history(app):
     # Os campos da reserva e do perfil abrem editores independentes.
     # A consulta de passagens continua automática, sem botão redundante.
     app.history_cell_action_hint = _text(
-        inner, "Reserva sem check-in: clique na data para editar datas e apartamento. Clique no nome para editar Visitor Information (nome, sobrenome, foto e pulseira).",
+      inner, "Clique na data da reserva para editar somente as datas. Clique no nome para editar Visitor Information (nome, sobrenome, grupo, apartamento/Remark, foto e pulseira).",
         size=11, color=MUTED)
     app.history_cell_action_hint.pack(anchor="w", padx=18, pady=(0, 13))
 
