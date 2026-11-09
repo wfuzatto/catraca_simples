@@ -36,7 +36,7 @@ from remote_history import (search_window, visitor_details,
 from access_passages import fetch_visitor_passages, load_reader_directions
 from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
 from registration_recovery import (seal_registration_context, open_registration_context,
-                                   restore_pending_credentials)
+                                   restore_pending_credentials, ensure_checkin_card)
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -798,8 +798,14 @@ class ValeApp(tk.Tk):
                     except Exception:
                         pass
                     if expect_card:
-                        confirm_checkin_card(client, visitor_id, payload["visitStartTime"],
-                                             payload["visitEndTime"], registration_record_id, card)
+                        ensure_checkin_card(client, {
+                            "visitor_id": visitor_id,
+                            "registration_record_id": registration_record_id,
+                            "entry_at": payload["visitStartTime"],
+                            "exit_at": payload["visitEndTime"],
+                        }, {
+                            "card": card, "photo_bytes": obj.photo_jpeg,
+                        })
                         mark_card_confirmed(visitor_id)
                 for level_id in access_ids:
                     client.assign_access(visitor_id, level_id)
