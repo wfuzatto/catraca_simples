@@ -592,6 +592,10 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
         selected_group = group_var.get().strip()
         if selected_group not in group_options:
             result["group"] = "Selecione um grupo existente no HikCentral."
+        elif selected_group not in groups:
+            result["group"] = (
+                "Visitors é o grupo genérico do HikCentral, não o nível Visitor do hotel. "
+                "Selecione o grupo correto antes de gravar qualquer alteração.")
         group_border.configure(border_color="#DC2626" if "group" in result else "#9CA3AF")
         group_error.configure(text=result.get("group", ""))
         remark_value = fields["remark"].get().strip()
