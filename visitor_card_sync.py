@@ -94,6 +94,12 @@ def update_reserved_visitor_card(client, record, card, expected_group, *, remark
         period = compare_reservation_period(booking, start, end)
         if period["state"] != "matched":
             raise EditorFieldError({"card": "Período da reserva mudou; confira antes de emitir o cartão."})
+        # The appointment may rotate its ID after a previous edit. Only
+        # accept the original ID for a FIRST submission; a pending journal
+        # may be reconciled by the same unique code+visitor+period afterward.
+        if not journal.exists() and str(period["appointment_id"]) != aid:
+            raise EditorFieldError({"card": (
+                "O ID da reserva mudou desde a consulta. Recarregue o histórico antes de gravar NFC.")})
         if client.find_registration_record(vid, start, end):
             raise EditorFieldError({"card": (
                 "Já existe check-in para esse período. Não atualizar a reserva; "
