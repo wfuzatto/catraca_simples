@@ -1572,6 +1572,7 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch, check
     import visitor_profile
     import visitor_remark
     import credential_management
+    import visitor_card_sync
     from core import default_settings
 
     monkeypatch.setattr(app, "load_settings", default_settings)
@@ -1594,7 +1595,12 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch, check
     monkeypatch.setattr(credential_management, "ensure_issued_card",
                         lambda client, visitor_id, card: None)
     monkeypatch.setattr(visitor_remark, "update_pending_visitor_remark",
-                        lambda client, record, value: remarks.append((record["visitor_id"], value)) or True)
+                        lambda client, record, value: pytest.fail("Must use Visitor card sync"))
+    monkeypatch.setattr(visitor_card_sync, "update_reserved_visitor_card",
+                        lambda client, record, card, group, *, remark=None:
+                        remarks.append((record["visitor_id"], card, remark)) or True)
+    monkeypatch.setattr(visitor_card_sync, "verify_checkedin_visitor_card",
+                        lambda client, record, card: True)
     monkeypatch.setattr(visitor_profile, "update_active_visitor_fields",
                         lambda client, record, **fields: checkins.append((record["registration_record_id"], fields))
                         or ["pulseira", "Remark"])
@@ -1638,7 +1644,7 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch, check
         else:
             assert kwargs["card"] == "123456"
             assert not checkins
-            assert remarks == [("715", "Apto 19")]
+            assert remarks == [("715", "123456", "Apto 19")]
         assert "entry" not in kwargs and "exit" not in kwargs and "reservation" not in kwargs
         assert not dialog.winfo_exists()
     finally:
