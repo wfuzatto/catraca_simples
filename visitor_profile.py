@@ -61,6 +61,51 @@ def read_profile(client, visitor_id, *, details=None):
             remark, remark_present)
 
 
+def _person_info(client, visitor_id):
+    response = client.post(PERSON_INFO, {"personId": str(visitor_id)})
+    person = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(person, dict) or str(person.get("personId") or "") != str(visitor_id):
+        raise HikError("A consulta de pessoa não confirmou o Visitor ID solicitado.")
+    return person
+
+
+def read_visitor_group(client, visitor_id):
+    """Map the profile orgIndexCode to the exact Visitor group name."""
+    person = _person_info(client, visitor_id)
+    group_id = str(person.get("orgIndexCode") or "").strip()
+    if not group_id:
+        return ""
+    matches = [item for item in client.visitor_group_catalog()
+               if str(item.get("id") or "").strip() == group_id and item.get("name")]
+    return str(matches[0]["name"]).strip() if len(matches) == 1 else ""
+
+
+def set_visitor_group(client, visitor_id, group):
+    """Write and verify a Visitor group using PersonInfo.orgIndexCode."""
+    group = str(group or "").strip()
+    if not group:
+        return False
+    catalog = client.visitor_group_catalog()
+    matches = [item for item in catalog
+               if normalize(str(item.get("name") or "")) == normalize(group)]
+    if len(matches) != 1 or not str(matches[0].get("id") or "").strip():
+        raise EditorFieldError({"group": "Selecione um grupo único existente no HikCentral."})
+    group_id = str(matches[0]["id"]).strip()
+    before = _person_info(client, visitor_id)
+    current_id = str(before.get("orgIndexCode") or "").strip()
+    if current_id == group_id:
+        return False
+    write_error = None
+    try:
+        client.post(PERSON_UPDATE, {"personId": str(visitor_id), "orgIndexCode": group_id})
+    except HikError as exc:
+        write_error = exc
+    observed = _person_info(client, visitor_id)
+    if str(observed.get("orgIndexCode") or "").strip() != group_id:
+        raise EditorFieldError({"group": "O HikCentral não confirmou o grupo selecionado no Visitor Information."}) from write_error
+    return True
+
+
 def confirm_checkin_card(client, visitor_id, start, end, record_id, card):
     row = client.find_registration_record(visitor_id, start, end, record_id=record_id)
     if not row or str((row.get("visitorCardInfo") or {}).get("cardNumber") or "").strip() != card:
@@ -70,9 +115,9 @@ def confirm_checkin_card(client, visitor_id, start, end, record_id, card):
 def save_reserved_profile_card(client, visitor_id, first, last, card):
     """A reserva pode descartar cards; confirme a pulseira na ficha da pessoa."""
     _, names, cards, _, _ = read_profile(client, visitor_id)
-    if names != (first.strip(), last.strip()) or (cards and cards != (card,)):
+    if names != (first.strip(), last.strip()):
         raise EditorFieldError({"card": "Confira a identidade e a pulseira do cadastro já criado antes de continuar."})
-    if not cards:
+    if cards != (card,):
         update_profile(client, visitor_id, first, last, card=card)
 
 
@@ -144,7 +189,7 @@ def same_photo(left, right):
         return max(ImageStat.Stat(ImageChops.difference(a, b)).mean) <= 8
 
 
-def update_profile(client, visitor_id, first, last, *, card="", new_photo=b""):
+def update_profile(client, visitor_id, first, last, *, card="", new_photo=b"", group=""):
     visitor_id, first, last, card = (str(value or "").strip()
                                      for value in (visitor_id, first, last, card))
     errors = {}
@@ -167,9 +212,7 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b""):
     update = {}
     if (first, last) != old_names:
         update.update(personGivenName=first, personFamilyName=last)
-    if card and card not in old_cards:
-        if len(old_cards) > 1:
-            raise EditorFieldError({"card": "O perfil tem mais de uma pulseira. Selecione a substituição no HikCentral."})
+    if card and old_cards != (card,):
         update["cards"] = [{"cardNo": card}]
     if update:
         write_error = None
@@ -192,6 +235,13 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b""):
             failure = EditorFieldError(mismatches)
             failure.profile_saved = list(changed)
             raise failure from write_error
+    if group:
+        try:
+            if set_visitor_group(client, visitor_id, group):
+                changed.append("grupo")
+        except Exception as exc:
+            exc.profile_saved = [*changed, *getattr(exc, "profile_saved", [])]
+            raise
     if new_photo:
         try:
             previous = fetch_visitor_photo(client, visitor_id, details=details)

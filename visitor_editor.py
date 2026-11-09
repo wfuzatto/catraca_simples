@@ -635,7 +635,8 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
                 verify_visitor_access_plan(selected, doors, requested)
             changed = update_profile(
                 client, visitor_id, first_value, last_value,
-                card="" if has_checkin else card_value, new_photo=new_photo)
+                card=card_value, new_photo=new_photo,
+                group="" if group_change_requested or selected_group == "Manter grupo atual" else selected_group)
             try:
                 if group_change_requested:
                     _save_visitor_group(

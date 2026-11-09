@@ -1,6 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.73` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.74` (prévia técnica para testes).
+
+Na Preview 74, o cadastro grava e confere a pulseira no Visitor Information mesmo quando a reserva já criou um cartão virtual. O grupo é resolvido pelo `orgIndexCode` da pessoa e restaurado após edições de reserva, que podem redefini-lo para `Visitors`.
 
 Na Preview 73, **Cadastrado em** mostra o horário do pedido para reservas sem check-in quando o HikCentral devolve o fluxo de aprovação. O editor oferece **Manter grupo atual** quando as consultas não identificam um único grupo. O Remark é confirmado na ficha do visitante, e a pulseira é conferida no perfil antes do check-in e no registro de visitante após o check-in.
 

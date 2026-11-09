@@ -1621,7 +1621,7 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch, check
         assert args[1:3] == ("715", "Visitante")
         assert "remark" not in kwargs
         if checked_in:
-            assert kwargs["card"] == ""
+            assert kwargs["card"] == "123456"
             assert checkins == [("91", {"card": "123456", "remark": "Apto 19", "photo": b""})]
             assert not remarks
         else:

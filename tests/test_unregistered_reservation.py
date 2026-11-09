@@ -47,8 +47,17 @@ class ReservationServer:
             "visitorId": VISITOR, "visitorGroupName": GROUP, "companyName": "Vale",
             "visitorGivenName": "Outro nome de perfil", "visitorFamilyName": "Teste",
         }
+        self.profile_group_id = "3"
+
+    def visitor_group_catalog(self):
+        return [{"id": "1", "name": "Visitors"}, {"id": "3", "name": GROUP}]
 
     def post(self, path, payload):
+        if path == "/artemis/api/resource/v1/person/personId/personInfo":
+            return {"data": {"personId": VISITOR, "orgIndexCode": self.profile_group_id}}
+        if path == "/artemis/api/resource/v1/person/single/update":
+            self.profile_group_id = str(payload["orgIndexCode"])
+            return {"code": "0"}
         if path == APPOINTMENTS_PATH:
             assert payload["appointCode"] == CODE
             return {"data": {"list": [deepcopy(self.booking)], "total": 1}}
@@ -65,6 +74,7 @@ class ReservationServer:
         }
         if not self.defer_readback:
             self.booking = self.update
+            self.profile_group_id = "1"  # HCP resets the person group on appointment updates.
         if self.reply_error:
             raise HikError("A resposta do teste foi perdida.")
         return {"data": {"appointRecordId": NEW_APPOINTMENT}}
@@ -107,6 +117,7 @@ def test_updates_verified_reservation_before_checkin_and_accepts_reissued_id(lab
         "entry_at": NEW_START, "exit_at": NEW_END,
     }
     assert server.booking["appointStatus"] == 0
+    assert server.profile_group_id == "3"
     assert not journal.exists()
 
 
@@ -119,7 +130,7 @@ def test_updates_remark_on_same_dates(lab):
     assert len(server.writes) == 1
 
 
-def test_keeps_verified_access_level_when_server_omits_group(lab):
+def test_restores_group_from_verified_access_level_when_server_omits_group(lab):
     server, record, journal = lab
     server.booking["visitorInfo"].pop("visitorGroupName")
     server.profile.pop("visitorGroupName")
@@ -129,9 +140,25 @@ def test_keeps_verified_access_level_when_server_omits_group(lab):
         server, record, NEW_START, NEW_END, "321-A", [LEVEL], journal=journal)
 
     body, = server.writes
-    assert "visitorGroupName" not in body["visitorInfoList"][0]["VisitorInfo"]
+    assert body["visitorInfoList"][0]["VisitorInfo"]["visitorGroupName"] == GROUP
     assert body["accessInfo"] == server.access_info([LEVEL])
     assert result["confirmed_visitor_id"] == VISITOR
+    assert server.profile_group_id == "3"
+
+
+def test_repairs_known_visitors_fallback_before_editing_dates(lab):
+    server, record, journal = lab
+    server.booking["visitorInfo"]["visitorGroupName"] = "Visitors"
+    server.profile["visitorGroupName"] = "Visitors"
+    server.profile_group_id = "1"
+
+    result = reschedule_unregistered_reservation(
+        server, record, NEW_START, NEW_END, "321-A", [LEVEL], journal=journal)
+
+    sent = server.writes[0]["visitorInfoList"][0]["VisitorInfo"]
+    assert sent["visitorGroupName"] == GROUP
+    assert result["confirmed_appointment_id"] == NEW_APPOINTMENT
+    assert server.profile_group_id == "3"
 
 
 def test_preserves_unmapped_visitor_level_when_reservation_confirms_exact_id_and_name(lab):

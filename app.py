@@ -767,14 +767,17 @@ class ValeApp(tk.Tk):
                                            "checkin_state": "check-in efetuado"})
                     except Exception:
                         pass
+                from visitor_profile import confirm_checkin_card, update_profile
+                card = obj.card_number.strip() if expect_card else ""
+                # Appointment registration can create a virtual card and leave
+                # the person in the default Visitors group. Save and verify the
+                # operator's actual profile fields after the appointment/check-in.
+                update_profile(client, visitor_id, obj.first_name, obj.last_name,
+                               card=card, group=group)
                 if expect_card:
-                    from visitor_profile import confirm_checkin_card, save_reserved_profile_card
-                    card = obj.card_number.strip()
                     if checkin_requested:
                         confirm_checkin_card(client, visitor_id, payload["visitStartTime"],
                                              payload["visitEndTime"], registration_record_id, card)
-                    else:
-                        save_reserved_profile_card(client, visitor_id, obj.first_name, obj.last_name, card)
                     mark_card_confirmed(visitor_id)
                 for level_id in access_ids:
                     client.assign_access(visitor_id, level_id)
@@ -1489,6 +1492,12 @@ class ValeApp(tk.Tk):
                             profile.get("visitorGivenName") or record.get("first") or "")
                     except Exception:
                         pass
+                if not profile_group and not str(record.get("group") or "").strip():
+                    try:
+                        from visitor_profile import read_visitor_group
+                        record["group"] = read_visitor_group(client, record["visitor_id"])
+                    except Exception:
+                        pass  # Keep the selector editable if the profile group is unavailable.
             try:
                 groups = selectable_visitor_groups(client.visitor_groups())
             except Exception as exc:

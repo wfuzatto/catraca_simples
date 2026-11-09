@@ -461,6 +461,11 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
         raise HikError("A reserva atualizada não apareceu na conferência OpenAPI.")
     _confirm_original_period_moved(client, plan)
     period = _confirm_updated_booking(client, updated, start, end, [level])
+    # The appointment endpoint may reset PersonInfo.orgIndexCode to Visitors
+    # even when its reservation response omits visitorGroupName. Restore the
+    # selected group through the person API and verify the readback.
+    from visitor_profile import set_visitor_group
+    set_visitor_group(client, vid, group)
     active = client.find_registration_record(vid, start, end, active_only=True)
     if plan["stage"] in {"updated", "checkin_skipped"} and active:
         save("checked_in", new_checkin=_id(active.get("recordId")), automatic_checkin=True)

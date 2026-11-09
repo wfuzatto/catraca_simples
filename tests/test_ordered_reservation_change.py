@@ -49,6 +49,7 @@ def ordered_lab(monkeypatch, tmp_path):
     update_reply_timeout = False
     keep_old_booking = False
     hide_unfiltered_bookings = False
+    profile_group_id = "3"
     writes = []
 
     class Client:
@@ -59,8 +60,17 @@ def ordered_lab(monkeypatch, tmp_path):
             from hikcentral import HikCentral
             return HikCentral.access_info(levels)
 
+        @staticmethod
+        def visitor_group_catalog():
+            return [{"id": "3", "name": "Hóspedes Vale"}]
+
         def post(self, path, payload):
-            nonlocal update_commits, update_reply_timeout, keep_old_booking
+            nonlocal update_commits, update_reply_timeout, keep_old_booking, profile_group_id
+            if path == "/artemis/api/resource/v1/person/personId/personInfo":
+                return {"data": {"personId": "1865", "orgIndexCode": profile_group_id}}
+            if path == "/artemis/api/resource/v1/person/single/update":
+                profile_group_id = str(payload["orgIndexCode"])
+                return {"code": "0"}
             if path == APPOINTMENTS_PATH:
                 code = str(payload.get("appointCode") or "")
                 rows = ([deepcopy(bookings[code])] if code in bookings else []) if code else list(
@@ -84,6 +94,7 @@ def ordered_lab(monkeypatch, tmp_path):
                 visitor_info.update(payload["visitorInfoList"][0]["VisitorInfo"])
                 if update_commits:
                     bookings["2502"] = row
+                    profile_group_id = "1"  # Simulate the HCP appointment update regression.
                     if keep_old_booking:
                         bookings["old-copy"] = deepcopy(original)
                     if auto_checkin:
@@ -173,6 +184,7 @@ def ordered_lab(monkeypatch, tmp_path):
 
     return SimpleNamespace(client=client, run=run, events=events, bookings=bookings,
                            history=history, old_visit=old_visit, active_rows=active_rows,
+                           get_profile_group=lambda: profile_group_id,
                            writes=writes, journal=journal_path, set_auto=_set_auto,
                            set_commit=_set_commit, set_timeout=_set_timeout,
                            set_keep_old=_set_keep_old, set_hide_unfiltered=_set_hide_unfiltered)
@@ -196,6 +208,7 @@ def test_date_change_checks_out_then_updates_original_reservation_through_openap
 
 def test_reservation_update_contains_complete_profile_but_never_card_or_face(ordered_lab):
     ordered_lab.run()
+    assert ordered_lab.get_profile_group() == "3"
     body, = ordered_lab.writes
     sent = body["visitorInfoList"][0]["VisitorInfo"]
     assert body["appointRecordId"] == "1000"

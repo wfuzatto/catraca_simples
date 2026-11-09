@@ -188,6 +188,8 @@ def update_existing_visit(client, record: dict, payload: dict,
         _write_json_atomic(journal, {**summary, "status": "update_acknowledged", "returned_record_id": returned_record_id})
 
     actual_checkin = _readback(client, vid, payload, visitor, group, returned_record_id)
+    from visitor_profile import set_visitor_group
+    set_visitor_group(client, vid, group)
     # A successful check-in update does not prove that the original booking
     # changed. Read its independent period and report any real divergence.
     reservation_period = reservation_period_report(

@@ -111,6 +111,8 @@ def use_mocks(monkeypatch):
     written, status = [], []
     monkeypatch.setattr(tx, "save_registration", lambda row: written.append(row))
     monkeypatch.setattr(tx, "set_history_status", lambda *a, **kw: status.append((a, kw)))
+    import visitor_profile
+    monkeypatch.setattr(visitor_profile, "set_visitor_group", lambda *_args, **_kwargs: False)
     import remote_history
 
     def details(api, visitor_id):
