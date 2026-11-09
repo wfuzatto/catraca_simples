@@ -817,6 +817,10 @@ class ValeApp(tk.Tk):
                     client.assign_access(visitor_id, level_id)
                     mark_assigned(level_id)
                 client.apply(visitor_id, door_ids)
+                # Check-in/card writes can reset the original Hóspedes/Day use
+                # orgIndexCode. Confirm group after every remote write.
+                from visitor_profile import confirm_visitor_group_after_edit
+                confirm_visitor_group_after_edit(client, visitor_id, group)
                 save_last_delivery(visitor_id, door_ids,
                                    expect_face=expect_face, expect_card=expect_card,
                                    entry_at=payload["visitStartTime"],
@@ -2070,6 +2074,10 @@ class ValeApp(tk.Tk):
                     client.assign_access(pending["visitor_id"], level)
                     mark_assigned(level)
             client.apply(pending["visitor_id"], pending["door_ids"])
+            if context:
+                from visitor_profile import confirm_visitor_group_after_edit
+                confirm_visitor_group_after_edit(
+                    client, pending["visitor_id"], context["group"])
             expect_face, expect_card = pending.get("expect_face", True), pending.get("expect_card", True)
             save_last_delivery(pending["visitor_id"], pending["door_ids"],
                                expect_face=expect_face, expect_card=expect_card,
