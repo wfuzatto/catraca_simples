@@ -68,6 +68,9 @@ def test_active_edit_verifies_checkin_card_and_visitor_remark(monkeypatch, saved
         {"VisitorInfo": {"visitorId": "2119", "companyName": "Vale"}},
         ("Nome", "Teste"), (), state["remark"], True))
     monkeypatch.setattr(profiles, "read_visitor_remark", lambda *_: state["remark"])
+    # Card tests mock the profile API; group restoration is covered by
+    # tests/test_visitor_group_preservation.py.
+    monkeypatch.setattr(profiles, "set_visitor_group", lambda *a: False)
     monkeypatch.setattr(profiles, "resolve_remote_edit_record", lambda *_: (
         {"access_level_ids": ["3"], "access_names": ["VISITANTE_VALE"]}, {}))
     if saved_card:

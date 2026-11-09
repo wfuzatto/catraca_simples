@@ -187,9 +187,12 @@ def update_existing_visit(client, record: dict, payload: dict,
                 + observed["old"] + "; nas datas novas = " + observed["requested"] + ". Nenhum segundo envio foi realizado.") from exc
         _write_json_atomic(journal, {**summary, "status": "update_acknowledged", "returned_record_id": returned_record_id})
 
-    actual_checkin = _readback(client, vid, payload, visitor, group, returned_record_id)
+    # HikCentral may reset Person.orgIndexCode on check-in update. Restore
+    # the approved group BEFORE checking the result; the old order failed
+    # the readback first and left the visitor in default Visitors.
     from visitor_profile import set_visitor_group
     set_visitor_group(client, vid, group)
+    actual_checkin = _readback(client, vid, payload, visitor, group, returned_record_id)
     # A successful check-in update does not prove that the original booking
     # changed. Read its independent period and report any real divergence.
     reservation_period = reservation_period_report(
@@ -229,6 +232,8 @@ def update_existing_visit(client, record: dict, payload: dict,
         "confirmed_checkin_id": str(actual_checkin)})
 
     client.apply(vid, doors)
+    # No later write is allowed to revert the selected visitor group.
+    set_visitor_group(client, vid, group)
     set_history_status(vid, state="submitted", checkin_state="check-in efetuado")
     journal.unlink(missing_ok=True)
     return {

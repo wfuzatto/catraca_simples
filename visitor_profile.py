@@ -106,6 +106,36 @@ def set_visitor_group(client, visitor_id, group):
     return True
 
 
+
+def confirm_visitor_group_after_edit(client, visitor_id, group):
+    """Last-write-wins correction: Person and Visitor must retain the selected group.
+
+    HikCentral can silently reset orgIndexCode to Visitors on person, NFC,
+    appointment and check-in updates. Restore only the explicitly validated
+    group, then read BOTH remote representations. A missing Visitor group is
+    not inferred; an explicitly contradictory one blocks false success.
+    """
+    expected = str(group or "").strip()
+    if not expected or normalize(expected) == normalize("Visitors"):
+        raise EditorFieldError({"group": "Selecione um grupo Visitor autorizado antes de concluir a edição."})
+    set_visitor_group(client, str(visitor_id), expected)
+    actual = read_visitor_group(client, str(visitor_id))
+    if normalize(actual) != normalize(expected):
+        raise EditorFieldError({"group": (
+            f"O HikCentral não manteve o grupo {expected} na ficha Person "
+            f"(atual: {actual or 'não informado'}). Cadastro ainda pendente.")})
+    details = visitor_details(client, str(visitor_id))
+    info = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    if not isinstance(info, dict) or str(info.get("visitorId") or "") != str(visitor_id):
+        raise EditorFieldError({"group": "Visitor Information não confirmou a identidade do mesmo visitante."})
+    visitor_group = str(info.get("visitorGroupName") or info.get("visitorGroup") or "").strip()
+    if visitor_group and normalize(visitor_group) != normalize(expected):
+        raise EditorFieldError({"group": (
+            f"A ficha Person mostra {expected}, mas Visitor Information retornou "
+            f"{visitor_group}. O grupo NÃO foi confirmado; revise no HikCentral.")})
+    return expected
+
+
 def confirm_checkin_card(client, visitor_id, start, end, record_id, card):
     row = client.find_registration_record(visitor_id, start, end, record_id=record_id)
     if not row or str((row.get("visitorCardInfo") or {}).get("cardNumber") or "").strip() != card:
@@ -119,6 +149,33 @@ def save_reserved_profile_card(client, visitor_id, first, last, card):
         raise EditorFieldError({"card": "Confira a identidade e a pulseira do cadastro já criado antes de continuar."})
     if cards != (card,):
         update_profile(client, visitor_id, first, last, card=card)
+
+
+def original_checkin_group(row, record):
+    """Recover a known HCP Visitors fallback only from the check-in's access level."""
+    from core import VALE_VISITOR_LEVELS
+    from remote_history import parse_access_levels
+
+    actual = str((row.get("visitorBaseInfo") or {}).get("visitorGroup") or "").strip()
+    if normalize(actual) != normalize("Visitors"):
+        return actual
+    levels = parse_access_levels(row)
+    matched = [
+        group for group, mapped in VALE_VISITOR_LEVELS.items()
+        if len(levels) == 1 and normalize(str(levels[0].get("name") or "")) == normalize(mapped)
+    ]
+    if len(matched) != 1:
+        raise EditorFieldError({"group": (
+            "O check-in voltou para Visitors e não apresentou um nível Visitor "
+            "único para recuperar o grupo. Recarregue o histórico.")})
+    expected = matched[0]
+    previous = str(record.get("group") or "").strip()
+    if previous and normalize(previous) not in (
+            normalize(expected), normalize("Visitors")):
+        raise EditorFieldError({"group": (
+            "O nível atual do check-in difere do grupo original. "
+            "Confira o cadastro antes de editar.")})
+    return expected
 
 
 def update_active_visitor_fields(client, record, *, card=None, remark=None, photo=b""):
@@ -145,7 +202,7 @@ def update_active_visitor_fields(client, record, *, card=None, remark=None, phot
     info = details.get("VisitorInfo") or details.get("visitorInfo") or details
     if info.get("faces") and not photo:
         raise EditorFieldError({"photo": "O HikCentral não devolveu a foto atual. Recarregue o perfil para preservar a foto na edição do check-in."})
-    group = str((row.get("visitorBaseInfo") or {}).get("visitorGroup") or "").strip()
+    group = original_checkin_group(row, record)
     verified, _ = resolve_remote_edit_record(client, {**record, "group": group})
     if (verified.get("_requires_access_confirmation") or
             len(verified.get("access_level_ids", [])) != 1 or len(verified.get("access_names", [])) != 1):
@@ -160,6 +217,12 @@ def update_active_visitor_fields(client, record, *, card=None, remark=None, phot
         returned_id = client.update_registered_visitor(checkin_id, visitor_id, payload, levels)
     except HikError as exc:
         failure = exc
+    # Do not wait for the check-in readback to restore orgIndexCode: if HCP
+    # returns Visitors, the readback fails and the old code left the group
+    # silently changed. Restore the original approved group first.
+    from core import VALE_VISITOR_LEVELS
+    if group in VALE_VISITOR_LEVELS:
+        set_visitor_group(client, visitor_id, group)
     observed = client.find_registration_record(visitor_id, start, end, active_only=True,
                                                record_id=returned_id)
     mismatches = {}
@@ -252,13 +315,6 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b"", g
             failure = EditorFieldError(mismatches)
             failure.profile_saved = list(changed)
             raise failure from write_error
-    if group:
-        try:
-            if set_visitor_group(client, visitor_id, group):
-                changed.append("grupo")
-        except Exception as exc:
-            exc.profile_saved = [*changed, *getattr(exc, "profile_saved", [])]
-            raise
     if new_photo:
         try:
             previous = fetch_visitor_photo(client, visitor_id, details=details)
@@ -281,4 +337,13 @@ def update_profile(client, visitor_id, first, last, *, card="", new_photo=b"", g
                 prefix = "Dados já conferidos: " + ", ".join(changed) + ". " if changed else ""
                 raise EditorFieldError({"photo": prefix + "A foto não foi confirmada na consulta ao perfil. " + error})
             changed.append("foto")
+    # Persist group only AFTER all other profile/face writes; HikCentral's
+    # partial Person updates can silently fall back to its default Visitors.
+    if group:
+        try:
+            if set_visitor_group(client, visitor_id, group):
+                changed.append("grupo")
+        except Exception as exc:
+            exc.profile_saved = [*changed, *getattr(exc, "profile_saved", [])]
+            raise
     return changed

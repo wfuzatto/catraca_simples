@@ -491,6 +491,8 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
         if plan["stage"] == "checkin_inflight":
             save("checked_in", new_checkin=rid)
     if rid:
+        # Automatic check-in can reset the person group even after booking fix.
+        set_visitor_group(client, vid, group)
         _confirmed_edit(client, vid, payload, visitor, group, rid)
     if visitor.photo_jpeg and not same_photo(visitor.photo_jpeg, fetch_visitor_photo(client, vid)):
         raise EditorFieldError({"photo": "A foto no perfil ainda difere da foto informada."})
@@ -505,6 +507,8 @@ def _update_linked_reservation(client, record, payload, selected, doors, visitor
         save("applied")
     if plan["stage"] != "applied":
         raise HikError("Reserva atualizada pela API; o HikCentral ainda não confirmou a solicitação de acesso.")
+    # Final group repair after every booking, check-in and access write.
+    set_visitor_group(client, vid, group)
 
     code = _id(updated.get("appointCode"))
     history = {"visitor_id": vid, "appointment_id": plan["new_id"], "registration_record_id": rid,
