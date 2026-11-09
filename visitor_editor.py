@@ -290,7 +290,7 @@ def open_registered_reservation_editor(app, record, *, reservation_info=None,
             if (current_id != booking_id or observed_period != expected_period):
                 raise EditorFieldError({
                     "appointment": "A reserva mudou desde que a tela foi aberta. Busque novamente antes de editar."})
-            profile_details, names, live_cards, _person_remark, _remark_present = read_profile(
+            profile_details, names, live_cards, person_remark, _remark_present = read_profile(
                 client, str(record["visitor_id"]), details=details)
             profile = profile_details.get("VisitorInfo") or profile_details.get("visitorInfo") or profile_details
             if not isinstance(profile, dict):
@@ -315,7 +315,13 @@ def open_registered_reservation_editor(app, record, *, reservation_info=None,
                 raise EditorFieldError({"photo": "A foto necessária não foi retornada pela API. "
                                          "Abra Visitor Information pelo nome e selecione uma foto antes de alterar as datas. "
                                          + photo_issue})
-            reservation_value = str((current_booking.get("visitorInfo") or {}).get("remark") or "")
+            reservation_value = str((current_booking.get("visitorInfo") or {}).get("remark") or "").strip()
+            if not reservation_value:
+                reservation_value = str(person_remark or "").strip()
+            if not reservation_value:
+                raise EditorFieldError({
+                    "reservation": "A API não retornou o Remark obrigatório da reserva nem do perfil. "
+                                  "Abra Visitor Information pelo nome, informe Apartamento/Remark e tente novamente."})
             visitor = Visitor(names[0], names[1], current_group, photo, card, start, end,
                               reservation_value)
             payload = registration_payload(visitor, 0, editing=True)

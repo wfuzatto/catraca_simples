@@ -206,6 +206,25 @@ def test_reservation_update_contains_complete_profile_but_never_card_or_face(ord
     assert "cards" not in sent and "faces" not in sent
 
 
+def test_missing_reservation_remark_is_rejected_before_checkout(ordered_lab):
+    visitor = Visitor("Teste", "Sobrenome", "Hóspedes Vale", b"", "12345678",
+                      datetime.fromisoformat(NEW_START), datetime.fromisoformat(NEW_END), "")
+    payload = registration_payload(visitor, editing=True)
+    record = {"visitor_id": "1865", "appointment_id": "1000",
+              "registration_record_id": "check-old", "entry_at": OLD_START,
+              "exit_at": OLD_END, "group": "Hóspedes Vale", "checkin_state": "check-in efetuado",
+              "expect_card": True}
+
+    from edit_errors import EditorFieldError
+    with pytest.raises(EditorFieldError, match="Remark obrigatório"):
+        ordered.change_reservation_dates(
+            ordered_lab.client, record, payload, [dict(LEVEL)], ["57", "64", "89"],
+            visitor, "Hóspedes Vale", ["VISITANTE_VALE"], journal=ordered_lab.journal)
+
+    assert ordered_lab.events == []
+    assert ordered_lab.writes == []
+
+
 def test_does_not_create_a_second_visitor_or_call_browser(ordered_lab):
     ordered_lab.run()
     assert "create" not in ordered_lab.events
