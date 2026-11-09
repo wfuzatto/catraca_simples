@@ -691,13 +691,32 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
                 elif has_checkin and (card_value or requested_remark is not None):
                     changed.extend(update_active_visitor_fields(
                         client, record, card=card_value or None, remark=requested_remark, photo=photo))
+                elif card_value:
+                    # A ficha Person confirma cards[] mas o contador do
+                    # Credential Management do Visitor pode continuar zero.
+                    # Editar a reserva vinculada com VisitorInfo.cards[].
+                    from visitor_card_sync import update_reserved_visitor_card
+                    saved = update_reserved_visitor_card(
+                        client, record, card_value, selected_group,
+                        remark=requested_remark)
+                    if saved:
+                        changed.append("pulseira na reserva Visitor")
+                        if requested_remark is not None:
+                            changed.append("Remark")
                 elif requested_remark is not None:
                     if update_pending_visitor_remark(client, record, requested_remark):
                         changed.append("Remark")
                 if card_value:
                     ensure_issued_card(client, visitor_id, card_value)
-                    if "pulseira" not in changed:
-                        changed.append("pulseira NFC confirmada")
+                    # Person.cards is NOT evidence of Visitor Credential
+                    # Management; only report full confirmation after both
+                    # original reservation/visitor or registered check-in.
+                    if has_checkin:
+                        from visitor_card_sync import verify_checkedin_visitor_card
+                        verify_checkedin_visitor_card(client, record, card_value)
+                    if "pulseira" not in changed and not any(
+                            "pulseira" in item for item in changed):
+                        changed.append("pulseira NFC conferida via API")
                 # Always last, AFTER updates to card/check-in/remark/booking.
                 # Person writes can revert orgIndexCode to default Visitors.
                 confirm_visitor_group_after_edit(client, visitor_id, selected_group)

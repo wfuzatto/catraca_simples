@@ -64,7 +64,7 @@ def _confirm_reserved(client, row, vid, level, group, *, allow_registered=False,
         raise EditorFieldError({"appointment": "O HikCentral já tem um check-in nesse período. Abra a visita no histórico."})
 
 
-def _request(client, original, vid, start, end, remark, group, level, *, expected_profile_group=None):
+def _request(client, original, vid, start, end, remark, group, level, *, expected_profile_group=None, issued_card=None):
     details = visitor_details(client, vid)
     profile = details.get("VisitorInfo") or details.get("visitorInfo") or details
     if str(profile.get("visitorId") or "") != vid:
@@ -101,6 +101,14 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
     confirmed_group = actual_group
     if confirmed_group:
         info["visitorGroupName"] = confirmed_group
+    # Visitor Credential Management is a distinct module from Person.cards.
+    # Explicit card updates must also be sent in the existing VisitorInfo
+    # appointment; NEVER infer a card from Person ID or certificateNo.
+    if issued_card is not None:
+        import re as _re
+        if not _re.fullmatch(r"[A-Za-z0-9]{1,32}", str(issued_card)):
+            raise EditorFieldError({"card": "O número NFC deve conter 1 a 32 letras ou números."})
+        info["cards"] = [{"cardNo": str(issued_card)}]
     info.update(visitorId=vid, remark=remark, accessInfo={
         "electrostaticDetectionType": prior_access.get("electrostaticDetectionType", 0),
         "qrCodeValidNum": prior_access.get("qrCodeValidNum", 0),
