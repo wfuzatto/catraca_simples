@@ -23,6 +23,7 @@ from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_se
                   mark_assigned, mark_card_confirmed, mark_registered, clear_pending,
                   save_last_delivery, load_last_delivery)
 from devices import list_readers, read_uid, to_card_number
+from credential_management import ensure_issued_card
 from hikcentral import HikCentral, network_diagnostics, read_cert_sha256, normalize_pin
 from settings_auth import verify_settings_password
 import modern_ui
@@ -785,6 +786,10 @@ class ValeApp(tk.Tk):
                 # dados, sem pedir confirmação manual durante o atendimento.
                 update_profile(client, visitor_id, obj.first_name, obj.last_name,
                                card=card, group=group, new_photo=obj.photo_jpeg)
+                # A presença do número no payload ou editor NÃO comprova
+                # credencial física emitida. Conferir Person + Visitor Info.
+                if expect_card:
+                    ensure_issued_card(client, visitor_id, card)
                 if not checkin_requested and expect_card:
                     mark_card_confirmed(visitor_id)
                 if checkin_requested:
@@ -806,6 +811,7 @@ class ValeApp(tk.Tk):
                         }, {
                             "card": card, "photo_bytes": obj.photo_jpeg,
                         })
+                        ensure_issued_card(client, visitor_id, card)
                         mark_card_confirmed(visitor_id)
                 for level_id in access_ids:
                     client.assign_access(visitor_id, level_id)
