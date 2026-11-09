@@ -136,6 +136,9 @@ def restore_pending_credentials(client, pending: dict, context: dict, *, verify_
     update_profile(client, visitor_id, context["first"], context["last"],
                    card=card, group=context["group"],
                    new_photo=context.get("photo_bytes", b""))
+    if card:
+        from credential_management import ensure_issued_card
+        ensure_issued_card(client, visitor_id, card)
     if card and pending.get("checkin_requested", True) and verify_checkin_card:
         if not pending.get("registered") or not pending.get("registration_record_id"):
             raise HikError("Ainda não existe check-in confirmado para conferir a pulseira.")
