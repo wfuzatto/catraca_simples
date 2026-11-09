@@ -3,15 +3,15 @@ from hashlib import sha256
 import json
 import re
 
-from core import _write_json_atomic
+from core import _write_json_atomic, VALE_VISITOR_LEVELS
 from edit_errors import EditorFieldError
 from edit_journal import select_edit_journal
-from hikcentral import HikError
+from hikcentral import HikError, normalize
 from ordered_reservation_change import _lock_transaction, _write_once
-from remote_history import compare_reservation_period, visitor_details
+from remote_history import compare_reservation_period, visitor_details, parse_access_levels
 from reservation_replacement import _booking_by_code
 from unregistered_reservation import UPDATE_BOOKING, _period, _request
-from visitor_profile import validate_visitor_remark
+from visitor_profile import validate_visitor_remark, set_visitor_group
 
 
 def _visitor_info(client, visitor_id):
@@ -20,6 +20,32 @@ def _visitor_info(client, visitor_id):
     if not isinstance(info, dict) or str(info.get("visitorId") or "") != visitor_id:
         raise EditorFieldError({"remark": "O HikCentral não confirmou o perfil para alterar o Remark."})
     return info
+
+
+def _original_group_from_level(booking, record):
+    """Check original Visitor level before sending a group-changing appointment update.
+
+    Only a unique, remotely returned Visitor level can recover a missing or
+    erroneous Visitors default. No inference from names, apartment or photo.
+    """
+    levels = parse_access_levels(booking)
+    if not levels:
+        return ""  # Legacy reservation without a verifiable level: do not guess.
+    if len(levels) != 1:
+        raise EditorFieldError({"group": "A reserva tem múltiplos níveis; não alterar o grupo automaticamente."})
+    matches = [
+        group for group, level in VALE_VISITOR_LEVELS.items()
+        if normalize(level) == normalize(str(levels[0].get("name") or ""))
+    ]
+    if len(matches) != 1:
+        return ""  # Unmapped level: preserve remote fields, never authorize a new group.
+    expected = matches[0]
+    record_group = str(record.get("group") or "").strip()
+    if record_group and normalize(record_group) not in (
+            normalize(expected), normalize("Visitors")):
+        raise EditorFieldError({"group": (
+            "Grupo local diverge do nível Visitor original da reserva; atualize a consulta.")})
+    return expected
 
 
 def update_pending_visitor_remark(client, record, remark, *, journal=None):
@@ -55,6 +81,7 @@ def update_pending_visitor_remark(client, record, remark, *, journal=None):
 
     with _lock_transaction(journal):
         booking, period = checked_reservation()
+        expected_group = _original_group_from_level(booking, record)
         profile = _visitor_info(client, vid)
         if journal.exists():
             try:
@@ -64,14 +91,18 @@ def update_pending_visitor_remark(client, record, remark, *, journal=None):
             if not isinstance(pending, dict) or any(pending.get(key) != value for key, value in scope.items()):
                 raise EditorFieldError({"remark": "Há uma edição pendente para esta reserva. Confira o último envio."})
             if matches(booking, profile) and booking.get("accessInfo") == pending.get("accessInfo"):
+                if expected_group:
+                    set_visitor_group(client, vid, expected_group)
                 journal.unlink()
                 return period
             raise EditorFieldError({"remark": "O HikCentral ainda não confirmou o envio anterior do Remark."})
         if period["appointment_id"] != aid:
             raise EditorFieldError({"remark": "A reserva vinculada mudou no HikCentral. Busque novamente."})
         if matches(booking, profile):
+            if expected_group:
+                set_visitor_group(client, vid, expected_group)
             return None
-        request = _request(client, booking, vid, start, end, remark, "", None)
+        request = _request(client, booking, vid, start, end, remark, expected_group, None)
         # A simultaneous name edit updates Person Information first. The old
         # booking may still carry the previous name, so keep the verified profile's names.
         visitor = request["visitorInfoList"][0]["VisitorInfo"]
@@ -84,5 +115,7 @@ def update_pending_visitor_remark(client, record, remark, *, journal=None):
         if (not matches(updated, _visitor_info(client, vid)) or
                 updated.get("accessInfo") != booking.get("accessInfo")):
             raise EditorFieldError({"remark": "O HikCentral não confirmou o Remark no perfil e na reserva vinculada."}) from write_error
+        if expected_group:
+            set_visitor_group(client, vid, expected_group)
         journal.unlink()
         return updated_period
