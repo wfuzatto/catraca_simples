@@ -11,7 +11,7 @@ import pytest
 from edit_errors import EditorFieldError
 from visitor_editor import choose_editor_group
 from visitor_profile import (PERSON_INFO, PERSON_UPDATE, update_profile,
-                             confirm_visitor_group_after_edit)
+                             confirm_visitor_group_after_edit, original_checkin_group)
 from remote_history import DETAIL_PATH
 from visitor_remark import _original_group_from_level
 from unregistered_reservation import _request
@@ -137,3 +137,22 @@ def test_remark_access_conflict_blocks_write():
         "id": "23", "baseInfo": {"name": "VISITANTE_VALE"}}}]}}
     with pytest.raises(EditorFieldError, match="diverge"):
         _original_group_from_level(booking, {"group": "Hóspedes Serra"})
+
+
+
+def test_active_checkin_never_builds_a_new_visitors_payload_after_fallback():
+    row = {
+        "visitorBaseInfo": {"visitorGroup": "Visitors"},
+        "accessInfo": {"accessLevelList": [{"accessLevel": {
+            "id": "23", "baseInfo": {"name": "VISITANTE_VALE"}}}]}
+    }
+    assert original_checkin_group(row, {"group": "Hóspedes Vale"}) == "Hóspedes Vale"
+    assert original_checkin_group(row, {"group": "Visitors"}) == "Hóspedes Vale"
+    assert original_checkin_group({
+        **row, "visitorBaseInfo": {"visitorGroup": "Hóspedes Serra"}},
+        {"group": "Hóspedes Serra"}) == "Hóspedes Serra"
+    with pytest.raises(EditorFieldError, match="difere"):
+        original_checkin_group(row, {"group": "Hóspedes Serra"})
+    with pytest.raises(EditorFieldError, match="nível Visitor"):
+        original_checkin_group({"visitorBaseInfo": {"visitorGroup": "Visitors"}},
+                               {"group": "Hóspedes Vale"})
