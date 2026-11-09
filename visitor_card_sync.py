@@ -170,3 +170,33 @@ def update_reserved_visitor_card(client, record, card, expected_group, *, remark
         set_visitor_group(client, vid, group)
         journal.unlink()
         return True
+
+
+def verify_checkedin_visitor_card(client, record, card):
+    """Proof of a registered Visitor card: check-in AND VisitorInfo both agree.
+
+    Person.cards alone, or an old local card_number, are never proof of
+    Credential Management issuance. This is read-only.
+    """
+    vid = str(record.get("visitor_id") or "").strip()
+    rid = str(record.get("registration_record_id") or "").strip()
+    start = str(record.get("entry_at") or "")
+    end = str(record.get("exit_at") or "")
+    if not (vid and rid and start and end):
+        raise EditorFieldError({"card": "Histórico sem Visitor ID ou check-in para conferir a credencial."})
+    row = client.find_registration_record(
+        vid, start, end, active_only=True, record_id=rid)
+    if (not row or str(row.get("recordId") or "") != rid or
+            str((row.get("visitorBaseInfo") or {}).get("visitorId") or "") != vid):
+        raise EditorFieldError({"card": "Não foi possível confirmar o mesmo check-in para a pulseira."})
+    checkin = str((row.get("visitorCardInfo") or {}).get("cardNumber") or "").strip()
+    profile = visitor_details(client, vid)
+    info = profile.get("VisitorInfo") or profile.get("visitorInfo") or profile
+    if not isinstance(info, dict) or str(info.get("visitorId") or "") != vid:
+        raise EditorFieldError({"card": "Visitor Information não confirmou o mesmo visitante."})
+    card_values = _card_values(info)
+    if card_values != (str(card),) or checkin != str(card):
+        raise EditorFieldError({"card": (
+            "Person ou check-in pode mostrar a pulseira, mas a credencial Visitor "
+            "não foi confirmada em cards[] e no check-in. Confira Credential Management.")})
+    return True
