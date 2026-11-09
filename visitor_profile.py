@@ -151,6 +151,33 @@ def save_reserved_profile_card(client, visitor_id, first, last, card):
         update_profile(client, visitor_id, first, last, card=card)
 
 
+def original_checkin_group(row, record):
+    """Recover a known HCP Visitors fallback only from the check-in's access level."""
+    from core import VALE_VISITOR_LEVELS
+    from remote_history import parse_access_levels
+
+    actual = str((row.get("visitorBaseInfo") or {}).get("visitorGroup") or "").strip()
+    if normalize(actual) != normalize("Visitors"):
+        return actual
+    levels = parse_access_levels(row)
+    matched = [
+        group for group, mapped in VALE_VISITOR_LEVELS.items()
+        if len(levels) == 1 and normalize(str(levels[0].get("name") or "")) == normalize(mapped)
+    ]
+    if len(matched) != 1:
+        raise EditorFieldError({"group": (
+            "O check-in voltou para Visitors e não apresentou um nível Visitor "
+            "único para recuperar o grupo. Recarregue o histórico.")})
+    expected = matched[0]
+    previous = str(record.get("group") or "").strip()
+    if previous and normalize(previous) not in (
+            normalize(expected), normalize("Visitors")):
+        raise EditorFieldError({"group": (
+            "O nível atual do check-in difere do grupo original. "
+            "Confira o cadastro antes de editar.")})
+    return expected
+
+
 def update_active_visitor_fields(client, record, *, card=None, remark=None, photo=b""):
     """Grave credencial/Remark no check-in ativo, preservando período e nível."""
     visitor_id = str(record.get("visitor_id") or "")
@@ -175,7 +202,7 @@ def update_active_visitor_fields(client, record, *, card=None, remark=None, phot
     info = details.get("VisitorInfo") or details.get("visitorInfo") or details
     if info.get("faces") and not photo:
         raise EditorFieldError({"photo": "O HikCentral não devolveu a foto atual. Recarregue o perfil para preservar a foto na edição do check-in."})
-    group = str((row.get("visitorBaseInfo") or {}).get("visitorGroup") or "").strip()
+    group = original_checkin_group(row, record)
     verified, _ = resolve_remote_edit_record(client, {**record, "group": group})
     if (verified.get("_requires_access_confirmation") or
             len(verified.get("access_level_ids", [])) != 1 or len(verified.get("access_names", [])) != 1):
