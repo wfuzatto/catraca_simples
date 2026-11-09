@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.79"
+APP_VERSION = "1.0.0-preview.80"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -637,7 +637,8 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
                  registered: bool = True, expect_face: bool = True,
                  expect_card: bool = True, entry_at: str = "", exit_at: str = "",
                  access_names: list[str] | None = None,
-                 checkin_requested: bool = True, card_confirmed: bool | None = None) -> None:
+                 checkin_requested: bool = True, card_confirmed: bool | None = None,
+                 direct_checkin_nfc: bool = False) -> None:
     """Checkpoint mínimo após reserva; nunca armazena foto, cartão, segredo ou nome."""
     path = (base or app_dir()) / "pending.json"
     if not expect_face and not expect_card:
@@ -654,6 +655,7 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
         "expect_face": bool(expect_face), "expect_card": bool(expect_card),
         "registration_record_id": "", "registered": registered,
         "checkin_requested": bool(checkin_requested), "checkin_inflight": False,
+        "direct_checkin_nfc": bool(direct_checkin_nfc),
         "assigned": [],
         "entry_at": entry_at, "exit_at": exit_at
     }
