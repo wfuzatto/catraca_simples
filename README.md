@@ -1,12 +1,14 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.72` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.73` (prévia técnica para testes).
+
+Na Preview 73, **Cadastrado em** mostra o horário do pedido para reservas sem check-in quando o HikCentral devolve o fluxo de aprovação. O editor oferece **Manter grupo atual** quando as consultas não identificam um único grupo. O Remark é confirmado na ficha do visitante, e a pulseira é conferida no perfil antes do check-in e no registro de visitante após o check-in.
 
 Na Preview 70, os campos clicáveis abrem dois editores separados: clique nas datas para editar somente o período da reserva, tanto com ou sem check-in; clique no nome para editar Visitor Information (nome, sobrenome, grupo, Apartamento/Remark, foto e pulseira), sem datas. O grupo atual aparece selecionado e pode ser trocado para outro grupo compatível. Apartamento/Remark nesta tela vem do Remark do perfil; a edição das datas preserva o Remark próprio da reserva.
 
 Na Preview 71, check-ins e reservas sem check-in aparecem na mesma lista. A data **Cadastrado em** continua usando o registro real de check-in da API, com contingência local do mesmo registro; reservas sem check-in não têm esse horário. O botão de consulta da última entrega foi removido; a ação **Resolver pendência** só aparece quando há uma operação interrompida.
 
-Na Preview 72, o grupo exibido na edição é preservado quando vem da reserva vinculada, mesmo se o detalhe do perfil não repetir o grupo. O Remark do perfil é lido e confirmado em Person Information; o Remark da reserva continua separado. Em **Configurações**, **Check-in automático** controla se o aplicativo solicita check-in ao cadastrar ou ao mudar as datas; o padrão é **Não**. Uma edição de datas sem check-in não exige foto ou pulseira que a API não retorna, pois essas credenciais não são reenviadas na atualização da reserva.
+Em **Configurações**, **Check-in automático** controla se o aplicativo solicita check-in ao cadastrar ou ao mudar as datas. O padrão é **Não**. Uma edição de datas sem check-in não exige foto ou pulseira que a API não retorna, pois essas credenciais não são reenviadas na atualização da reserva.
 
 No **Histórico de check-ins**, as colunas **Início da reserva** e **Término da reserva** vêm diretamente da Visitor Reservation. Quando o HikCentral omite o ID da reserva no check-in, a aplicação procura um vínculo único pelo Visitor ID, grupo e período; se houver mais de uma possibilidade, não inventa as datas. O status e as passagens continuam vinculados ao check-in.
 
@@ -16,7 +18,7 @@ Na Preview 68, a edição de uma reserva sem check-in preserva o nível Visitor 
 
 Na Preview 66, a consulta também tenta resolver o vínculo ausente antes de deixar as datas em branco. O editor aceita a reserva única e sobreposta do mesmo visitante mesmo depois do check-out; se houver várias reservas possíveis, permite escolher pelo código e período.
 
-Em **Cadastros efetuados**, check-ins e reservas sem check-in aparecem juntos. Clique nas datas para editar a reserva; clique no nome para editar Visitor Information. A coluna **Cadastrado em** usa `registerTime` do check-in retornado pela OpenAPI ou a hora local quando o Visitor ID e o ID do registro/reserva correspondem. Uma reserva sem check-in e sem histórico local correspondente não tem esse horário.
+Em **Cadastros efetuados**, check-ins e reservas sem check-in aparecem juntos. Clique nas datas para editar a reserva ou no nome para editar Visitor Information. A coluna **Cadastrado em** usa `registerTime` para check-ins e `applicantTime` do fluxo vinculado para reservas. O horário local serve de contingência quando o Visitor ID e o ID do registro ou da reserva correspondem.
 
 Em **Cadastros efetuados**, clique no nome para editar nome, sobrenome, grupo, Remark do perfil, foto e pulseira diretamente em Visitor Information. Clique nas datas da reserva para abrir o formulário separado de período. Os campos de perfil não são exibidos nesse formulário.
 
@@ -39,7 +41,7 @@ Aplicativo Windows para check-in de visitantes diretamente no HikCentral Profess
 - Pulseira NFC ACR122U/PC-SC com número editável e conversão configurável: HEX, decimal big-endian, decimal little-endian (bytes invertidos), inversão de todos os bits e inversão dos bits de cada byte. Essas opções não são equivalentes; a correspondência real deve ser confirmada com um cartão cadastrado no HikCentral.
 - Ingressos de 1, 2 ou 3 dias, personalizáveis. Por padrão a saída é às 23:59:59 do último dia incluído.
 - Entrada e saída editáveis, com fuso America/Sao_Paulo. A saída é recalculada automaticamente ao alterar a entrada ou tipo de ingresso; não há botão de cálculo.
-- Campo **Reserva ou Apartamento** no cadastro cria o Remark da reserva. Na edição, Visitor Information tem um Remark próprio do perfil; ele é lido e gravado na API de pessoas, separado do Remark da reserva.
+- Campo **Reserva ou Apartamento** no cadastro cria o Remark da reserva. Na edição, o aplicativo confirma a mudança em Visitor Information. Para uma reserva aguardando check-in, a API também grava o Remark na reserva vinculada.
 - Ao clicar em CADASTRAR, o aplicativo cria a reserva e, se **Check-in automático** estiver como **Sim**, solicita o check-in após a confirmação da prévia de acesso. O padrão é **Não**.
 - Níveis de acesso configurados por grupo. O padrão não concede níveis; o operador precisa definir a política aprovada.
 - Antes de enviar, mostra os níveis e catracas que receberão a operação e pede confirmação.

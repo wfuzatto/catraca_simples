@@ -269,8 +269,8 @@ class HikCentral:
             page += 1
         raise HikError("Paginação de níveis incompleta; operação bloqueada.")
 
-    def visitor_groups(self) -> list[str]:
-        """Grupo real, quando endpoint disponível; chamada separada da prova OpenAPI."""
+    def visitor_group_catalog(self) -> list[dict[str, str]]:
+        """Return the Visitor groups and their IDs when supplied by the API."""
         data = self.post("/artemis/api/visitor/v1/visitorgroups", {
             "SearchCriteria": {"visitorGroupName": ""}
         }).get("data") or {}
@@ -286,14 +286,20 @@ class HikCentral:
             name = (base.get("name") or base.get("Name") or base.get("visitorGroupName")
                     or row.get("visitorGroupName") or row.get("VisitorGroupName")
                     or row.get("name"))
-            if name and name not in groups:
-                groups.append(name)
+            name = str(name or "").strip()
+            group_id = str(row.get("indexCode") or row.get("IndexCode") or "").strip()
+            if name:
+                groups.append({"id": group_id, "name": name})
         if not groups:
             fields = ", ".join(sorted(data.keys())) if isinstance(data, dict) else type(data).__name__
             row_fields = ", ".join(sorted(rows[0].keys())) if rows and isinstance(rows[0], dict) else "nenhum"
             raise HikError("A consulta de grupos Visitor não retornou nomes utilizáveis. "
                            f"Campos: {fields}; campos do primeiro grupo: {row_fields}.")
         return groups
+
+    def visitor_groups(self) -> list[str]:
+        """Return the names used by the registration and settings selectors."""
+        return list(dict.fromkeys(group["name"] for group in self.visitor_group_catalog()))
 
     def resolve_levels(self, requested: list[str]) -> tuple[list[dict], list[str]]:
         levels = self.access_levels()

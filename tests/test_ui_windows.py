@@ -644,7 +644,7 @@ def test_combined_history_shows_pending_reservations_and_checkins_together(monke
     import app
     import visitor_editor
     from core import default_settings
-    from remote_history import APPOINTMENTS_PATH, CHECKINS_PATH
+    from remote_history import APPOINTMENTS_PATH, APPROVAL_DETAILS_PATH, CHECKINS_PATH
 
     monkeypatch.setattr(app, "load_settings", default_settings)
     monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
@@ -682,6 +682,9 @@ def test_combined_history_shows_pending_reservations_and_checkins_together(monke
             calls.append((path, request))
             if path == CHECKINS_PATH:
                 return {"data": {"totalNum": 1, "list": [checkin]}}
+            if path == APPROVAL_DETAILS_PATH:
+                assert request == {"approvalFlowCode": "202611120001"}
+                return {"data": {**request, "applicantTime": "2026-11-12T08:12:37-03:00"}}
             assert path == APPOINTMENTS_PATH
             return {"data": {"total": 1, "list": [booking]}}
 
@@ -730,6 +733,13 @@ def test_combined_history_shows_pending_reservations_and_checkins_together(monke
         root.view_history_selection(event)
         record, = opened_profiles
         assert record["_reservation_only"] and record["visitor_id"] == "715"
+
+        # Prefer the server's reservation submission time when it becomes available.
+        booking["approvalFlowCode"] = "202611120001"
+        root.history_apply_filters()
+        reservation_iid = next(iid for iid, row in root._history_records.items()
+                               if row.get("_reservation_only"))
+        assert root.history_table.item(reservation_iid, "values")[0] == "12/11/2026 08:12:37"
     finally:
         root.destroy()
 
@@ -1553,10 +1563,12 @@ def test_save_reservation_without_checkin_keeps_same_profile_and_original_time(m
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Editor Visitor Information exige Tk Windows")
-def test_visitor_information_editor_has_no_reservation_fields(monkeypatch):
+@pytest.mark.parametrize("checked_in", [False, True])
+def test_visitor_information_editor_has_no_reservation_fields(monkeypatch, checked_in):
     import app
     import visitor_editor
     import visitor_profile
+    import visitor_remark
     from core import default_settings
 
     monkeypatch.setattr(app, "load_settings", default_settings)
@@ -1566,8 +1578,15 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch):
     monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
     calls = []
+    remarks = []
+    checkins = []
     monkeypatch.setattr(visitor_profile, "update_profile",
                         lambda *args, **kwargs: calls.append((args, kwargs)) or ["nome e sobrenome"])
+    monkeypatch.setattr(visitor_remark, "update_pending_visitor_remark",
+                        lambda client, record, value: remarks.append((record["visitor_id"], value)) or True)
+    monkeypatch.setattr(visitor_profile, "update_active_visitor_fields",
+                        lambda client, record, **fields: checkins.append((record["registration_record_id"], fields))
+                        or ["pulseira", "Remark"])
     root = app.ValeApp()
     class FakeClient:
         @staticmethod
@@ -1580,7 +1599,9 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch):
         visitor_editor.open_visitor_information_editor(
             root,
             {"visitor_id": "715", "first": "Visita", "last": "Teste", "group": "Hóspedes Vale",
-             "reservation": "Remark exclusivo da reserva"},
+             "reservation": "Remark exclusivo da reserva",
+             "registration_record_id": "91" if checked_in else "",
+             "checkin_state": "check-in efetuado" if checked_in else "sem check-in"},
             remote_details={"VisitorInfo": {
                 "visitorId": "715", "visitorGivenName": "Visita",
                 "visitorFamilyName": "Teste", "visitorGroupName": "Hóspedes Vale"}},
@@ -1593,11 +1614,20 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch):
         assert dialog._visitor_information_fields["remark"].get() == "Apto 17"
         dialog._visitor_information_fields["first"].set("Visitante")
         dialog._visitor_information_fields["remark"].set("Apto 19")
+        dialog._visitor_information_fields["card"].set("123456")
         dialog._visitor_information_save_button.invoke()
         assert len(calls) == 1
         args, kwargs = calls[0]
         assert args[1:3] == ("715", "Visitante")
-        assert kwargs["remark"] == "Apto 19"
+        assert "remark" not in kwargs
+        if checked_in:
+            assert kwargs["card"] == ""
+            assert checkins == [("91", {"card": "123456", "remark": "Apto 19", "photo": b""})]
+            assert not remarks
+        else:
+            assert kwargs["card"] == "123456"
+            assert not checkins
+            assert remarks == [("715", "Apto 19")]
         assert "entry" not in kwargs and "exit" not in kwargs and "reservation" not in kwargs
         assert not dialog.winfo_exists()
     finally:
@@ -1638,7 +1668,13 @@ def test_missing_profile_remark_is_red_and_never_falls_back_to_reservation(monke
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Visitor Information exige Tk Windows")
-def test_profile_editor_preserves_group_from_remote_reservation_without_migration(monkeypatch):
+@pytest.mark.parametrize(("record_group", "profile_group", "expected"), [
+    ("Hóspedes Vale", "", "Hóspedes Vale"),
+    ("", "Visitors", "Visitors"),
+    ("", "", "Manter grupo atual"),
+])
+def test_profile_editor_preserves_group_without_migration(
+        monkeypatch, record_group, profile_group, expected):
     import app
     import visitor_editor
     import visitor_profile
@@ -1657,7 +1693,7 @@ def test_profile_editor_preserves_group_from_remote_reservation_without_migratio
     class FakeClient:
         @staticmethod
         def visitor_groups():
-            return ["Hóspedes Vale"]
+            pytest.fail("Preservar o grupo não precisa consultar a lista novamente.")
 
     root = app.ValeApp()
     root.client = lambda: FakeClient()
@@ -1667,17 +1703,19 @@ def test_profile_editor_preserves_group_from_remote_reservation_without_migratio
         visitor_editor.open_visitor_information_editor(
             root,
             {"visitor_id": "715", "first": "Visita", "last": "Teste",
-             "group": "Hóspedes Vale", "reservation": "Remark da reserva"},
+             "group": record_group, "reservation": "Remark da reserva"},
             remote_details={"VisitorInfo": {"visitorId": "715",
-                "visitorGivenName": "Visita", "visitorFamilyName": "Teste"}},
+                "visitorGivenName": "Visita", "visitorFamilyName": "Teste",
+                "visitorGroupName": profile_group}},
             initial_remark="Remark do perfil", remark_known=True,
             available_groups=["Hóspedes Vale"])
         dialog = root._active_visitor_editor
-        assert dialog._visitor_information_fields["group"].get() == "Hóspedes Vale"
+        assert dialog._visitor_information_fields["group"].get() == expected
+        assert expected in dialog._visitor_information_group_selector.cget("values")
         assert dialog._visitor_information_group_error.cget("text") == ""
         dialog._visitor_information_save_button.invoke()
         assert len(writes) == 1
-        assert writes[0][1]["remark"] == "Remark do perfil"
+        assert "remark" not in writes[0][1]
         assert not dialog.winfo_exists()
     finally:
         root.destroy()

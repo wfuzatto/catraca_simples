@@ -19,6 +19,7 @@ PHOTO_PATH = "/artemis/api/visitor/v1/appointment/downloadpicture"
 DETAIL_PATH = "/artemis/api/visitor/v1/visitor/single/visitorinfo"
 DIRECTORY_PATH = "/artemis/api/visitor/v1/visitor/visitorInfo"
 APPOINTMENTS_PATH = "/artemis/api/visitor/v1/appointment/appointmentlist"
+APPROVAL_DETAILS_PATH = "/artemis/api/visitor/v1/visitorApprovalFlow/details"
 PAGE_SIZE = 100
 MAX_PAGES = 100
 STATUSES = {
@@ -302,13 +303,39 @@ def fetch_combined_history(client, start_iso, end_iso, page=1, name="", page_siz
 
     merged.sort(key=sort_time, reverse=True)
     offset = (page - 1) * page_size
+    page_rows = merged[offset:offset + page_size]
+    # A reserva não inclui o horário do pedido. Consulte o fluxo vinculado
+    # somente para as reservas que serão exibidas nesta página.
+    submission_times = {}
+    for row in page_rows:
+        code = row.pop("_approval_flow_code", "")
+        if code:
+            if code not in submission_times:
+                submission_times[code] = _reservation_submission_time(client, code)
+            row["registered_at"] = submission_times[code]
     total = max(0, checkin_total + reservation_total - duplicate_count)
     return {
-        "rows": merged[offset:offset + page_size], "total": total,
+        "rows": page_rows, "total": total,
         "page": page, "page_size": page_size,
         "has_next": page < MAX_PAGES and page * page_size < total,
         "checkin_total": checkin_total, "reservation_total": reservation_total,
     }
+
+
+def _reservation_submission_time(client, code):
+    """Read the reservation's application time from the exact approval flow."""
+    try:
+        flow = client.post(APPROVAL_DETAILS_PATH, {"approvalFlowCode": code}).get("data")
+    except HikError:
+        return ""  # Preserve the reservation and allow the matched local fallback.
+    if not isinstance(flow, dict) or str(flow.get("approvalFlowCode") or "") != code:
+        return ""
+    value = flow.get("applicantTime")
+    try:
+        timestamp = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return ""
+    return value if timestamp.tzinfo is not None else ""
 
 
 def _normalize_unchecked_reservation(item):
@@ -337,6 +364,7 @@ def _normalize_unchecked_reservation(item):
     levels = parse_access_levels(item)
     return {
         "_reservation_only": True, "_reservation_period": period,
+        "_approval_flow_code": str(item.get("approvalFlowCode") or "").strip(),
         "visitor_id": vid, "appointment_id": period["appointment_id"],
         "reservation_code": period["code"], "registration_record_id": "",
         "entry_at": period["entry_at"], "exit_at": period["exit_at"],
@@ -451,6 +479,45 @@ def search_visitor_directory(client, name, *, page=1, page_size=100):
         if row:
             unique[row["visitor_id"]] = row
     return list(unique.values())
+
+
+def read_profile_group(client, visitor_id, name, *, catalog=None):
+    """Resolve a missing VisitorInfo group only when directory membership is unique."""
+    visitor_id = str(visitor_id or "").strip()
+    name = str(name or "").strip()
+    if not visitor_id or not 1 <= len(name) <= 128:
+        return ""
+    groups = client.visitor_group_catalog() if catalog is None else catalog
+    if not groups or any(not group["id"] for group in groups):
+        return ""
+    match = ""
+    for group in groups:
+        page_size = 100
+        for page in range(1, 11):
+            raw = client.post(DIRECTORY_PATH, {
+                "pageNo": page, "pageSize": page_size,
+                "searchCriteria": {"personName": name, "visitorGroupID": group["id"]},
+            }).get("data")
+            if not isinstance(raw, dict):
+                return ""
+            rows = _visitor_directory_rows(raw)
+            try:
+                total = int(raw["total"])
+            except (KeyError, TypeError, ValueError):
+                return ""
+            if total < 0 or len(rows) != min(page_size, max(0, total - (page - 1) * page_size)):
+                return ""
+            if any((person or {}).get("visitor_id") == visitor_id
+                   for person in (_normalize_directory_person(row, "") for row in rows)):
+                if match and match != group["name"]:
+                    return ""
+                match = group["name"]
+                break
+            if page * page_size >= total:
+                break
+        else:
+            return ""
+    return match
 
 
 

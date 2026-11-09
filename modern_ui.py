@@ -401,8 +401,8 @@ def _history(app):
     heading.pack(fill="x", padx=17, pady=(18, 10))
     _text(heading, "Cadastros e reservas", size=19, bold=True).pack(side="left")
     _text(inner,
-          "Todos os check-ins e reservas sem check-in aparecem juntos. De/Até filtram o início da visita ou da reserva. "
-          "As datas vêm da reserva vinculada; o status vem do check-in. Cadastrado em usa registerTime do HikCentral ou o horário local quando Visitor ID e registro/reserva correspondem. Reserva sem check-in e sem histórico local fica sem esse horário.",
+          "De/Até filtram o início da visita ou da reserva. "
+          "Cadastrado em mostra o horário do check-in ou do pedido da reserva.",
           size=11, color=MUTED).pack(anchor="w", padx=17, pady=(0, 7))
     app.history_loading_frame = ctk.CTkFrame(inner, fg_color="#E9F2FF", corner_radius=8)
     app.history_loading_label = ctk.CTkLabel(

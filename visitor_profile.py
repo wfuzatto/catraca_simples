@@ -1,14 +1,16 @@
 """Edit the existing Visitor Information profile through OpenAPI."""
 import base64
+from datetime import datetime
 from io import BytesIO
 import re
 
 from PIL import Image, ImageChops, ImageStat
 
-from core import prepare_face_jpeg
+from core import Visitor, prepare_face_jpeg, registration_payload
+from edit_request import preserve_visitor_metadata
 from edit_errors import EditorFieldError
-from hikcentral import HikError
-from remote_history import fetch_visitor_photo, visitor_details
+from hikcentral import HikError, normalize
+from remote_history import fetch_visitor_photo, resolve_remote_edit_record, visitor_details
 
 
 PERSON_INFO = "/artemis/api/resource/v1/person/personId/personInfo"
@@ -52,11 +54,85 @@ def read_profile(client, visitor_id, *, details=None):
     cards = person.get("cards") or []
     if not isinstance(cards, list) or any(not isinstance(card, dict) for card in cards):
         raise HikError("O HikCentral retornou pulseiras em formato inesperado.")
-    remark_present = "remark" in person
-    remark = str(person.get("remark") or "").strip()
+    remark_present = "remark" in visitor
+    remark = str(visitor.get("remark") or "").strip()
     return (details, names,
             tuple(str(card.get("cardNo") or "").strip() for card in cards),
             remark, remark_present)
+
+
+def confirm_checkin_card(client, visitor_id, start, end, record_id, card):
+    row = client.find_registration_record(visitor_id, start, end, record_id=record_id)
+    if not row or str((row.get("visitorCardInfo") or {}).get("cardNumber") or "").strip() != card:
+        raise EditorFieldError({"card": "O HikCentral ainda não confirmou a pulseira no check-in. Confira este cadastro pelo histórico."})
+
+
+def save_reserved_profile_card(client, visitor_id, first, last, card):
+    """A reserva pode descartar cards; confirme a pulseira na ficha da pessoa."""
+    _, names, cards, _, _ = read_profile(client, visitor_id)
+    if names != (first.strip(), last.strip()) or (cards and cards != (card,)):
+        raise EditorFieldError({"card": "Confira a identidade e a pulseira do cadastro já criado antes de continuar."})
+    if not cards:
+        update_profile(client, visitor_id, first, last, card=card)
+
+
+def update_active_visitor_fields(client, record, *, card=None, remark=None, photo=b""):
+    """Grave credencial/Remark no check-in ativo, preservando período e nível."""
+    visitor_id = str(record.get("visitor_id") or "")
+    checkin_id = str(record.get("registration_record_id") or "")
+    start, end = record.get("entry_at"), record.get("exit_at")
+    if not (visitor_id and checkin_id and start and end):
+        raise EditorFieldError({"visit": "Atualize o histórico e selecione o check-in ativo para editar."})
+    row = client.find_registration_record(visitor_id, start, end, active_only=True, record_id=checkin_id)
+    if not row:
+        raise EditorFieldError({"visit": "O check-in já mudou ou foi encerrado. Atualize o histórico antes de editar."})
+    current_card = str((row.get("visitorCardInfo") or {}).get("cardNumber") or "").strip()
+    details, names, _, current_remark, _ = read_profile(client, visitor_id)
+    wanted_card = card or current_card
+    wanted_remark = current_remark if remark is None else validate_visitor_remark(remark)
+    changes = []
+    if wanted_card != current_card:
+        changes.append("pulseira")
+    if wanted_remark != current_remark:
+        changes.append("Remark")
+    if not changes:
+        return changes
+    info = details.get("VisitorInfo") or details.get("visitorInfo") or details
+    if info.get("faces") and not photo:
+        raise EditorFieldError({"photo": "O HikCentral não devolveu a foto atual. Recarregue o perfil para preservar a foto na edição do check-in."})
+    group = str((row.get("visitorBaseInfo") or {}).get("visitorGroup") or "").strip()
+    verified, _ = resolve_remote_edit_record(client, {**record, "group": group})
+    if (verified.get("_requires_access_confirmation") or
+            len(verified.get("access_level_ids", [])) != 1 or len(verified.get("access_names", [])) != 1):
+        raise EditorFieldError({"visit": "O nível atual do check-in não foi confirmado. Atualize o histórico."})
+    levels = [{"id": verified["access_level_ids"][0], "name": verified["access_names"][0]}]
+    visitor = Visitor(*names, group, photo, wanted_card, datetime.fromisoformat(start),
+                      datetime.fromisoformat(end), wanted_remark)
+    payload = preserve_visitor_metadata(registration_payload(visitor, editing=True), details)
+    failure = None
+    returned_id = ""
+    try:
+        returned_id = client.update_registered_visitor(checkin_id, visitor_id, payload, levels)
+    except HikError as exc:
+        failure = exc
+    observed = client.find_registration_record(visitor_id, start, end, active_only=True,
+                                               record_id=returned_id)
+    mismatches = {}
+    if not observed:
+        raise EditorFieldError({"visit": "A edição foi enviada, mas o check-in não foi confirmado. Atualize o histórico."}) from failure
+    if normalize(str((observed.get("visitorBaseInfo") or {}).get("visitorGroup") or "")) != normalize(group):
+        mismatches["group"] = "O HikCentral não confirmou o grupo original neste check-in."
+    if wanted_card and str((observed.get("visitorCardInfo") or {}).get("cardNumber") or "").strip() != wanted_card:
+        mismatches["card"] = "O HikCentral não confirmou a pulseira neste check-in."
+    if read_visitor_remark(client, visitor_id) != wanted_remark:
+        mismatches["remark"] = "O HikCentral não confirmou o Remark em Visitor Information."
+    if mismatches:
+        error = EditorFieldError(mismatches)
+        labels = {"card": "pulseira", "remark": "Remark"}
+        error.profile_saved = [label for field, label in labels.items()
+                               if label in changes and field not in mismatches]
+        raise error from failure
+    return changes
 
 
 def same_photo(left, right):
@@ -68,10 +144,9 @@ def same_photo(left, right):
         return max(ImageStat.Stat(ImageChops.difference(a, b)).mean) <= 8
 
 
-def update_profile(client, visitor_id, first, last, *, card="", remark=None, new_photo=b""):
+def update_profile(client, visitor_id, first, last, *, card="", new_photo=b""):
     visitor_id, first, last, card = (str(value or "").strip()
                                      for value in (visitor_id, first, last, card))
-    remark = None if remark is None else validate_visitor_remark(remark)
     errors = {}
     if not re.fullmatch(r"[0-9]{1,64}", visitor_id):
         errors["visit"] = "Selecione um perfil de visitante com ID válido."
@@ -87,24 +162,22 @@ def update_profile(client, visitor_id, first, last, *, card="", remark=None, new
             errors["photo"] = "Selecione ou capture uma foto válida."
     if errors:
         raise EditorFieldError(errors)
-    details, old_names, old_cards, old_remark, remark_present = read_profile(client, visitor_id)
+    details, old_names, old_cards, _, _ = read_profile(client, visitor_id)
     changed = []
     update = {}
     if (first, last) != old_names:
         update.update(personGivenName=first, personFamilyName=last)
-    if remark is not None and (not remark_present or remark != old_remark):
-        update["remark"] = remark
     if card and card not in old_cards:
         if len(old_cards) > 1:
             raise EditorFieldError({"card": "O perfil tem mais de uma pulseira. Selecione a substituição no HikCentral."})
         update["cards"] = [{"cardNo": card}]
     if update:
-        error = ""
+        write_error = None
         try:
             client.post(PERSON_UPDATE, {"personId": visitor_id, **update})
         except HikError as exc:
-            error = str(exc)
-        details, names, cards, saved_remark, saved_remark_present = read_profile(client, visitor_id)
+            write_error = exc
+        details, names, cards, _, _ = read_profile(client, visitor_id)
         mismatches = {}
         if names != (first, last):
             mismatches.update(first="O HikCentral não confirmou o nome e o sobrenome.",
@@ -115,16 +188,10 @@ def update_profile(client, visitor_id, first, last, *, card="", remark=None, new
             mismatches["card"] = "O HikCentral não confirmou a pulseira solicitada."
         elif "cards" in update:
             changed.append("pulseira")
-        if "remark" in update:
-            if not saved_remark_present or saved_remark != remark:
-                mismatches["remark"] = (
-                    "O HikCentral não confirmou o Remark do perfil em Person Information. " + error)
-            else:
-                changed.append("Remark")
         if mismatches:
             failure = EditorFieldError(mismatches)
             failure.profile_saved = list(changed)
-            raise failure
+            raise failure from write_error
     if new_photo:
         try:
             previous = fetch_visitor_photo(client, visitor_id, details=details)

@@ -80,7 +80,8 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
     if "customField" not in info and source.get("customFieldList"):
         info["customField"] = deepcopy(source["customFieldList"])
     info.setdefault("gender", 0)
-    prior_access = {**(profile.get("accessInfo") or {}), **(saved.get("accessInfo") or {})}
+    prior_access = {**(original.get("accessInfo") or {}), **(profile.get("accessInfo") or {}),
+                    **(saved.get("accessInfo") or {})}
     # The booking API makes group optional. If the server omitted it, preserve
     # the exact access level without submitting an inferred group assignment.
     if group_change_requested:
@@ -115,7 +116,8 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
         "appointEndTime": end,
         "visitReasonType": reason_type,
         "visitReasonDetail": reason_detail,
-        "accessInfo": client.access_info([level]),
+        "accessInfo": (client.access_info([level]) if level is not None else
+                       deepcopy(original.get("accessInfo") or {})),
         "visitorInfoList": [{"VisitorInfo": info}],
     }
 
