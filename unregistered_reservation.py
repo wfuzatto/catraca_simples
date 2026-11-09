@@ -109,6 +109,20 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
     reason_detail = original.get("visitReasonDetail") or ""
     if not reason_detail and str(reason_type) == "4":
         reason_detail = "Ingresso diario"
+    if level is None:
+        levels = parse_access_levels(original)
+        raw_access = original.get("accessInfo") or original.get("AccessInfo") or {}
+        raw_levels = raw_access.get("accessLevelList") or raw_access.get("AccessLevelList") or []
+        if isinstance(raw_levels, dict):
+            raw_levels = raw_levels.get("accessLevel", raw_levels.get("AccessLevel", raw_levels.get("list", raw_levels)))
+        if (raw_levels and not levels) or (isinstance(raw_levels, list) and raw_levels
+                                          and len(raw_levels) != len(levels)):
+            raise EditorFieldError({"remark": "O HikCentral não confirmou todos os níveis da reserva."})
+        access = {key: deepcopy(raw_access[key]) for key in ("electrostaticDetectionType", "qrCodeValidNum")
+                  if key in raw_access}
+        access.update(client.access_info(levels))
+    else:
+        access = client.access_info([level])
     return {
         "appointRecordId": compare_reservation_period(original, start, end)["appointment_id"],
         "receptionistId": str(receptionist_id or ""),
@@ -116,8 +130,7 @@ def _request(client, original, vid, start, end, remark, group, level, *, expecte
         "appointEndTime": end,
         "visitReasonType": reason_type,
         "visitReasonDetail": reason_detail,
-        "accessInfo": (client.access_info([level]) if level is not None else
-                       deepcopy(original.get("accessInfo") or {})),
+        "accessInfo": access,
         "visitorInfoList": [{"VisitorInfo": info}],
     }
 

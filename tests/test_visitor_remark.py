@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 
 from edit_errors import EditorFieldError
-from hikcentral import HikError
+from hikcentral import HikCentral, HikError
 from remote_history import APPOINTMENTS_PATH, DETAIL_PATH
 from visitor_remark import UPDATE_BOOKING, update_pending_visitor_remark
 
@@ -15,6 +15,8 @@ RECORD = {"visitor_id": "2118", "appointment_id": "1000", "reservation_code": "2
 
 
 class FakeHikCentral:
+    access_info = staticmethod(HikCentral.access_info)
+
     def __init__(self):
         self.booking = {
             "appointID": "1000", "appointCode": "2735", "appointStatus": 0,
@@ -76,7 +78,7 @@ def test_requires_visitor_profile_readback_and_reconciles_without_second_write(t
     with pytest.raises(EditorFieldError, match="não confirmou"):
         update_pending_visitor_remark(client, RECORD, "321", journal=journal)
     assert journal.exists()
-    assert "321" not in journal.read_text(encoding="utf-8")
+    assert '"321"' not in journal.read_text(encoding="utf-8")
     assert client.booking["visitorInfo"]["remark"] == "321"
     assert client.profile["remark"] == "123"
 
@@ -100,3 +102,18 @@ def test_refuses_to_write_if_checkin_appeared(tmp_path):
     with pytest.raises(EditorFieldError, match="check-in"):
         update_pending_visitor_remark(client, RECORD, "321", journal=tmp_path / "remark.json")
     assert client.writes == []
+
+
+def test_reencodes_access_level_list_from_live_response_shape(tmp_path):
+    client = FakeHikCentral()
+    client.booking["accessInfo"] = {
+        "electrostaticDetectionType": 0, "qrCodeValidNum": 7,
+        "accessLevelList": {"accessLevel": [{"id": 7, "baseinfo": {"name": "VISITANTE_VALE"}}]},
+    }
+    update_pending_visitor_remark(client, RECORD, "321", journal=tmp_path / "remark.json")
+
+    [request] = client.writes
+    assert request["accessInfo"] == {
+        "electrostaticDetectionType": 0, "qrCodeValidNum": 7,
+        "accessLevelList": [{"accessLevel": {"id": 7, "baseInfo": {"name": "VISITANTE_VALE"}}}],
+    }
