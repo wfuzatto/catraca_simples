@@ -100,6 +100,9 @@ def test_verified_reservation_recovers_profile_and_checkin_card(monkeypatch):
     seen = []
     monkeypatch.setattr(recovery, "find_original_appointment",
                         lambda client, record: fake_booking())
+    import credential_management
+    monkeypatch.setattr(credential_management, "ensure_issued_card",
+                        lambda *a: None)
     import visitor_profile
     monkeypatch.setattr(visitor_profile, "update_profile",
                         lambda *a, **kw: seen.append(("profile", a, kw)))
@@ -117,6 +120,9 @@ def test_can_restore_profile_before_checkin_without_marking_card(monkeypatch):
     seen = []
     monkeypatch.setattr(recovery, "find_original_appointment",
                         lambda client, record: fake_booking())
+    import credential_management
+    monkeypatch.setattr(credential_management, "ensure_issued_card",
+                        lambda *a: None)
     import visitor_profile
     monkeypatch.setattr(visitor_profile, "update_profile",
                         lambda *a, **kw: seen.append("profile"))
