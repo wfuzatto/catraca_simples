@@ -653,7 +653,8 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
         "access_names": access_names or [],
         "expect_face": bool(expect_face), "expect_card": bool(expect_card),
         "registration_record_id": "", "registered": registered,
-        "checkin_requested": bool(checkin_requested), "assigned": [],
+        "checkin_requested": bool(checkin_requested), "checkin_inflight": False,
+        "assigned": [],
         "entry_at": entry_at, "exit_at": exit_at
     }
     if card_confirmed is not None:
@@ -663,6 +664,17 @@ def save_pending(visitor_id: str, access_ids: list[str], base: Path | None = Non
     if isinstance(old, dict) and old.get("encrypted_context"):
         data["encrypted_context"] = old["encrypted_context"]
     _write_json_atomic(path, data)
+
+
+def mark_checkin_started(base: Path | None = None) -> None:
+    """Checkpoint ANTES do POST; depois dele, nunca repetir um check-in incerto."""
+    data = load_pending(base)
+    if not data or data.get("stage") != "appointment_confirmed":
+        raise RuntimeError("Não há reserva confirmada para iniciar o check-in.")
+    if data.get("registered") or data.get("checkin_inflight"):
+        raise RuntimeError("Check-in já confirmado ou com resultado incerto; não reenviar.")
+    data["checkin_inflight"] = True
+    _write_json_atomic((base or app_dir()) / "pending.json", data)
 
 
 def mark_card_confirmed(visitor_id: str, base: Path | None = None) -> None:
