@@ -23,10 +23,11 @@ def _ast_calls(node):
     # positions to guard the actual network submission sequence.
     calls = [
         call for call in ast.walk(node)
-        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, (ast.Attribute, ast.Name))
     ]
     return [
-        call.func.attr
+        call.func.attr if isinstance(call.func, ast.Attribute) else call.func.id
         for call in sorted(calls, key=lambda c: (c.lineno, c.col_offset))
     ]
 
