@@ -19,10 +19,15 @@ from hikcentral import HikCentral
 
 
 def _ast_calls(node):
+    # ast.walk is breadth-first, not the execution order. Use source
+    # positions to guard the actual network submission sequence.
+    calls = [
+        call for call in ast.walk(node)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+    ]
     return [
         call.func.attr
-        for call in ast.walk(node)
-        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+        for call in sorted(calls, key=lambda c: (c.lineno, c.col_offset))
     ]
 
 
