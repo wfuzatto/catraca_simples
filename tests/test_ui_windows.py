@@ -354,7 +354,9 @@ def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monk
                 "visible": root.registration_loading_overlay.winfo_viewable() == 1,
                 "spinning": root._registration_spinner_angle > 0,
                 "register_disabled": root.register_button.cget("state") == "disabled",
-                "delivery_disabled": root.delivery_button.cget("state") == "disabled",
+                "delivery_visible": bool(root.delivery_button.winfo_manager()),
+                "delivery_disabled": (root.delivery_button.cget("state") == "disabled"
+                                      if root.delivery_button.winfo_manager() else False),
                 "nav_disabled": root.nav_settings.cget("state") == "disabled",
             })
 
@@ -374,7 +376,8 @@ def test_registration_spinner_animates_only_during_confirmed_task_and_stops(monk
         assert not timed_out
         assert observed == [{
             "busy": True, "visible": True, "spinning": True,
-            "register_disabled": True, "delivery_disabled": True,
+            "register_disabled": True, "delivery_visible": False,
+            "delivery_disabled": False,
             "nav_disabled": True,
         }]
         assert len(outcomes) == 1
