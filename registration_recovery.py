@@ -90,7 +90,7 @@ def verify_pending_reservation(client, pending: dict, context: dict) -> None:
         raise HikError("Grupo da reserva divergente; revisão humana necessária.")
 
 
-def restore_pending_credentials(client, pending: dict, context: dict) -> bool:
+def restore_pending_credentials(client, pending: dict, context: dict, *, verify_checkin_card: bool = True) -> bool:
     """Concilia perfil e pulseira do MESMO Visitor ID. Não cria outro registro."""
     from visitor_profile import update_profile, confirm_checkin_card
 
@@ -104,7 +104,7 @@ def restore_pending_credentials(client, pending: dict, context: dict) -> bool:
     update_profile(client, visitor_id, context["first"], context["last"],
                    card=card, group=context["group"],
                    new_photo=context.get("photo_bytes", b""))
-    if card and pending.get("checkin_requested", True):
+    if card and pending.get("checkin_requested", True) and verify_checkin_card:
         if not pending.get("registered") or not pending.get("registration_record_id"):
             raise HikError("Ainda não existe check-in confirmado para conferir a pulseira.")
         confirm_checkin_card(client, visitor_id, pending["entry_at"],
