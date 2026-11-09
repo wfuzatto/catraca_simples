@@ -399,6 +399,7 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
     import re
 
     from visitor_profile import read_visitor_remark, update_active_visitor_fields, update_profile
+    from credential_management import ensure_issued_card
     from visitor_remark import update_pending_visitor_remark
 
     active = getattr(app, "_active_visitor_editor", None)
@@ -482,6 +483,13 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
             error_label.configure(text="Remark do perfil não retornado; informe o valor para salvar.")
         error_label.pack(fill="x")
         fields[key], entries[key], errors[key] = variable, entry, error_label
+        if key == "card":
+            ctk.CTkLabel(
+                body, text="O número exibido pode vir da reserva ou do check-in, "
+                "mas isso não comprova que existe cartão no Credential Management. "
+                "Ao salvar, o sistema grava e confere a credencial no HikCentral.",
+                text_color="#B45309", wraplength=500,
+                justify="left").pack(fill="x", pady=(0, 5))
 
     preview = ctk.CTkLabel(body, text="Foto original não disponível", width=220, height=200,
                            fg_color=("#E9EEF5", "#243043"))
@@ -656,6 +664,10 @@ def open_visitor_information_editor(app, record, *, remote_details=None,
                 elif requested_remark is not None:
                     if update_pending_visitor_remark(client, record, requested_remark):
                         changed.append("Remark")
+                if card_value:
+                    ensure_issued_card(client, visitor_id, card_value)
+                    if "pulseira" not in changed:
+                        changed.append("pulseira NFC confirmada")
             except Exception as exc:
                 exc.profile_saved = [*changed, *getattr(exc, "profile_saved", [])]
                 raise
