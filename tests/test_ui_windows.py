@@ -601,7 +601,8 @@ def test_history_has_two_separate_cell_edit_actions(monkeypatch):
         root.update()
         assert root.history_table.bind("<Button-1>")
         hint = root.history_cell_action_hint.cget("text").casefold()
-        assert "datas e apartamento" in hint and "visitor information" in hint
+        assert "somente as datas" in hint and "visitor information" in hint
+        assert "apartamento/remark" in hint
         assert "foto e pulseira" in hint
         for old_button in (
             "history_verify_button", "history_resend_button",
@@ -695,6 +696,43 @@ def test_reservation_history_mode_searches_and_opens_unchecked_booking(monkeypat
             else:
                 record, = opened_profiles
                 assert record["_reservation_only"] and record["visitor_id"] == "715"
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Seleção dos campos da tabela exige Tk Windows")
+def test_clicking_checkin_reservation_dates_uses_the_separate_reservation_editor(monkeypatch):
+    import app
+    from core import default_settings
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    root = app.ValeApp()
+    opened = []
+    record = {
+        "visitor_id": "1865", "registration_record_id": "checkin-1865",
+        "appointment_id": "appointment-1865", "reservation_code": "8899",
+        "first": "Wesley", "last": "Teste", "group": "Hóspedes Vale",
+        "entry_at": "2099-11-08T00:00:00-03:00", "exit_at": "2099-11-08T23:59:59-03:00",
+        "reservation_entry_at": "2099-11-08T00:00:00-03:00",
+        "reservation_exit_at": "2099-11-09T23:59:59-03:00",
+        "checkin_state": "check-in efetuado", "origin": "HikCentral",
+    }
+    try:
+        root.update()
+        root.book.select(root.history_tab)
+        root.update()
+        root._show_history_rows([record], "")
+        root.edit_history_reservation = lambda selected: opened.append(selected)
+        for column in ("#2", "#3"):
+            x, y, width, height = root.history_table.bbox("0", column)
+            assert width and height
+            event = SimpleNamespace(widget=root.history_table, x=x + width // 2,
+                                    y=y + height // 2)
+            root.view_history_selection(event)
+        assert opened == [record, record]
     finally:
         root.destroy()
 
@@ -1451,7 +1489,7 @@ def test_save_reservation_without_checkin_keeps_same_profile_and_original_time(m
         assert selected_record is record
         assert start == record["entry_at"]
         assert end.startswith("2030-11-15T")
-        assert remark == "321"
+        assert remark == "123"
         assert selected == [{"id": "1", "name": "ENTRADA ACQUAVALE"}]
         return {"state": "confirmed"}
 
@@ -1459,8 +1497,8 @@ def test_save_reservation_without_checkin_keeps_same_profile_and_original_time(m
     try:
         visitor_editor.open_unregistered_reservation_editor(root, record)
         popup = root._active_visitor_editor
+        assert set(popup._reservation_field_vars) == {"entry", "exit"}
         popup._reservation_field_vars["exit"].set("15/11/2030")
-        popup._reservation_field_vars["reservation"].set("321")
         popup._save_reservation_button.invoke()
         work, done = submissions[0]
         done(work(), None)
@@ -1486,27 +1524,154 @@ def test_visitor_information_editor_has_no_reservation_fields(monkeypatch):
     monkeypatch.setattr(visitor_profile, "update_profile",
                         lambda *args, **kwargs: calls.append((args, kwargs)) or ["nome e sobrenome"])
     root = app.ValeApp()
-    root.client = lambda: object()
+    class FakeClient:
+        @staticmethod
+        def visitor_groups():
+            return ["Hóspedes Vale"]
+    root.client = lambda: FakeClient()
     root.task = lambda work, done: done(work(), None)
     root.refresh_history = lambda: None
     try:
         visitor_editor.open_visitor_information_editor(
             root,
-            {"visitor_id": "715", "first": "Visita", "last": "Teste", "group": "Hóspedes Vale"},
+            {"visitor_id": "715", "first": "Visita", "last": "Teste", "group": "Hóspedes Vale",
+             "reservation": "Remark exclusivo da reserva"},
             remote_details={"VisitorInfo": {
                 "visitorId": "715", "visitorGivenName": "Visita",
-                "visitorFamilyName": "Teste", "visitorGroupName": "Hóspedes Vale"}})
+                "visitorFamilyName": "Teste", "visitorGroupName": "Hóspedes Vale"}},
+            initial_remark="Apto 17", remark_known=True,
+            available_groups=["Hóspedes Vale", "Hóspedes Serra"])
         dialog = root._active_visitor_editor
-        assert set(dialog._visitor_information_fields) == {"first", "last", "card"}
+        assert set(dialog._visitor_information_fields) == {"first", "last", "card", "remark", "group"}
         assert not ({"entry", "exit", "reservation", "appointment"} &
                     set(dialog._visitor_information_fields))
+        assert dialog._visitor_information_fields["remark"].get() == "Apto 17"
         dialog._visitor_information_fields["first"].set("Visitante")
+        dialog._visitor_information_fields["remark"].set("Apto 19")
         dialog._visitor_information_save_button.invoke()
         assert len(calls) == 1
         args, kwargs = calls[0]
         assert args[1:3] == ("715", "Visitante")
+        assert kwargs["remark"] == "Apto 19"
         assert "entry" not in kwargs and "exit" not in kwargs and "reservation" not in kwargs
         assert not dialog.winfo_exists()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Campos ausentes exigem Tk Windows")
+def test_missing_profile_remark_is_red_and_never_falls_back_to_reservation(monkeypatch):
+    import app
+    import visitor_editor
+    from core import default_settings
+
+    monkeypatch.setattr(app, "load_settings", default_settings)
+    monkeypatch.setattr(app, "load_api_keys", lambda: ("", ""))
+    monkeypatch.setattr(app.ValeApp, "_startup_sync", lambda self: None)
+    errors = []
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: errors.append(a))
+    root = app.ValeApp()
+    try:
+        visitor_editor.open_visitor_information_editor(
+            root,
+            {"visitor_id": "715", "first": "Visita", "last": "Teste",
+             "group": "Hóspedes Vale", "reservation": "Remark somente da reserva"},
+            remote_details={"VisitorInfo": {"visitorId": "715",
+                "visitorGivenName": "Visita", "visitorFamilyName": "Teste"}},
+            remark_known=False, available_groups=["Hóspedes Vale"])
+        dialog = root._active_visitor_editor
+        assert dialog._visitor_information_fields["remark"].get() == ""
+        assert dialog._visitor_information_fields["group"].get() == "Hóspedes Vale"
+        assert dialog._visitor_information_fields["group"] is not None
+        assert dialog._visitor_information_group_selector.cget("values") == ("Hóspedes Vale",)
+        dialog._visitor_information_group_selector.event_generate("<<ComboboxSelected>>")
+        dialog._visitor_information_save_button.invoke()
+        assert errors and "Remark" in str(errors[0])
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Editor de datas exige Tk Windows")
+def test_registered_reservation_editor_shows_only_dates_and_preserves_profile_data(monkeypatch):
+    import io
+    import customtkinter as ctk
+    import remote_history
+    import visitor_editor
+    import visitor_profile
+    import ordered_reservation_change
+    from PIL import Image
+    from core import default_settings
+
+    monkeypatch.setattr(visitor_editor.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(visitor_editor.messagebox, "showinfo", lambda *a, **k: None)
+    monkeypatch.setattr(visitor_editor.messagebox, "showerror", lambda *a, **k: pytest.fail(str(a)))
+
+    original_photo = io.BytesIO()
+    Image.new("RGB", (80, 80), "white").save(original_photo, "JPEG")
+    booking = {
+        "appointID": "5518", "appointCode": "8899",
+        "appointStartTime": "2099-11-08T00:00:00-03:00",
+        "appointEndTime": "2099-11-09T23:59:59-03:00",
+        "visitorInfo": {"visitorId": "1865", "visitorGivenName": "Wesley",
+                        "visitorFamilyName": "Teste", "visitorGroupName": "Hóspedes Vale",
+                        "remark": "Apto 123"},
+    }
+    record = {
+        "visitor_id": "1865", "registration_record_id": "checkin-1865",
+        "appointment_id": "5518", "reservation_code": "8899",
+        "first": "Wesley", "last": "Teste", "group": "Hóspedes Vale",
+        "entry_at": "2099-11-08T00:00:00-03:00", "exit_at": "2099-11-09T23:59:59-03:00",
+        "reservation_entry_at": booking["appointStartTime"],
+        "reservation_exit_at": booking["appointEndTime"],
+        "checkin_state": "check-in efetuado", "expect_face": True,
+        "expect_card": True, "card_number": "12345678", "access_names": ["VISITANTE_VALE"],
+        "access_level_ids": ["7"], "door_ids": ["57"],
+    }
+    monkeypatch.setattr(remote_history, "resolve_remote_edit_record",
+                        lambda _client, _record: (dict(record), {"VisitorInfo": {"visitorId": "1865"}}))
+    monkeypatch.setattr(remote_history, "find_original_appointment", lambda *_: booking)
+    monkeypatch.setattr(remote_history, "fetch_visitor_photo", lambda *_a, **_k: original_photo.getvalue())
+    monkeypatch.setattr(visitor_profile, "read_profile", lambda *_a, **_k: (
+        {"VisitorInfo": {"visitorId": "1865"}}, ("Wesley", "Teste"), ("12345678",), "Remark perfil", True))
+    calls = []
+    monkeypatch.setattr(ordered_reservation_change, "change_reservation_dates",
+                        lambda *args, **kwargs: calls.append((args, kwargs)) or {"state": "submitted"})
+
+    class FakeClient:
+        @staticmethod
+        def resolve_levels(names):
+            assert names == ["VISITANTE_VALE"]
+            return [{"id": "7", "name": "VISITANTE_VALE"}], ["57", "64", "89"]
+
+    root = ctk.CTk()
+    root.settings = default_settings()
+    root.busy = False
+    root.client = lambda: FakeClient()
+    root.task = lambda work, done: done(work(), None)
+    root.refresh_history = lambda: None
+    try:
+        root.update()
+        visitor_editor.open_registered_reservation_editor(
+            root, record, reservation_info=booking, cards=("12345678",),
+            initial_photo=original_photo.getvalue())
+        popup = root._active_visitor_editor
+        assert set(popup._reservation_field_vars) == {"entry", "exit"}
+        popup._reservation_field_vars["exit"].set("10/11/2099")
+        popup._save_reservation_button.invoke()
+        assert len(calls) == 1
+        args, _kwargs = calls[0]
+        saved_record, payload, selected, doors, visitor, group, levels = args[1:]
+        assert saved_record["visitor_id"] == "1865"
+        info = payload["visitorInfoList"][0]["VisitorInfo"]
+        assert info["visitorGivenName"] == "Wesley"
+        assert info["visitorFamilyName"] == "Teste"
+        assert info["remark"] == "Apto 123"
+        assert info["cards"] == [{"cardNo": "12345678"}]
+        assert selected == [{"id": "7", "name": "VISITANTE_VALE"}]
+        assert doors == ["57", "64", "89"]
+        assert group == "Hóspedes Vale" and levels == ["VISITANTE_VALE"]
+        assert visitor.reservation == "Apto 123"
+        assert not popup.winfo_exists()
     finally:
         root.destroy()
 

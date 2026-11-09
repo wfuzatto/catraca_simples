@@ -83,12 +83,22 @@ def update_existing_visit(client, record: dict, payload: dict,
         record.update(registration_record_id=chosen.get("recordId"),
                       entry_at=base.get("visitStartTime"), exit_at=base.get("visitEndTime"))
     original_checkin = str(record.get("_selected_checkin_id") or record.get("registration_record_id") or "")
-    original_group = str(record.get("group") or "").strip()
-    if record.get("_operator_selected_group"):
+    original_group = str(record.get("_original_group") or record.get("group") or "").strip()
+    allow_group_migration = bool(record.get("_allow_group_migration"))
+    requested_group_change = bool(original_group and
+                                  str(group).strip().casefold() != original_group.casefold())
+    group_changed = bool(allow_group_migration and
+                         (not original_group or requested_group_change))
+    if record.get("_operator_selected_group") and not original_group and not allow_group_migration:
         original_group = group
-    if not original_group or str(group).strip() != original_group:
+        group_changed = False
+    if (not original_group and not allow_group_migration) or (requested_group_change and not allow_group_migration):
         raise EditorFieldError({"group": "O grupo do visitante diverge do original. Alteração de grupo exige conferir o grupo atual."},
                                choices={"group": [original_group] if original_group else []})
+    original_level_ids = (record.get("_original_access_level_ids") or
+                          record.get("access_level_ids") or [])
+    if group_changed and (len(original_level_ids) != 1 or not original_level_ids[0]):
+        raise EditorFieldError({"group": "O nível Visitor original não foi confirmado; atualize a consulta antes de trocar o grupo."})
     approved = VALE_VISITOR_LEVELS.get(group)
     if (not approved or list(requested_level) != [approved] or len(selected) != 1 or
             str(selected[0].get("name") or "") != approved):
@@ -102,6 +112,8 @@ def update_existing_visit(client, record: dict, payload: dict,
         sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     actual_appointment = str(record.get("appointment_id") or record.get("_original_appointment_id") or "")
     summary = {"visitor_id": vid, "original_checkin_id": original_checkin,
+        "original_group": original_group,
+        "original_level_id": str(original_level_ids[0]) if original_level_ids else "",
         "old_entry_at": record.get("entry_at", ""), "old_exit_at": record.get("exit_at", ""),
         "requested_entry_at": new_start, "requested_exit_at": new_end,
         "requested_fields_sha256": requested_hash}
@@ -126,8 +138,8 @@ def update_existing_visit(client, record: dict, payload: dict,
         summary["original_checkin_id"] = original_checkin
         from hikcentral import normalize
         live_group = str((old.get("visitorBaseInfo") or {}).get("visitorGroup") or "")
-        if live_group and normalize(live_group) != normalize(group):
-            raise EditorFieldError({"group": "Selecione o grupo atual do visitante: " + live_group}, choices={"group": [live_group]})
+        if live_group and original_group and normalize(live_group) != normalize(original_group):
+            raise EditorFieldError({"group": "O grupo atual mudou no HikCentral: " + live_group}, choices={"group": [live_group]})
         remote_state = str(old.get("visitorStatus", ""))
         if remote_state not in ("0", "1", "2", "3", "4"):
             operation = record.get("_operator_edit_operation")
@@ -149,8 +161,8 @@ def update_existing_visit(client, record: dict, payload: dict,
         if isinstance(info, dict) and info.get("visitorId") and str(info["visitorId"]) != vid:
             raise EditorFieldError({"visit": "Não foi possível confirmar o visitante. Selecione o cadastro correto."})
         detail_group = str(info.get("visitorGroupName") or info.get("visitorGroup") or "") if isinstance(info, dict) else ""
-        if not live_group and detail_group and normalize(detail_group) != normalize(group):
-            raise EditorFieldError({"group": "Selecione o grupo atual do visitante: " + detail_group}, choices={"group": [detail_group]})
+        if not live_group and detail_group and original_group and normalize(detail_group) != normalize(original_group):
+            raise EditorFieldError({"group": "O grupo atual mudou no HikCentral: " + detail_group}, choices={"group": [detail_group]})
         complete_payload = preserve_visitor_metadata(payload, details)
         validate_edit_request(complete_payload)
         summary.update(operation=operation, appointment_id=actual_appointment)
@@ -181,9 +193,10 @@ def update_existing_visit(client, record: dict, payload: dict,
     reservation_period = reservation_period_report(
         client, {**record, "appointment_id": actual_appointment}, new_start, new_end)
 
-    # Repete a etapa de associação usada no cadastro original, mas SOMENTE
-    # para o MESMO nível homologado. Não cria permissões de outro grupo.
+    # Atribui o nível aprovado para o grupo escolhido antes de remover o antigo.
     client.assign_access(vid, str(selected[0]["id"]))
+    if group_changed and str(original_level_ids[0]) != str(selected[0]["id"]):
+        client.remove_access(vid, str(original_level_ids[0]))
 
     verified = {
         **record,
@@ -224,6 +237,6 @@ def update_existing_visit(client, record: dict, payload: dict,
         "access_receipt_saved": False,
         "confirmed_appointment_id": actual_appointment,
         "confirmed_checkin_id": str(actual_checkin),
-        "confirmed_group": original_group,
+        "confirmed_group": group,
         "reservation_period": reservation_period,
     }

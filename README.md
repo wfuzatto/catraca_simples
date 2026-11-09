@@ -1,8 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.69` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.70` (prévia técnica para testes).
 
-Na Preview 69, a tabela separa os dois editores: clique no início ou término da reserva para abrir o editor de datas/apartamento; clique no nome para abrir Visitor Information e editar nome, sobrenome, foto e pulseira, sem campos de reserva. Esse fluxo de reserva se aplica às reservas sem check-in.
+Na Preview 70, os campos clicáveis abrem dois editores separados: clique nas datas para editar somente o período da reserva, tanto com ou sem check-in; clique no nome para editar Visitor Information (nome, sobrenome, grupo, Apartamento/Remark, foto e pulseira), sem datas. O grupo atual aparece selecionado e pode ser trocado para outro grupo compatível. Apartamento/Remark nesta tela vem do Remark do perfil; a edição das datas preserva o Remark próprio da reserva.
 
 No **Histórico de check-ins**, as colunas **Início da reserva** e **Término da reserva** vêm diretamente da Visitor Reservation. Quando o HikCentral omite o ID da reserva no check-in, a aplicação procura um vínculo único pelo Visitor ID, grupo e período; se houver mais de uma possibilidade, não inventa as datas. O status e as passagens continuam vinculados ao check-in.
 
@@ -12,9 +12,9 @@ Na Preview 68, a edição de uma reserva sem check-in preserva o nível Visitor 
 
 Na Preview 66, a consulta também tenta resolver o vínculo ausente antes de deixar as datas em branco. O editor aceita a reserva única e sobreposta do mesmo visitante mesmo depois do check-out; se houver várias reservas possíveis, permite escolher pelo código e período.
 
-Em **Cadastros efetuados**, escolha **Reservas sem check-in** para buscar e corrigir datas e apartamento de reservas pendentes. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**.
+Em **Cadastros efetuados**, escolha **Reservas sem check-in** para consultar as reservas pendentes e abrir o editor de datas. A edição mantém a reserva pendente. Para uma visita registrada, selecione **Histórico de check-ins**.
 
-Em **Cadastros efetuados**, clique no nome para editar nome, sobrenome, foto e pulseira diretamente em Visitor Information. Clique nas datas de uma reserva sem check-in para editar período e apartamento no editor próprio da reserva. Os campos de perfil não são enviados junto com a alteração da reserva.
+Em **Cadastros efetuados**, clique no nome para editar nome, sobrenome, grupo, Remark do perfil, foto e pulseira diretamente em Visitor Information. Clique nas datas da reserva para abrir o formulário separado de período. Os campos de perfil não são exibidos nesse formulário.
 
 Quando a data da visita for alterada, o aplicativo usa somente a OpenAPI: (1) faz checkout se a visita ainda estiver ativa, (2) atualiza a reserva original pelo endpoint oficial de edição, preservando o Visitor ID, (3) confere a reserva atualizada e faz check-in apenas se o HikCentral não o tiver feito automaticamente. O endpoint de criação de reservas foi testado e devolveu outro Visitor ID nesta instalação; por isso, o aplicativo não apaga nem cria uma reserva substituta. A atualização é conferida por consultas OpenAPI e registrada para permitir recuperação se a conexão cair. A distribuição pelas catracas fica sob controle do HikCentral e não bloqueia a edição.
 
@@ -35,7 +35,7 @@ Aplicativo Windows para check-in de visitantes diretamente no HikCentral Profess
 - Pulseira NFC ACR122U/PC-SC com número editável e conversão configurável: HEX, decimal big-endian, decimal little-endian (bytes invertidos), inversão de todos os bits e inversão dos bits de cada byte. Essas opções não são equivalentes; a correspondência real deve ser confirmada com um cartão cadastrado no HikCentral.
 - Ingressos de 1, 2 ou 3 dias, personalizáveis. Por padrão a saída é às 23:59:59 do último dia incluído.
 - Entrada e saída editáveis, com fuso America/Sao_Paulo. A saída é recalculada automaticamente ao alterar a entrada ou tipo de ingresso; não há botão de cálculo.
-- Campo **Reserva ou Apartamento**, opcional, armazenado no VisitorInfo.remark.
+- Campo **Reserva ou Apartamento** no cadastro cria o Remark da reserva. Na edição, Visitor Information tem um Remark próprio do perfil; ele é lido e gravado na API de pessoas, separado do Remark da reserva.
 - Ao clicar em CADASTRAR, o aplicativo cria a reserva e registra o check-in na mesma operação, após a confirmação da prévia de acesso.
 - Níveis de acesso configurados por grupo. O padrão não concede níveis; o operador precisa definir a política aprovada.
 - Antes de enviar, mostra os níveis e catracas que receberão a operação e pede confirmação.

@@ -231,6 +231,10 @@ def change_reservation_dates(client, record, payload, selected, doors, visitor, 
                              *, journal=None, profile_update=None):
     """Check out if needed, update the linked reservation through OpenAPI, then check in."""
     validate_edit_request(payload)
+    reservation_info = (payload.get("visitorInfoList") or [{}])[0].get("VisitorInfo") or {}
+    if not str(reservation_info.get("remark") or "").strip():
+        raise EditorFieldError({
+            "reservation": "O Remark obrigatório da reserva está vazio. Informe-o em Visitor Information antes de alterar as datas."})
     vid = _id(record.get("visitor_id"))
     if not re.fullmatch(r"\d{1,48}", vid):
         raise EditorFieldError({"visit": "Selecione um cadastro com Visitor ID válido."})

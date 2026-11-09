@@ -29,12 +29,13 @@ def test_apartment_validates_the_visitor_api_limit():
     assert len(validate_visitor_remark("ã" * 128)) == 128
     with pytest.raises(EditorFieldError) as exc:
         validate_visitor_remark("A" * 129)
-    assert "reservation" in exc.value.fields
+    assert "remark" in exc.value.fields
 
 
 def test_profile_updates_name_and_card_without_touching_visit_or_booking():
     names = ["Nome antigo", "Sobrenome antigo"]
     cards = ["1111"]
+    remarks = ["Apto antigo"]
     writes = []
 
     class Client:
@@ -44,20 +45,60 @@ def test_profile_updates_name_and_card_without_touching_visit_or_booking():
                                  "visitorFamilyName": names[1]}}
             if path == PERSON_INFO:
                 return {"data": {"personId": "1865", "personGivenName": names[0],
-                                 "personFamilyName": names[1], "cards": [{"cardNo": cards[0]}]}}
+                                 "personFamilyName": names[1], "remark": remarks[0],
+                                 "cards": [{"cardNo": cards[0]}]}}
             assert path == PERSON_UPDATE
             writes.append(payload)
             names[:] = [payload["personGivenName"], payload["personFamilyName"]]
             cards[:] = [payload["cards"][0]["cardNo"]]
+            remarks[:] = [payload["remark"]]
             return {"code": "0"}
 
     client = Client()
-    assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222") == [
-        "nome e sobrenome", "pulseira"]
+    assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222",
+                          remark="Apto novo") == ["nome e sobrenome", "pulseira", "Remark"]
     assert writes == [{"personId": "1865", "personGivenName": "Nome novo",
-                       "personFamilyName": "Sobrenome novo", "cards": [{"cardNo": "2222"}]}]
-    assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222") == []
+                       "personFamilyName": "Sobrenome novo", "cards": [{"cardNo": "2222"}],
+                       "remark": "Apto novo"}]
+    assert update_profile(client, "1865", "Nome novo", "Sobrenome novo", card="2222",
+                          remark="Apto novo") == []
     assert len(writes) == 1
+
+
+def test_reservation_group_update_targets_visitor_info_and_preserves_its_dates():
+    from unregistered_reservation import _request
+
+    original = {
+        "appointRecordId": "775",
+        "appointStartTime": "2026-11-08T00:00:00-03:00",
+        "appointEndTime": "2026-11-09T23:59:59-03:00",
+        "appointStatus": "0",
+        "visitorInfo": {"visitorId": "1865", "visitorGivenName": "Wesley",
+                        "visitorFamilyName": "Teste", "visitorGroupName": "Hóspedes Vale",
+                        "remark": "321"},
+    }
+
+    class Client:
+        def post(self, path, payload):
+            assert path == DETAIL_PATH
+            assert payload == {"visitorId": "1865"}
+            return {"data": {"VisitorInfo": {
+                "visitorId": "1865", "visitorGivenName": "Wesley",
+                "visitorFamilyName": "Teste", "visitorGroupName": "Hóspedes Vale"}}}
+
+        @staticmethod
+        def access_info(levels):
+            return {"accessLevelList": levels}
+
+    body = _request(
+        Client(), original, "1865", original["appointStartTime"], original["appointEndTime"],
+        "321", "Hóspedes Serra", {"id": "8", "name": "VISITANTE_SERRA"},
+        expected_profile_group="Hóspedes Vale")
+    info = body["visitorInfoList"][0]["VisitorInfo"]
+    assert info["visitorGroupName"] == "Hóspedes Serra"
+    assert info["remark"] == "321"
+    assert body["appointStartTime"] == original["appointStartTime"]
+    assert body["appointEndTime"] == original["appointEndTime"]
 
 
 def test_checkin_lookup_accepts_explicit_empty_total_without_list():
