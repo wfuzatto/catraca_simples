@@ -37,6 +37,7 @@ from access_passages import fetch_visitor_passages, load_reader_directions
 from pending_recovery import read_pending_diagnostics, archive_pending_after_manual_review
 from registration_recovery import (seal_registration_context, open_registration_context,
                                    restore_pending_credentials)
+from updater import check_and_apply_update
 
 PREFERRED_AUTOMATIC = "Sem preferência (primeiro disponível)"
 PREFERRED_PENDING = "Aguardando grupos do HikCentral"
@@ -2297,4 +2298,6 @@ if __name__ == "__main__":
         raise SystemExit(offline_startup_smoke_check(Path(sys.argv[2])))
     if len(sys.argv) == 3 and sys.argv[1] == "--check-openapi":
         raise SystemExit(readonly_api_check(Path(sys.argv[2])))
+    if check_and_apply_update(APP_VERSION):
+        raise SystemExit(0)
     ValeApp().mainloop()

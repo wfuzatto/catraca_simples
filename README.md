@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.75` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.81` (prévia técnica para testes).
 
 Na Preview 75, o número da pulseira é enviado somente como credencial NFC (`cards[].cardNo`). Se uma edição encontrar o mesmo número no campo de documento, ela o remove dali e o grava no cartão do perfil. A edição de Visitor Information e a alteração de datas preservam essa separação.
 
@@ -68,6 +68,8 @@ Níveis iniciais conforme as imagens: CATRACAS SABIA, ENTRADA ACQUAVALE, LOJA AC
 
 ## Instalação / compilação
 No GitHub, entre em Actions > Compilar EXE Windows e faça download do artefato ValeCadastroFacialNFC-Windows depois de execução bem-sucedida. Ele contém ValeCadastroFacialNFC.exe compilado pelo PyInstaller com runtime Python embutido.
+
+Ao abrir o EXE, o aplicativo consulta `https://prodatastelecom.com.br/sites/catraca_vale/latest.json`. Se houver uma versão mais nova, baixa o executável, confere tamanho e SHA-256, substitui o arquivo após encerrar e reabre o aplicativo. O diretório do EXE precisa permitir gravação. O processo de publicação e o formato do manifesto estão em `docs/AUTO_UPDATE.md`.
 
 Requisitos externos: Windows 10/11, rede até o HikCentral e drivers PC/SC do leitor ACR122U (para leitura NFC). Câmera configurada no Windows.
 
