@@ -105,3 +105,4 @@ jobs:
             throw "Release publicada sem o EXE esperado: $tag/$asset"
           }
           Write-Host "EXE presente na release: https://github.com/$env:GH_REPO/releases/download/$tag/$asset"
+
