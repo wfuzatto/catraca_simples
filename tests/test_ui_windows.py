@@ -38,8 +38,8 @@ def test_register_button_visible_and_delivery_check_button_removed(monkeypatch, 
         root.start.set("07/11/2099")
         root.update_idletasks()
         assert root.end.get() == "08/11/2099"
-        assert root.s_validity_start.get() == "00:00:00"
-        assert root.s_validity_end.get() == "23:59:59"
+        assert not hasattr(root, "s_validity_start")
+        assert not hasattr(root, "s_validity_end")
         root.book.select(root.settings_tab)
         root.update()
         assert root.register_button.winfo_manager() == ""
@@ -209,8 +209,9 @@ def test_modern_dashboard_hides_delivery_check_and_keeps_settings_save(monkeypat
         assert root.first_entry.winfo_exists()
         assert str(root.groups_box.cget("state")) == "readonly"
         assert str(root.preferred_box.cget("state")) == "disabled"
-        assert root.schedule_text.winfo_exists()
-        assert "1 dia;1;09:00;17:00" in root.tickets_text.get("1.0", "end")
+        assert not hasattr(root, "schedule_text")
+        assert "1 dia;1" in root.tickets_text.get("1.0", "end")
+        assert "9 dias;9" in root.tickets_text.get("1.0", "end")
         assert root.book.select() == str(root.registration_tab)
         root.book.select(root.settings_tab)
         root.update()
@@ -1049,8 +1050,8 @@ def test_new_registration_date_fields_do_not_include_or_autofill_clock(monkeypat
         # Clicar no formulário de configuração não modifica as datas.
         root.book.select(root.settings_tab)
         root.update_idletasks()
-        assert root.s_validity_start.get() == "00:00:00"
-        assert root.s_validity_end.get() == "23:59:59"
+        assert not hasattr(root, "s_validity_start")
+        assert not hasattr(root, "s_validity_end")
         assert root.s_auto_checkin.get() == "Não"
         root.s_auto_checkin.set("Sim")
         assert root.s_auto_checkin.get() == "Sim"

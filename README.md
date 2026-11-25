@@ -1,8 +1,10 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.82` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.83` (prévia técnica para testes).
 
-Na Preview 82, o perfil do nível Visitor no HikCentral é a fonte de verdade para as catracas. O aplicativo usa todos os pontos retornados pela OpenAPI, sem bloquear o cadastro por diferença em relação às quantidades históricas 8/8/3. Para mudar as catracas, altere o perfil do nível no HikCentral; o aplicativo não altera essa configuração.
+Na Preview 83, o perfil da catraca no HikCentral controla os horários diários. O aplicativo não valida a agenda dentro do cadastro; envia a validade Visitor de 00:00:00 a 23:59:59 e usa ingressos de 1 a 9 dias. O perfil do nível Visitor continua sendo a fonte de verdade das catracas, e o aplicativo usa todos os pontos retornados pela OpenAPI.
+
+As notas de versões abaixo são históricas; as regras atuais são as descritas nesta seção e em **Uso atual**.
 
 Na Preview 75, o número da pulseira é enviado somente como credencial NFC (`cards[].cardNo`). Se uma edição encontrar o mesmo número no campo de documento, ela o remove dali e o grava no cartão do perfil. A edição de Visitor Information e a alteração de datas preservam essa separação.
 
@@ -45,8 +47,8 @@ Aplicativo Windows para check-in de visitantes diretamente no HikCentral Profess
 - Foto via webcam ou arquivo, enviada via Base64 JPEG. A webcam tem prévia ao vivo, captura e opção de refazer.
 - Cadastro aceita reconhecimento facial, pulseira/cartão ou ambos; ao menos um método é obrigatório.
 - Pulseira NFC ACR122U/PC-SC com número editável e conversão configurável: HEX, decimal big-endian, decimal little-endian (bytes invertidos), inversão de todos os bits e inversão dos bits de cada byte. Essas opções não são equivalentes; a correspondência real deve ser confirmada com um cartão cadastrado no HikCentral.
-- Ingressos de 1, 2 ou 3 dias, personalizáveis. Por padrão a saída é às 23:59:59 do último dia incluído.
-- Entrada e saída editáveis, com fuso America/Sao_Paulo. A saída é recalculada automaticamente ao alterar a entrada ou tipo de ingresso; não há botão de cálculo.
+- Ingressos de 1 a 9 dias, personalizáveis. O Visitor recebe validade de 00:00:00 até 23:59:59 em cada dia; o perfil da catraca limita os horários de passagem.
+- O operador informa a data de entrada; a saída é calculada pelo ingresso de 1 a 9 dias. O Visitor recebe validade de 00:00:00 a 23:59:59 em cada data.
 - Campo **Reserva ou Apartamento** no cadastro cria o Remark da reserva. Na edição, o aplicativo confirma a mudança em Visitor Information. Para uma reserva aguardando check-in, a API também grava o Remark na reserva vinculada.
 - Ao clicar em CADASTRAR, o aplicativo cria a reserva e, se **Check-in automático** estiver como **Sim**, solicita o check-in após a confirmação da prévia de acesso. O padrão é **Não**.
 - Níveis de acesso configurados por grupo. O padrão não concede níveis; o operador precisa definir a política aprovada.
@@ -185,7 +187,7 @@ Não exponha senhas/chaves em prints nem no repositório GitHub.
 A compatibilidade visual e resolução é testada automaticamente com geometria dinâmica; a validação funcional completa exige executar o EXE nos computadores reais do hotel.
 
 
-## Preview.15 — Foto e funcionamento diário dos ingressos
+## Preview.15 — Foto e funcionamento diário dos ingressos (histórico; substituída na .83)
 
 - A prévia facial agora usa a área inteira do quadro (crop proporcional central com PIL ImageOps.fit); não modifica a foto enviada ao HikCentral.
 - Ingressos agora usam Nome;Dias;Entrada;Saída, por exemplo:

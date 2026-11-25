@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.82"
+APP_VERSION = "1.0.0-preview.83"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -23,14 +23,14 @@ VALE_VISITOR_LEVELS = {
     "Hóspedes Serra": "VISITANTE_SERRA",
     "Hóspedes Vale": "VISITANTE_VALE",
 }
-VALE_VISITOR_SCHEDULE = "09:00-17:00"
 VALE_MAPPING_REVISION = 1
 # Não limitar reutilizações via qrCodeValidNum em novos visitantes.
 VALE_VALID_TIMES = 0
 
-DEFAULT_TICKETS = {"1 dia": {"days": 1, "checkin": "09:00", "checkout": "17:00"},
-                   "2 dias": {"days": 2, "checkin": "09:00", "checkout": "17:00"},
-                   "3 dias": {"days": 3, "checkin": "09:00", "checkout": "17:00"}}
+DEFAULT_TICKETS = {
+    f"{days} dia" if days == 1 else f"{days} dias": {"days": days}
+    for days in range(1, 10)
+}
 
 
 def app_dir() -> Path:
@@ -46,16 +46,7 @@ def default_settings() -> dict:
         "preferred_group": "",  # Sugestão local, nunca substitui consulta da OpenAPI.
         "auto_checkin": False,
         "valid_times": VALE_VALID_TIMES,  # Travado em zero para não limitar a utilização.
-        # Horários do PERÍODO de validade do ingresso; só nas Configurações.
-        # Agenda de catraca ACQUAVALE (09–17) é independente.
-        "validity_start_time": "00:00:00",
-        "validity_end_time": "23:59:59",
         "tickets": json.loads(json.dumps(DEFAULT_TICKETS)),
-        # Agenda ACQUAVALE confirmada pelo hotel para estes três níveis.
-        # O app nunca altera o template efetivo no HikCentral.
-        "schedule_windows": {
-            level: VALE_VISITOR_SCHEDULE for level in VALE_VISITOR_LEVELS.values()
-        },
         "group_access": {
             group: [VALE_VISITOR_LEVELS[group]] if group in VALE_VISITOR_LEVELS else []
             for group in GROUPS
@@ -148,14 +139,22 @@ def load_settings(base: Path | None = None) -> dict:
         for key in conf:
             if key in saved:
                 conf[key] = saved[key]
-        # A migration does not silently change existing opening/closing settings.
-        # Old files had only checkout; preserve it until an admin adjusts to 09:00/17:00.
-        if not isinstance(conf.get("tickets"), dict):
+        # Migrate legacy ticket entries to duration-only options. Daily access
+        # hours belong to the HikCentral gate profile, not this application.
+        saved_tickets = conf.get("tickets")
+        if not isinstance(saved_tickets, dict):
             raise ValueError("Ingressos salvos inválidos.")
-        for ticket in conf["tickets"].values():
+        tickets = json.loads(json.dumps(DEFAULT_TICKETS))
+        for name, ticket in saved_tickets.items():
             if not isinstance(ticket, dict):
                 raise ValueError("Ingresso salvo inválido.")
-            ticket.setdefault("checkin", "09:00")
+            try:
+                days = int(ticket.get("days"))
+            except (TypeError, ValueError):
+                continue
+            if str(name).strip() and 1 <= days <= 9:
+                tickets[str(name).strip()] = {"days": days}
+        conf["tickets"] = tickets
         saved_access = conf.get("group_access")
         if not isinstance(saved_access, dict):
             saved_access = {}
@@ -181,11 +180,6 @@ def load_settings(base: Path | None = None) -> dict:
             for group, level in VALE_VISITOR_LEVELS.items():
                 updated[group] = [level]
             conf["group_access"] = updated
-            schedule = conf.get("schedule_windows")
-            schedule = dict(schedule) if isinstance(schedule, dict) else {}
-            for level in VALE_VISITOR_LEVELS.values():
-                schedule.setdefault(level, VALE_VISITOR_SCHEDULE)
-            conf["schedule_windows"] = schedule
             conf["access_mapping_revision"] = VALE_MAPPING_REVISION
         # Um operador podia salvar 1..100 nas versões anteriores.
         # Corrigir APENAS a chave de VALID TIMES, mantendo todas as demais
@@ -207,7 +201,6 @@ def load_settings(base: Path | None = None) -> dict:
         # Arquivos atualizados podem ser personalizados livremente sem
         # remapeamento automático em reinicializações futuras.
     conf["valid_times"] = VALE_VALID_TIMES
-    visitor_validity_hours(conf)
     return conf
 
 
@@ -217,7 +210,6 @@ def save_settings(settings: dict, base: Path | None = None) -> None:
     safe = {k: settings[k] for k in default_settings() if k in settings}
     # Não permitir que configuracões antigas/telas desatualizadas gravem 1..100.
     safe["valid_times"] = VALE_VALID_TIMES
-    visitor_validity_hours(safe)
     original = dest / "settings.json"
     backup = dest / "settings.backup-pre-visitor-levels.json"
     # Preserve a recoverable copy of the old local group mappings on first save.
@@ -261,24 +253,9 @@ def load_api_keys(base: Path | None = None) -> tuple[str, str]:
     return data.get("app_key", ""), data.get("app_secret", "")
 
 
-def visitor_validity_hours(settings: dict) -> tuple[time, time]:
-    """Horários técnicos do período do visitante, editáveis só em Configurações.
-
-    Não representam a agenda ACS: a concessão de acesso continua limitada
-    pelo Access Schedule do nível no HikCentral após aplicar aos terminais.
-    """
-    start = str(settings.get("validity_start_time", "00:00:00")).strip()
-    end = str(settings.get("validity_end_time", "23:59:59")).strip()
-    try:
-        if (not re.fullmatch(r"\d{2}:\d{2}:\d{2}", start)
-                or not re.fullmatch(r"\d{2}:\d{2}:\d{2}", end)):
-            raise ValueError("Formato inválido")
-        beginning, finish = time.fromisoformat(start), time.fromisoformat(end)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Configurações: use HH:MM:SS na validade de entrada/saída.") from exc
-    if beginning >= finish:
-        raise ValueError("Validade: hora inicial deve ser anterior à hora final.")
-    return beginning, finish
+def visitor_validity_hours(settings: dict | None = None) -> tuple[time, time]:
+    """Visitor records always span the full calendar day; gate profiles limit use."""
+    return time(0, 0, 0), time(23, 59, 59)
 
 
 def parse_visit_date(value: str):
@@ -293,28 +270,29 @@ def parse_visit_date(value: str):
 
 def visitor_period_from_dates(entry_date: str, exit_date: str, settings: dict,
                               ticket: dict | None = None) -> tuple[datetime, datetime]:
-    """Constrói a validade local com horas apenas das Configurações.
+    """Constrói a validade Visitor de dia inteiro nas datas escolhidas.
 
-    Campos de atendimento não aceitam horários; o período transmitido segue
-    a data escolhida, e nunca datetime.now() nem o horário do template ACS.
+    O perfil da catraca no HikCentral controla os horários diários de passagem.
     """
     entry = parse_visit_date(entry_date)
     exit_ = parse_visit_date(exit_date)
     if exit_ < entry:
         raise ValueError("Data de saída anterior à data de entrada.")
     days = (exit_ - entry).days + 1
-    if not 1 <= days <= 365:
-        raise ValueError("Período de visitante deve ter entre 1 e 365 dias.")
+    if not 1 <= days <= 9:
+        raise ValueError("Período de visitante deve ter entre 1 e 9 dias.")
     if ticket is not None:
         try:
             approved_days = int(ticket["days"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("Ingresso sem duração válida.") from exc
+        if not 1 <= approved_days <= 9:
+            raise ValueError("Ingresso deve ter entre 1 e 9 dias.")
         if days != approved_days:
             raise ValueError(
                 f"Ingresso de {approved_days} dia(s): a saída deve ser "
                 f"{(entry + timedelta(days=approved_days - 1)):%d/%m/%Y}.")
-    start_time, end_time = visitor_validity_hours(settings)
+    start_time, end_time = visitor_validity_hours()
     start = datetime.combine(entry, start_time, tzinfo=TZ)
     end = datetime.combine(exit_, end_time, tzinfo=TZ)
     if end <= start:
@@ -327,113 +305,16 @@ def parse_local(value: str) -> datetime:
     return dt.replace(tzinfo=TZ)
 
 
-_HH_MM = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d\Z")
-
-
-def ticket_hours(ticket: dict) -> tuple[str, str]:
-    opening = str(ticket.get("checkin", "09:00"))
-    closing = str(ticket["checkout"])
-    if not _HH_MM.fullmatch(opening) or not _HH_MM.fullmatch(closing):
-        raise ValueError("Entrada e saída devem usar HH:MM.")
-    if opening >= closing:
-        raise ValueError("Hora de entrada deve ser anterior à hora de saída, no mesmo dia.")
-    return opening, closing
-
-
-def default_ticket_start(now: datetime, ticket: dict) -> datetime:
-    """Pré-preenche a ENTRADA na abertura do ingresso, não na hora do caixa.
-
-    Antes do fechamento: início às HH:MM de abertura no dia corrente.
-    A partir do fechamento: próximo dia às HH:MM de abertura.
-    Um valor escolhido manualmente NÃO passa por esta função no cadastro.
-    """
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("Relógio local precisa conter fuso horário.")
-    opening, closing = ticket_hours(ticket)
-    local = now.astimezone(TZ)
-    day = local.date()
-    if local.strftime("%H:%M") >= closing:
-        day += timedelta(days=1)
-    return datetime.combine(day, time.fromisoformat(opening), tzinfo=TZ)
-
-
-def normalize_ticket_start(start: datetime, ticket: dict) -> datetime:
-    """Ticket starts at opening (or later, if already open), never at closed hours."""
-    opening, closing = ticket_hours(ticket)
-    open_time = time.fromisoformat(opening)
-    close_time = time.fromisoformat(closing)
-    day = start.astimezone(TZ).date()
-    local_time = start.astimezone(TZ).time().replace(tzinfo=None)
-    if local_time < open_time:
-        return datetime.combine(day, open_time, tzinfo=TZ)
-    if local_time >= close_time:
-        return datetime.combine(day + timedelta(days=1), open_time, tzinfo=TZ)
-    return start.astimezone(TZ)
-
-
 def end_for_ticket(start: datetime, ticket: dict) -> datetime:
+    """Returns the selected ticket's last date at 23:59:59 local time."""
     days = int(ticket["days"])
-    if not 1 <= days <= 365:
-        raise ValueError("Duração do ingresso deve ser de 1 a 365 dias.")
-    opening, closing = ticket_hours(ticket)
+    if not 1 <= days <= 9:
+        raise ValueError("Duração do ingresso deve ser de 1 a 9 dias.")
     end_date = start.astimezone(TZ).date() + timedelta(days=days - 1)
-    end = datetime.combine(end_date, time.fromisoformat(closing), tzinfo=TZ)
+    end = datetime.combine(end_date, time(23, 59, 59), tzinfo=TZ)
     if end <= start:
         raise ValueError("Saída calculada não é posterior à entrada; ajuste o horário.")
     return end
-
-
-def validate_ticket_period(start: datetime, end: datetime, ticket: dict) -> None:
-    opening, closing = ticket_hours(ticket)
-    local_start = start.astimezone(TZ)
-    if not opening <= local_start.strftime("%H:%M") < closing:
-        raise ValueError(f"Entrada permitida apenas entre {opening} e {closing}.")
-    expected_end = end_for_ticket(start, ticket)
-    if abs((end.astimezone(TZ) - expected_end).total_seconds()) > 0:
-        raise ValueError(
-            f"Saída deve ser {expected_end:%d/%m/%Y %H:%M}. "
-            "Para alterar horários diários, ajuste o ingresso em Configurações."
-        )
-
-
-def parse_schedule_lines(raw: str) -> dict[str, str]:
-    """Schedules confirmed by an administrator against actual HikCentral templates."""
-    mapping = {}
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        if "=" not in line or "-" not in line:
-            raise ValueError("Agendas: use Nome do nível=09:00-17:00 por linha.")
-        level, window = line.split("=", 1)
-        start, end = window.split("-", 1)
-        level, start, end = level.strip(), start.strip(), end.strip()
-        ticket_hours({"checkin": start, "checkout": end})
-        if not level or level in mapping:
-            raise ValueError("Agenda: nome de nível vazio ou duplicado.")
-        mapping[level] = f"{start}-{end}"
-    return mapping
-
-
-def require_confirmed_daily_schedule(
-    levels: list[str], ticket: dict, schedule_windows: dict[str, str]
-) -> None:
-    """Fail closed until actual access-level schedule is manually verified.
-
-    Visitor date boundaries alone cannot enforce a repeated daily window.
-    This configuration is an operator attestation, NOT an OpenAPI/device proof.
-    """
-    opening, closing = ticket_hours(ticket)
-    window = f"{opening}-{closing}"
-    if not levels or not isinstance(schedule_windows, dict):
-        raise ValueError("Níveis/agendas de acesso ainda não validados.")
-    missing = [name for name in levels if schedule_windows.get(name) != window]
-    if missing:
-        raise ValueError(
-            "Horários diários NÃO confirmados no HikCentral para os níveis: "
-            + ", ".join(missing)
-            + f". Configure e teste o Access Schedule Template ({window}) "
-              "em cada nível Visitor; depois confirme em Configurações."
-        )
 
 
 @dataclass
@@ -562,18 +443,18 @@ def parse_ticket_lines(raw: str) -> dict:
         if not line.strip():
             continue
         fields = [p.strip() for p in line.split(";")]
-        if len(fields) not in (3, 4) or not fields[0]:
-            raise ValueError("Ingressos: use Nome;Dias;Entrada;Saída (HH:MM) por linha.")
-        if len(fields) == 3:
-            # Legacy format: preserve checkout; default opening is 09:00.
-            fields.insert(2, "09:00")
-        ticket = {"days": int(fields[1]), "checkin": fields[2], "checkout": fields[3]}
+        if len(fields) not in (2, 3, 4) or not fields[0]:
+            raise ValueError("Ingressos: use Nome;Dias (de 1 a 9) por linha.")
+        try:
+            days = int(fields[1])
+        except ValueError as exc:
+            raise ValueError("Ingresso deve ter de 1 a 9 dias.") from exc
+        if not 1 <= days <= 9:
+            raise ValueError("Ingresso deve ter de 1 a 9 dias.")
         if fields[0] in tickets:
             raise ValueError(f"Tipo de ingresso duplicado: {fields[0]}.")
-        ticket_hours(ticket)
-        test_start = datetime(2026, 1, 1, 12, tzinfo=TZ)
-        end_for_ticket(normalize_ticket_start(test_start, ticket), ticket)
-        tickets[fields[0]] = ticket
+        # Extra legacy columns are ignored; only HikCentral profiles set hours.
+        tickets[fields[0]] = {"days": days}
     if not tickets:
         raise ValueError("Cadastre pelo menos um ingresso.")
     return tickets

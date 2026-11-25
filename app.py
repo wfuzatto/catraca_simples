@@ -15,11 +15,10 @@ from core import (APP_VERSION, GROUPS, VALE_VISITOR_LEVELS, TZ, Visitor, load_se
                   initial_visitor_group, validate_visitor_group_selection, validate_valid_times,
                   visitor_levels_for_group, verify_visitor_access_plan,
                   mark_appointment_inflight, mark_checkin_started,
-                  save_api_keys, parse_local, end_for_ticket, registration_payload,
-                  prepare_face_jpeg, face_cover_preview, normalize_ticket_start, default_ticket_start,
-                  validate_ticket_period, require_confirmed_daily_schedule,
-                  parse_visit_date, visitor_period_from_dates, visitor_validity_hours,
-                  parse_ticket_lines, parse_access_lines, parse_schedule_lines, load_pending, save_pending,
+                  save_api_keys, parse_local, registration_payload,
+                  prepare_face_jpeg, face_cover_preview,
+                  parse_visit_date, visitor_period_from_dates,
+                  parse_ticket_lines, parse_access_lines, load_pending, save_pending,
                   mark_assigned, mark_card_confirmed, mark_registered, clear_pending,
                   save_last_delivery, load_last_delivery)
 from devices import list_readers, read_uid, to_card_number
@@ -208,7 +207,7 @@ class ValeApp(tk.Tk):
         options.columnconfigure(0, weight=1)
         options.columnconfigure(1, weight=1)
         options.rowconfigure(0, weight=1)
-        tickets = ttk.LabelFrame(options, text="Ingressos: Nome;Dias;HH:MM", padding=8)
+        tickets = ttk.LabelFrame(options, text="Ingressos: Nome;Dias (1 a 9)", padding=8)
         tickets.grid(row=0, column=0, sticky="nsew", padx=6)
         self.tickets_text = tk.Text(tickets, height=8, width=26, font=("Consolas", 10))
         self.tickets_text.pack(fill="both", expand=True)
@@ -235,8 +234,6 @@ class ValeApp(tk.Tk):
         self.s_cert_pin.set(s.get("cert_pin_sha256", ""))
         self.s_auto_checkin.set("Sim" if s.get("auto_checkin", False) else "Não")
         self.s_valid_times.set("0")
-        self.s_validity_start.set(s.get("validity_start_time", "00:00:00"))
-        self.s_validity_end.set(s.get("validity_end_time", "23:59:59"))
         self.s_face_enabled.set(bool(s.get("face_auto_capture", True)))
         self.s_face_stable.set(str(s.get("face_stability_ms", 900)))
         self.s_face_sensitivity.set(s.get("face_sensitivity", "Normal"))
@@ -248,12 +245,8 @@ class ValeApp(tk.Tk):
         self._preferred_groups_synced = False
         self.tickets_text.delete("1.0", tk.END)
         self.tickets_text.insert("1.0", "\n".join(
-            f"{name};{opt['days']};{opt.get('checkin', '09:00')};{opt['checkout']}"
+            f"{name};{opt['days']}"
             for name, opt in s["tickets"].items()))
-        self.schedule_text.delete("1.0", tk.END)
-        self.schedule_text.insert("1.0", "\n".join(
-            f"{name}={window}" for name, window in
-            s.get("schedule_windows", {}).items()))
         self.access_text.delete("1.0", tk.END)
         self.access_text.insert("1.0", "\n".join(
             f"{name}={','.join(levels)}" for name, levels in s["group_access"].items()))
@@ -262,7 +255,7 @@ class ValeApp(tk.Tk):
         self._set_current_ticket_period()
 
     def _set_current_ticket_period(self, now=None):
-        """Sugere somente a data local. A hora é protegida em Configurações."""
+        """Sugere a data local; Visitor validity remains fixed to the full day."""
         self.start.set((now or datetime.now(TZ)).astimezone(TZ).strftime("%d/%m/%Y"))
         self.calculate()
 
@@ -296,7 +289,7 @@ class ValeApp(tk.Tk):
             ticket = self.settings["tickets"][self.ticket.get()]
             first = parse_visit_date(self.start.get())
             days = int(ticket["days"])
-            if not 1 <= days <= 365:
+            if not 1 <= days <= 9:
                 raise ValueError("Duração inválida")
             result = first + timedelta(days=days - 1)
         except (KeyError, ValueError, TypeError, OverflowError):
@@ -333,15 +326,10 @@ class ValeApp(tk.Tk):
                 "face_require_quality": bool(self.s_face_quality.get()),
                 "face_timeout_s": int(self.s_face_timeout.get()),
                 "valid_times": 0,  # Valor fixo: sem limitação de usos.
-                "validity_start_time": self.s_validity_start.get().strip(),
-                "validity_end_time": self.s_validity_end.get().strip(),
                 "tickets": parse_ticket_lines(self.tickets_text.get("1.0", tk.END)),
                 "group_access": parse_access_lines(self.access_text.get("1.0", tk.END)),
                 "access_mapping_revision": self.settings.get("access_mapping_revision", 1),
-                "schedule_windows": parse_schedule_lines(
-                    self.schedule_text.get("1.0", tk.END))
             }
-            visitor_validity_hours(conf)
             from face_capture_logic import FaceGuideConfig
             FaceGuideConfig.from_settings(conf)
             if not conf["host"] or not 1 <= conf["port"] <= 65535:
@@ -676,11 +664,9 @@ class ValeApp(tk.Tk):
                 group, self.connected_groups, self.settings["group_access"],
                 self.settings.get("preferred_group", ""))
             ticket = self.settings["tickets"][self.ticket.get()]
-            # O usuário informa APENAS datas; horário de validade é protegido.
+            # O usuário escolhe a data; validade Visitor é sempre o dia inteiro.
             start, end = visitor_period_from_dates(
                 self.start.get(), self.end.get(), self.settings, ticket)
-            require_confirmed_daily_schedule(
-                requested_levels, ticket, self.settings.get("schedule_windows", {}))
             obj = Visitor(self.first.get(), self.last.get(), group, self.photo_data,
                           self.card.get().strip(), start, end, self.reservation.get())
             payload = registration_payload(obj, 0)
@@ -722,9 +708,8 @@ class ValeApp(tk.Tk):
                 f"Grupo: {group}\n"
                 f"Entrada: {obj.arrival.strftime('%d/%m/%Y %H:%M %Z')}\n"
                 f"Sa\u00edda: {obj.departure.strftime('%d/%m/%Y %H:%M %Z')}\n"
-                f"Validade do ingresso: {start:%H:%M:%S}–{end:%H:%M:%S} nas datas escolhidas.\n"
-                f"Agenda do nível Visitor: {ticket.get('checkin', '09:00')}-"
-                f"{ticket['checkout']} (conferir aplicação nas catracas).\n\n"
+                f"Validade do Visitor: {start:%H:%M:%S}–{end:%H:%M:%S} nas datas escolhidas.\n"
+                "O perfil da catraca controla os horários diários de passagem.\n\n"
                 "N\u00edveis Visitor que ser\u00e3o associados:\n" + "\n".join(level_lines) +
                 "\n\nCatracas alcan\u00e7adas por esses n\u00edveis:\n" + "\n".join(door_lines) +
                 f"\n\nCredencial(is) a enviar: {credentials}. " +
@@ -2235,7 +2220,7 @@ def offline_startup_smoke_check(report_path: Path) -> int:
 
     Intended to run on the actual frozen Windows EXE before publishing it.
     """
-    from core import default_settings, VALE_VISITOR_LEVELS, VALE_VISITOR_SCHEDULE
+    from core import default_settings, VALE_VISITOR_LEVELS
     report = {"kind": "offline_startup_smoke", "version": APP_VERSION,
               "network_used": False, "visitor_created": False, "ok": False}
     try:
@@ -2243,8 +2228,6 @@ def offline_startup_smoke_check(report_path: Path) -> int:
         for group, level in VALE_VISITOR_LEVELS.items():
             if conf["group_access"].get(group) != [level]:
                 raise ValueError("Configuração padrão de grupo inválida.")
-            if conf["schedule_windows"].get(level) != VALE_VISITOR_SCHEDULE:
-                raise ValueError("Agenda diária padrão inválida.")
             # Fake identifiers only; point counts are controlled by the HikCentral profile.
             points = ["offline-point"]
             verify_visitor_access_plan(

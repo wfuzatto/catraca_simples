@@ -17,14 +17,14 @@ O workflow **Compilar EXE Windows** testa o projeto, compila o EXE e publica uma
 
 ```json
 {
-  "version": "1.0.0-preview.81",
+  "version": "1.0.0-preview.83",
   "download_url": "https://prodatastelecom.com.br/sites/catraca_vale/ValeCadastroFacialNFC.exe",
-  "size_bytes": 72997189,
+  "size_bytes": 0,
   "sha256": "<64 caracteres hexadecimais do SHA-256>"
 }
 ```
 
-O tamanho e o hash acima são exemplos até serem preenchidos com o EXE daquela versão. Use HTTPS no site. Publique o EXE antes do manifesto para que nenhum cliente leia uma versão nova enquanto o arquivo ainda estiver sendo transferido.
+`size_bytes` e `sha256` devem ser preenchidos com os valores do EXE da preview.83. Use HTTPS no site. Publique o EXE antes do manifesto para que nenhum cliente leia uma versão nova enquanto o arquivo ainda estiver sendo transferido.
 
 ## Substituição local
 

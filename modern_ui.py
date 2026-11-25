@@ -336,7 +336,8 @@ def _registration(app):
     _text(period,
           "Informe apenas a data de entrada. A saída é calculada pelo tipo de ingresso e não pode ser editada. "
           "Após cada cadastro concluído, o formulário volta para hoje e 1 dia. "
-          "A agenda ACQUAVALE continua controlando o horário das catracas.",
+          "A validade do Visitor é 00:00–23:59; o perfil da catraca limita os horários de passagem. "
+          "Ingressos disponíveis de 1 a 9 dias.",
           color=MUTED, size=11).pack(anchor="w", pady=(10, 0))
 
 
@@ -518,8 +519,6 @@ def _settings(app):
     app.s_preferred_group = tk.StringVar()
     app.s_auto_checkin = tk.StringVar(value="Não")
     app.s_valid_times = tk.StringVar(value="0")
-    app.s_validity_start = tk.StringVar(value="00:00:00")
-    app.s_validity_end = tk.StringVar(value="23:59:59")
     app.s_face_enabled = tk.BooleanVar(value=True)
     app.s_face_stable = tk.StringVar(value="900")
     app.s_face_sensitivity = tk.StringVar(value="Normal")
@@ -594,25 +593,16 @@ def _settings(app):
     _text(local,
           "0 = limite de utilizações desativado. Travado por segurança em todos os "
           "cadastros (Day use, Hóspedes Serra e Hóspedes Vale). "
-          "Datas e agendas dos níveis continuam obrigatórias.",
+          "O perfil da catraca controla os horários diários; o Visitor recebe validade integral.",
           size=11, color=MUTED).pack(anchor="w", pady=(7, 0))
 
     validity_area = ctk.CTkFrame(local, fg_color="transparent")
     validity_area.pack(fill="x", pady=(14, 0))
-    _text(validity_area, "Horários de validade do ingresso (somente administrador)",
-          size=12, bold=True).pack(anchor="w", pady=(0, 6))
-    validity_row = ctk.CTkFrame(validity_area, fg_color="transparent")
-    validity_row.pack(fill="x")
-    _text(validity_row, "Entrada (HH:MM:SS)", size=11, color=MUTED).pack(side="left")
-    ttk.Entry(validity_row, textvariable=app.s_validity_start, width=11,
-              font=("Segoe UI", 12)).pack(side="left", padx=(8, 24), ipady=6)
-    _text(validity_row, "Saída (HH:MM:SS)", size=11, color=MUTED).pack(side="left")
-    ttk.Entry(validity_row, textvariable=app.s_validity_end, width=11,
-              font=("Segoe UI", 12)).pack(side="left", padx=(8, 0), ipady=6)
+    _text(validity_area, "Validade enviada ao Visitor", size=12, bold=True).pack(
+        anchor="w", pady=(0, 6))
     _text(validity_area,
-          "Padrão: 00:00:00–23:59:59. Estes horários definem a validade do visitante; "
-          "NÃO substituem o template ACQUAVALE 09:00–17:00. "
-          "Altere apenas após conferir o efeito operacional.",
+          "Entrada 00:00:00 e saída 23:59:59 em cada dia. O horário permitido de passagem "
+          "é definido exclusivamente pelo perfil da catraca no HikCentral.",
           size=11, color=MUTED).pack(anchor="w", pady=(7, 0))
 
     # Isolated offline face capture preferences; original Visitor and NFC settings unchanged.
@@ -655,9 +645,9 @@ def _settings(app):
     app.editors_grid = editors
     ticket_edit = ctk.CTkFrame(editors, fg_color="transparent")
     ticket_edit.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-    _text(ticket_edit, "Ingressos · Nome;Dias;Abertura agenda;Fechamento agenda", size=12, bold=True).pack(anchor="w", pady=(0, 6))
+    _text(ticket_edit, "Ingressos · Nome;Dias (1 a 9)", size=12, bold=True).pack(anchor="w", pady=(0, 6))
     app.tickets_text = tk.Text(
-        ticket_edit, height=7, bg="#FAFCFF", fg=INK, insertbackground=INK,
+        ticket_edit, height=9, bg="#FAFCFF", fg=INK, insertbackground=INK,
         relief="flat", highlightthickness=1, highlightbackground="#D5DFEB",
         font=("Consolas", 11), wrap="none", padx=11, pady=9)
     app.tickets_text.pack(fill="both", expand=True)
@@ -679,20 +669,12 @@ def _settings(app):
         "sem níveis All-Day de funcionários.",
         size=11, color=MUTED).pack(anchor="w", pady=(8, 0))
 
-    _text(catalog, "Agendas diárias verificadas no HikCentral · Nível=09:00-17:00",
-          size=12, bold=True).pack(anchor="w", pady=(15, 6))
-    app.schedule_text = tk.Text(
-        catalog, height=5, bg="#FAFCFF", fg=INK, insertbackground=INK,
-        relief="flat", highlightthickness=1, highlightbackground="#D5DFEB",
-        font=("Consolas", 10), wrap="none", padx=11, pady=9)
-    app.schedule_text.pack(fill="x")
     _text(
         catalog,
-        "O aplicativo envia a todos os pontos associados ao nível configurado, conforme retornados "
-        "pelo HikCentral; a quantidade pode variar. O perfil do HikCentral define quais catracas "
-        "recebem a credencial. Agenda ACQUAVALE 09:00–17:00 diariamente, conforme informado "
-        "pelo hotel; o aplicativo não altera agenda, níveis ou catracas.",
-        size=11, color="#A05A14").pack(anchor="w", pady=(8, 0))
+        "O aplicativo envia todos os pontos associados ao nível configurado, conforme retornados "
+        "pelo HikCentral. O perfil define as catracas e limita os horários de passagem; "
+        "o aplicativo não valida nem altera a agenda do perfil.",
+        size=11, color="#A05A14").pack(anchor="w", pady=(15, 0))
 
     cleanup_section = _card(scroller)
     _section(cleanup_section, "✦", "Manutenção da estação",

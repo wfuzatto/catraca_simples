@@ -20,8 +20,8 @@ def test_day_pass_lengths():
     start = datetime(2026, 10, 24, 10, tzinfo=TZ)
     tickets = default_settings()["tickets"]
     assert [end_for_ticket(start, tickets[x]).day for x in ["1 dia", "2 dias", "3 dias"]] == [24, 25, 26]
-    assert end_for_ticket(start, tickets["1 dia"]).strftime("%H:%M:%S") == "17:00:00"
-    assert tickets["3 dias"]["checkin"] == "09:00"
+    assert end_for_ticket(start, tickets["1 dia"]).strftime("%H:%M:%S") == "23:59:59"
+    assert [ticket["days"] for ticket in tickets.values()] == list(range(1, 10))
 
 
 def test_payload_visitor_group_photo_card_remark():
@@ -117,11 +117,8 @@ def test_current_visitor_defaults_are_scoped_to_real_approved_levels():
         "Hóspedes Vale": ["VISITANTE_VALE"],
         "Visitors": [],
     }
-    assert settings["schedule_windows"] == {
-        "DAY_USE": "09:00-17:00",
-        "VISITANTE_SERRA": "09:00-17:00",
-        "VISITANTE_VALE": "09:00-17:00",
-    }
+    assert "schedule_windows" not in settings
+    assert [ticket["days"] for ticket in settings["tickets"].values()] == list(range(1, 10))
 
 
 def test_migrate_legacy_saved_levels_without_touching_other_settings(tmp_path):
@@ -139,9 +136,9 @@ def test_migrate_legacy_saved_levels_without_touching_other_settings(tmp_path):
     assert loaded["group_access"]["Hóspedes Vale"] == ["VISITANTE_VALE"]
     assert loaded["group_access"]["Special event"] == ["CUSTOM_VISITOR_LEVEL"]
     assert loaded["group_access"]["Visitors"] == []
-    assert loaded["schedule_windows"]["DAY_USE"] == "09:00-17:00"
+    assert "schedule_windows" not in loaded
     assert loaded["access_mapping_revision"] == 1
-    assert loaded["tickets"]["Especial"] == settings["tickets"]["Especial"]
+    assert loaded["tickets"]["Especial"] == {"days": 1}
     assert loaded["valid_times"] == 0
     assert loaded["preferred_group"] == "Hóspedes Vale"
     # Depois que a migração for salva, escolhas futuras não são sobrescritas.
@@ -158,13 +155,12 @@ def test_migrate_legacy_saved_levels_without_touching_other_settings(tmp_path):
 
 
 def test_ticket_validation_and_duplicate_names():
-    assert parse_ticket_lines("Especial;1;02:00;02:30")["Especial"]["checkin"] == "02:00"
+    assert parse_ticket_lines("Especial;1")["Especial"] == {"days": 1}
     with pytest.raises(ValueError, match="duplicado"):
         parse_ticket_lines("Dia;1;09:00;17:00\nDia;2;09:00;17:00")
-    with pytest.raises(ValueError, match="HH:MM"):
-        parse_ticket_lines("Invalido;1;09:00;25:00")
-    with pytest.raises(ValueError, match="anterior"):
-        parse_ticket_lines("Invalido;1;18:00;09:00")
+    assert parse_ticket_lines("Invalido;1;horario ignorado") == {"Invalido": {"days": 1}}
+    with pytest.raises(ValueError, match="1 a 9"):
+        parse_ticket_lines("Invalido;10")
 
 
 def test_visitor_expiry_must_be_future():
@@ -215,9 +211,9 @@ def test_checkout_rollover_month_and_year_and_payload_timezone():
     from core import parse_local
     from datetime import datetime
     cases = [
-        ("31/10/2099 10:45", "2 dias", "01/11/2099 17:00"),
-        ("31/12/2099 11:00", "3 dias", "02/01/2100 17:00"),
-        ("24/10/2099 10:45", "1 dia", "24/10/2099 17:00"),
+        ("31/10/2099 10:45", "2 dias", "01/11/2099 23:59"),
+        ("31/12/2099 11:00", "3 dias", "02/01/2100 23:59"),
+        ("24/10/2099 10:45", "1 dia", "24/10/2099 23:59"),
     ]
     for start_text, ticket_name, expected in cases:
         start = parse_local(start_text)
@@ -227,7 +223,7 @@ def test_checkout_rollover_month_and_year_and_payload_timezone():
         payload = registration_payload(visitor)
         sent_end = datetime.fromisoformat(payload["visitEndTime"])
         assert sent_end.astimezone(TZ).date() == end.date()
-        assert sent_end.hour == 17 and sent_end.minute == 0 and sent_end.second == 0
+        assert sent_end.hour == 23 and sent_end.minute == 59 and sent_end.second == 59
         assert payload["visitEndTime"].endswith("-03:00")
 
 
@@ -295,46 +291,20 @@ def test_window_geometry_respects_display_and_taskbar():
 
 
 
-def test_ticket_daily_windows_start_end_and_migration(tmp_path):
-    from core import (normalize_ticket_start, validate_ticket_period,
-                      ticket_hours, parse_local)
-    from datetime import timedelta
+def test_ticket_catalog_uses_days_only_and_migrates_legacy_hours(tmp_path):
+    from core import parse_local
     ticket = parse_ticket_lines("3 dias;3;09:00;17:00")["3 dias"]
-    assert ticket_hours(ticket) == ("09:00", "17:00")
-    early = parse_local("01/11/2099 00:14")
-    first = normalize_ticket_start(early, ticket)
-    last = end_for_ticket(first, ticket)
-    assert first.strftime("%d/%m/%Y %H:%M") == "01/11/2099 09:00"
-    assert last.strftime("%d/%m/%Y %H:%M") == "03/11/2099 17:00"
-    validate_ticket_period(first, last, ticket)
-    with pytest.raises(ValueError, match="Entrada"):
-        validate_ticket_period(first.replace(hour=8), last, ticket)
-    with pytest.raises(ValueError, match="Saída"):
-        validate_ticket_period(first, last + timedelta(minutes=5), ticket)
-    next_opening = normalize_ticket_start(parse_local("01/11/2099 20:00"), ticket)
-    assert next_opening.strftime("%d/%m/%Y %H:%M") == "02/11/2099 09:00"
-    assert parse_ticket_lines("Antigo;2;23:59")["Antigo"] == {
-        "days": 2, "checkin": "09:00", "checkout": "23:59"
-    }
+    assert ticket == {"days": 3}
+    start = parse_local("01/11/2099 00:14")
+    last = end_for_ticket(start, ticket)
+    assert last.strftime("%d/%m/%Y %H:%M:%S") == "03/11/2099 23:59:59"
+    assert parse_ticket_lines("Antigo;2;23:59")["Antigo"] == {"days": 2}
     old = default_settings()
     old["tickets"] = {"Antigo": {"days": 2, "checkout": "23:59"}}
     save_settings(old, tmp_path)
-    assert load_settings(tmp_path)["tickets"]["Antigo"]["checkin"] == "09:00"
-    assert load_settings(tmp_path)["tickets"]["Antigo"]["checkout"] == "23:59"
-
-
-def test_daily_schedule_requires_explicit_admin_confirmation():
-    from core import parse_schedule_lines, require_confirmed_daily_schedule
-    ticket = parse_ticket_lines("3 dias;3;09:00;17:00")["3 dias"]
-    levels = ["ENTRADA ACQUAVALE", "CATRACAS SABIA"]
-    with pytest.raises(ValueError, match="NÃO confirmados"):
-        require_confirmed_daily_schedule(levels, ticket, {})
-    mapping = parse_schedule_lines(
-        "ENTRADA ACQUAVALE=09:00-17:00\nCATRACAS SABIA=09:00-17:00")
-    assert mapping == dict.fromkeys(levels, "09:00-17:00")
-    require_confirmed_daily_schedule(levels, ticket, mapping)
-    with pytest.raises(ValueError, match="NÃO confirmados"):
-        require_confirmed_daily_schedule(levels, ticket, {"ENTRADA ACQUAVALE": "08:00-22:00"})
+    migrated = load_settings(tmp_path)
+    assert migrated["tickets"]["Antigo"] == {"days": 2}
+    assert [ticket["days"] for ticket in migrated["tickets"].values()] == list(range(1, 10))
 
 
 def test_face_preview_fills_frame_for_small_and_wide_images():
@@ -409,16 +379,14 @@ def test_appointment_inflight_marker_blocks_retries_and_upgrades(tmp_path):
         save_pending("VISITOR-2", ["VISITOR-LEVEL-ID"], tmp_path)
 
 
-def test_visitor_timezone_and_daily_window():
-    from core import parse_local, registration_payload, validate_ticket_period
-    start = parse_local("02/11/2099 09:00")
-    end = parse_local("04/11/2099 17:00")
-    ticket = {"days": 3, "checkin": "09:00", "checkout": "17:00"}
-    validate_ticket_period(start, end, ticket)
+def test_visitor_timezone_and_full_day_validity():
+    from core import visitor_period_from_dates, registration_payload
+    start, end = visitor_period_from_dates(
+        "02/11/2099", "04/11/2099", default_settings(), {"days": 3})
     payload = registration_payload(
         Visitor("Teste", "Local", "Hóspedes Serra", b"", "123456789", start, end, "123"))
-    assert payload["visitStartTime"] == "2099-11-02T09:00:00-03:00"
-    assert payload["visitEndTime"] == "2099-11-04T17:00:00-03:00"
+    assert payload["visitStartTime"] == "2099-11-02T00:00:00-03:00"
+    assert payload["visitEndTime"] == "2099-11-04T23:59:59-03:00"
     info = payload["visitorInfoList"][0]["VisitorInfo"]
     assert info["remark"] == "123"
     assert info["cards"][0]["cardNo"] == "123456789"
@@ -485,7 +453,7 @@ def test_existing_nonzero_settings_migrate_and_survive_reopening(tmp_path):
     assert first_boot["camera_index"] == previous["camera_index"]
     assert first_boot["preferred_group"] == previous["preferred_group"]
     assert first_boot["card_format"] == previous["card_format"]
-    assert first_boot["tickets"]["Especial"] == previous["tickets"]["Especial"]
+    assert first_boot["tickets"]["Especial"] == {"days": 4}
     assert json.loads(path.read_text(encoding="utf-8"))["valid_times"] == 0
     backup = tmp_path / "settings.backup-pre-valid-times-zero.json"
     assert json.loads(backup.read_text(encoding="utf-8"))["valid_times"] == 1
@@ -514,16 +482,14 @@ def test_valid_times_zero_is_applied_to_all_visitor_groups(group):
         assert info["accessInfo"]["qrCodeValidNum"] == 0
 
 
-def test_calendar_validity_full_day_and_schedule_independent():
-    from core import visitor_period_from_dates, require_confirmed_daily_schedule
+def test_calendar_validity_full_day_and_gate_schedule_is_profile_managed():
+    from core import visitor_period_from_dates
     settings = default_settings()
     ticket = settings["tickets"]["2 dias"]
     start, end = visitor_period_from_dates("05/11/2099", "06/11/2099", settings, ticket)
     assert start.isoformat(timespec="seconds") == "2099-11-05T00:00:00-03:00"
     assert end.isoformat(timespec="seconds") == "2099-11-06T23:59:59-03:00"
-    # A validade cheia não abre as catracas: a agenda 09–17 continua
-    # obrigatória e atrelada ao nível Visitor aprovado.
-    require_confirmed_daily_schedule(["DAY_USE"], ticket, settings["schedule_windows"])
+    assert "schedule_windows" not in settings
     payload = registration_payload(
         Visitor("Teste", "Hospede", "Day use", b"", "1234", start, end))
     assert payload["visitStartTime"] == "2099-11-05T00:00:00-03:00"
@@ -545,7 +511,7 @@ def test_date_only_rejects_hours_bad_dates_and_wrong_duration(entry, exit_):
             entry, exit_, default_settings(), default_settings()["tickets"]["1 dia"])
 
 
-def test_technical_validity_hours_only_from_admin_settings(tmp_path):
+def test_visitor_validity_hours_are_fixed_and_legacy_settings_are_ignored(tmp_path):
     from core import visitor_period_from_dates, visitor_validity_hours
     settings = default_settings()
     assert tuple(str(x) for x in visitor_validity_hours(settings)) == (
@@ -555,14 +521,10 @@ def test_technical_validity_hours_only_from_admin_settings(tmp_path):
     save_settings(settings, tmp_path)
     restored = load_settings(tmp_path)
     start, end = visitor_period_from_dates("05/11/2099", "05/11/2099", restored)
-    assert start.strftime("%H:%M:%S") == "00:15:00"
-    assert end.strftime("%H:%M:%S") == "23:00:59"
-    assert restored["schedule_windows"]["DAY_USE"] == "09:00-17:00"
-    settings["validity_start_time"] = "12:00:00"
-    settings["validity_end_time"] = "11:59:59"
-    with pytest.raises(ValueError, match="anterior"):
-        save_settings(settings, tmp_path)
-    assert load_settings(tmp_path) == restored
+    assert start.strftime("%H:%M:%S") == "00:00:00"
+    assert end.strftime("%H:%M:%S") == "23:59:59"
+    assert "validity_start_time" not in restored
+    assert "validity_end_time" not in restored
 
 
 def test_date_only_editor_period_rejects_expired_during_payload_validation():
