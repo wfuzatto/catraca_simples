@@ -1,6 +1,6 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.83` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.84` (prévia técnica para testes).
 
 Na Preview 83, o perfil da catraca no HikCentral controla os horários diários. O aplicativo não valida a agenda dentro do cadastro; envia a validade Visitor de 00:00:00 a 23:59:59 e usa ingressos de 1 a 9 dias. O perfil do nível Visitor continua sendo a fonte de verdade das catracas, e o aplicativo usa todos os pontos retornados pela OpenAPI.
 

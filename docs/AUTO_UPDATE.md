@@ -17,18 +17,18 @@ O workflow **Compilar EXE Windows** testa o projeto, compila o EXE e publica uma
 
 ```json
 {
-  "version": "1.0.0-preview.83",
+  "version": "1.0.0-preview.84",
   "download_url": "https://prodatastelecom.com.br/sites/catraca_vale/ValeCadastroFacialNFC.exe",
   "size_bytes": 0,
   "sha256": "<64 caracteres hexadecimais do SHA-256>"
 }
 ```
 
-`size_bytes` e `sha256` devem ser preenchidos com os valores do EXE da preview.83. Use HTTPS no site. Publique o EXE antes do manifesto para que nenhum cliente leia uma versão nova enquanto o arquivo ainda estiver sendo transferido.
+`size_bytes` e `sha256` devem ser preenchidos com os valores do EXE da preview.84. Use HTTPS no site. Publique o EXE antes do manifesto para que nenhum cliente leia uma versão nova enquanto o arquivo ainda estiver sendo transferido.
 
 ## Substituição local
 
-O app baixa temporariamente o executável na mesma pasta da instalação. Um script PowerShell do Windows espera o processo encerrar, substitui o arquivo e tenta abrir a nova versão. Se ela encerrar durante a inicialização, restaura e reabre a versão anterior. A pasta precisa permitir gravação; para atualização sem elevação, use uma pasta gravável pelo usuário, como `%LOCALAPPDATA%\Programs\ValeCatracaSimples`.
+O app baixa temporariamente o executável na mesma pasta da instalação. Um script PowerShell do Windows espera o processo encerrar, substitui o arquivo e inicia a nova versão. O app confirma a inicialização após construir a janela; sem essa confirmação, o script encerra a tentativa e restaura a versão anterior. Se a limpeza do backup falhar, a atualização concluída permanece ativa e o backup é mantido. A pasta precisa permitir gravação; para atualização sem elevação, use uma pasta gravável pelo usuário, como `%LOCALAPPDATA%\Programs\ValeCatracaSimples`.
 
 O log fica em `%LOCALAPPDATA%\ValeCatracaSimples\updater.log`.
 

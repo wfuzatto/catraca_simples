@@ -32,8 +32,10 @@ _APPLY_UPDATE_SCRIPT = r'''param(
 )
 
 $ErrorActionPreference = 'Stop'
-$BackupPath = "$TargetPath.update-previous"
-$FailedPath = "$TargetPath.update-failed"
+$UpdateId = [guid]::NewGuid().ToString('N')
+$BackupPath = "$TargetPath.update-previous-$UpdateId"
+$FailedPath = "$TargetPath.update-failed-$UpdateId"
+$ReadyPath = Join-Path $env:LOCALAPPDATA "ValeCatracaSimples\updates\startup-$UpdateId.ready"
 
 function Write-UpdateLog([string]$Message) {
     try {
@@ -53,31 +55,45 @@ try {
     }
     [System.IO.File]::Replace($StagedPath, $TargetPath, $BackupPath, $true)
 
+    $env:VALE_CATRACA_UPDATE_READY_FILE = $ReadyPath
     $newProcess = Start-Process -FilePath $TargetPath -PassThru
+    Remove-Item Env:\VALE_CATRACA_UPDATE_READY_FILE -ErrorAction SilentlyContinue
     $startedAt = Get-Date
     $healthy = $false
-    $checkUntil = $startedAt.AddSeconds(30)
+    $checkUntil = $startedAt.AddSeconds(60)
     while ((Get-Date) -lt $checkUntil) {
         Start-Sleep -Milliseconds 500
-        if (-not (Get-Process -Id $newProcess.Id -ErrorAction SilentlyContinue)) { break }
-        if (((Get-Date) - $startedAt).TotalSeconds -ge 8) {
+        if (Test-Path -LiteralPath $ReadyPath) {
             $healthy = $true
             break
         }
+        if (-not (Get-Process -Id $newProcess.Id -ErrorAction SilentlyContinue)) { break }
     }
 
     if (-not $healthy) {
         if (Get-Process -Id $newProcess.Id -ErrorAction SilentlyContinue) {
-            Stop-Process -Id $newProcess.Id -Force -ErrorAction SilentlyContinue
+            & taskkill.exe /T /F /PID $newProcess.Id *> $null
         }
-        throw 'A nova versão encerrou durante a inicialização.'
+        Start-Sleep -Milliseconds 500
+        throw 'A nova versão não confirmou a inicialização; a versão anterior será restaurada.'
     }
 
-    Remove-Item -LiteralPath $BackupPath -Force
+    Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
+    try {
+        Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop
+    } catch {
+        Write-UpdateLog ("Atualização iniciada; backup antigo mantido em " + $BackupPath)
+    }
     Write-UpdateLog 'Atualização instalada e aplicativo reiniciado.'
 } catch {
+    Remove-Item Env:\VALE_CATRACA_UPDATE_READY_FILE -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ReadyPath -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $BackupPath) {
         try {
+            if ($newProcess -and (Get-Process -Id $newProcess.Id -ErrorAction SilentlyContinue)) {
+                & taskkill.exe /T /F /PID $newProcess.Id *> $null
+                Start-Sleep -Milliseconds 500
+            }
             if (Test-Path -LiteralPath $TargetPath) {
                 [System.IO.File]::Replace($BackupPath, $TargetPath, $FailedPath, $true)
                 Remove-Item -LiteralPath $FailedPath -Force -ErrorAction SilentlyContinue

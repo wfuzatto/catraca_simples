@@ -2,6 +2,7 @@
 from __future__ import annotations
 import io
 import json
+import os
 import sys
 import threading
 import time
@@ -2282,4 +2283,11 @@ if __name__ == "__main__":
         raise SystemExit(readonly_api_check(Path(sys.argv[2])))
     if check_and_apply_update(APP_VERSION):
         raise SystemExit(0)
-    ValeApp().mainloop()
+    application = ValeApp()
+    ready_file = os.environ.pop("VALE_CATRACA_UPDATE_READY_FILE", None)
+    if ready_file:
+        try:
+            Path(ready_file).write_text(APP_VERSION, encoding="utf-8")
+        except OSError:
+            pass
+    application.mainloop()
