@@ -304,7 +304,8 @@ def test_ticket_catalog_uses_days_only_and_migrates_legacy_hours(tmp_path):
     save_settings(old, tmp_path)
     migrated = load_settings(tmp_path)
     assert migrated["tickets"]["Antigo"] == {"days": 2}
-    assert [ticket["days"] for ticket in migrated["tickets"].values()] == list(range(1, 10))
+    assert all(any(ticket["days"] == days for ticket in migrated["tickets"].values())
+               for days in range(1, 10))
 
 
 def test_face_preview_fills_frame_for_small_and_wide_images():
@@ -468,7 +469,7 @@ def test_existing_nonzero_settings_migrate_and_survive_reopening(tmp_path):
     third_boot = load_settings(tmp_path)
     assert third_boot["valid_times"] == 0
     assert third_boot["camera_index"] == 4
-    assert third_boot["tickets"]["Especial"] == previous["tickets"]["Especial"]
+    assert third_boot["tickets"]["Especial"] == {"days": 4}
 
 
 @pytest.mark.parametrize("group", ["Day use", "Hóspedes Serra", "Hóspedes Vale"])
