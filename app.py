@@ -2235,8 +2235,7 @@ def offline_startup_smoke_check(report_path: Path) -> int:
 
     Intended to run on the actual frozen Windows EXE before publishing it.
     """
-    from core import (default_settings, VALE_VISITOR_LEVELS,
-                      VALE_VISITOR_POINT_COUNTS, VALE_VISITOR_SCHEDULE)
+    from core import default_settings, VALE_VISITOR_LEVELS, VALE_VISITOR_SCHEDULE
     report = {"kind": "offline_startup_smoke", "version": APP_VERSION,
               "network_used": False, "visitor_created": False, "ok": False}
     try:
@@ -2246,8 +2245,8 @@ def offline_startup_smoke_check(report_path: Path) -> int:
                 raise ValueError("Configuração padrão de grupo inválida.")
             if conf["schedule_windows"].get(level) != VALE_VISITOR_SCHEDULE:
                 raise ValueError("Agenda diária padrão inválida.")
-            # Fake identifiers only; no query or operation against HikCentral.
-            points = [f"offline-{index}" for index in range(VALE_VISITOR_POINT_COUNTS[level])]
+            # Fake identifiers only; point counts are controlled by the HikCentral profile.
+            points = ["offline-point"]
             verify_visitor_access_plan(
                 [{"id": "offline-test", "name": level}], points, [level])
         # Open and close actual Tk desktop interface with isolated defaults.

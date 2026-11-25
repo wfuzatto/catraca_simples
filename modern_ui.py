@@ -673,9 +673,10 @@ def _settings(app):
     app.editor_cells = [ticket_edit, levels_edit]
     _text(
         catalog,
-        "Padrão atual: Day use=DAY_USE (8 pontos), Hóspedes Serra=VISITANTE_SERRA (8 pontos), "
-        "Hóspedes Vale=VISITANTE_VALE (3 pontos). Todos usam a agenda ACQUAVALE. "
-        "Cada grupo exige um nível Visitor type=2; nunca níveis All-Day de funcionários.",
+        "Padrão atual: Day use=DAY_USE, Hóspedes Serra=VISITANTE_SERRA, "
+        "Hóspedes Vale=VISITANTE_VALE. Cada grupo exige um nível Visitor type=2; "
+        "os pontos de acesso são controlados pelo perfil desse nível no HikCentral, "
+        "sem níveis All-Day de funcionários.",
         size=11, color=MUTED).pack(anchor="w", pady=(8, 0))
 
     _text(catalog, "Agendas diárias verificadas no HikCentral · Nível=09:00-17:00",
@@ -687,10 +688,10 @@ def _settings(app):
     app.schedule_text.pack(fill="x")
     _text(
         catalog,
-        "DAY_USE e VISITANTE_SERRA: 8 pontos cada. VISITANTE_VALE: 3 pontos. "
-        "Agenda ACQUAVALE 09:00–17:00 diariamente conforme informado pelo hotel. "
-        "O aplicativo apenas consulta níveis e distribui credenciais nos pontos retornados; "
-        "não altera agendas, níveis ou catracas.",
+        "O aplicativo envia a todos os pontos associados ao nível configurado, conforme retornados "
+        "pelo HikCentral; a quantidade pode variar. O perfil do HikCentral define quais catracas "
+        "recebem a credencial. Agenda ACQUAVALE 09:00–17:00 diariamente, conforme informado "
+        "pelo hotel; o aplicativo não altera agenda, níveis ou catracas.",
         size=11, color="#A05A14").pack(anchor="w", pady=(8, 0))
 
     cleanup_section = _card(scroller)

@@ -13,7 +13,7 @@ import shutil
 from PIL import Image, ImageOps
 
 TZ = ZoneInfo("America/Sao_Paulo")
-APP_VERSION = "1.0.0-preview.81"
+APP_VERSION = "1.0.0-preview.82"
 GROUPS = ["Day use", "Hóspedes Serra", "Hóspedes Vale", "Visitors"]
 ACCESS_LEVELS = ["CATRACAS SABIA", "ENTRADA ACQUAVALE", "LOJA ACQUAVALE", "SAIDA ACQUAVALE"]
 # Configuração final dos níveis Visitor informada e autorizada pelo hotel.
@@ -22,11 +22,6 @@ VALE_VISITOR_LEVELS = {
     "Day use": "DAY_USE",
     "Hóspedes Serra": "VISITANTE_SERRA",
     "Hóspedes Vale": "VISITANTE_VALE",
-}
-VALE_VISITOR_POINT_COUNTS = {
-    "DAY_USE": 8,
-    "VISITANTE_SERRA": 8,
-    "VISITANTE_VALE": 3,
 }
 VALE_VISITOR_SCHEDULE = "09:00-17:00"
 VALE_MAPPING_REVISION = 1
@@ -121,7 +116,7 @@ def visitor_levels_for_group(
 def verify_visitor_access_plan(
     selected: list[dict], doors: list[str], requested: list[str]
 ) -> None:
-    """Check a single type=2 level and the remote doors; never invent grants."""
+    """Check one configured type=2 level and use all its returned doors."""
     if len(requested) != 1 or len(selected) != 1:
         raise ValueError("Cada grupo deve ter exatamente um nível Visitor.")
     level = selected[0]
@@ -130,13 +125,8 @@ def verify_visitor_access_plan(
         raise ValueError("Nível Visitor/IDs dos pontos de acesso inválidos.")
     if not doors or any(not str(door).strip() for door in doors) or len(set(doors)) != len(doors):
         raise ValueError("O nível Visitor não possui uma lista válida de pontos de acesso.")
-    # Confirma os pontos reais retornados pela consulta type=2. Nenhum novo ponto é criado.
-    expected = VALE_VISITOR_POINT_COUNTS.get(name)
-    if expected is not None and len(doors) != expected:
-        raise ValueError(
-            f"O nível Visitor {name} retornou {len(doors)} pontos, mas a configuração "
-            f"aprovada prevê {expected}. Cadastro bloqueado; confira o HikCentral."
-        )
+    # The HikCentral level profile is the source of truth for its access points.
+    # Do not impose a local point-count policy or omit doors from that profile.
 
 
 

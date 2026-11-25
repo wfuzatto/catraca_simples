@@ -372,10 +372,11 @@ def test_group_specific_visitor_access_mapping_cannot_use_unapproved_levels():
                                ten_doors[:3], ["VISITANTE_VALE"])
     verify_visitor_access_plan([{"id": "LV004", "name": "NIVEL HOSPEDES"}],
                                ten_doors[:3], ["NIVEL HOSPEDES"])
-    for name, invalid in (("DAY_USE", 7), ("VISITANTE_SERRA", 9), ("VISITANTE_VALE", 8)):
-        with pytest.raises(ValueError, match="prevê"):
-            verify_visitor_access_plan([{"id": "L", "name": name}],
-                                       ten_doors[:invalid], [name])
+    # The app follows the current HikCentral profile, including changes to its
+    # number of access points, instead of enforcing the old local 8/8/3 counts.
+    for name, count in (("DAY_USE", 7), ("VISITANTE_SERRA", 9), ("VISITANTE_VALE", 10)):
+        verify_visitor_access_plan([{"id": "L", "name": name}],
+                                   ten_doors[:count], [name])
     with pytest.raises(ValueError, match="exatamente um"):
         verify_visitor_access_plan([{"id": "LV001", "name": "VISITANTE"},
                                     {"id": "LV002", "name": "NIVEL HOSPEDES"}],

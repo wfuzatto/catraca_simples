@@ -1,6 +1,8 @@
 # Vale - Cadastro Facial e NFC (Windows)
 
-Versão atual: `1.0.0-preview.81` (prévia técnica para testes).
+Versão atual: `1.0.0-preview.82` (prévia técnica para testes).
+
+Na Preview 82, o perfil do nível Visitor no HikCentral é a fonte de verdade para as catracas. O aplicativo usa todos os pontos retornados pela OpenAPI, sem bloquear o cadastro por diferença em relação às quantidades históricas 8/8/3. Para mudar as catracas, altere o perfil do nível no HikCentral; o aplicativo não altera essa configuração.
 
 Na Preview 75, o número da pulseira é enviado somente como credencial NFC (`cards[].cardNo`). Se uma edição encontrar o mesmo número no campo de documento, ela o remove dali e o grava no cartão do perfil. A edição de Visitor Information e a alteração de datas preservam essa separação.
 
@@ -243,7 +245,7 @@ O aplicativo envia explicitamente `VISITANTE` em `accessInfo.accessLevelList` ta
 
 Atualização a partir da configuração de Access Control exibida pelo hotel em 02/11/2026:
 
-| Grupo Visitor (seleção no cadastro) | Nível Visitor exato | Access Schedule | Quantidade esperada de pontos |
+| Grupo Visitor (seleção no cadastro) | Nível Visitor exato | Access Schedule | Pontos associados observados em 02/11/2026 |
 | --- | --- | --- | ---: |
 | Day use | `DAY_USE` | `ACQUAVALE` | 8 |
 | Hóspedes Serra | `VISITANTE_SERRA` | `ACQUAVALE` | 8 |
@@ -252,7 +254,7 @@ Atualização a partir da configuração de Access Control exibida pelo hotel em
 - Os níveis `REFEITORIO`, `DESENVOLVIMENTO`, `LOJA ACQUAVALE`, `CATRACAS SABIA`, `SAIDA ACQUAVALE` e `ENTRADA ACQUAVALE` usam All-Day e **não são associados automaticamente a visitantes**.
 - A lista de grupos Visitor continua vindo exclusivamente da OpenAPI. O aplicativo não cria grupos nem modifica níveis, pontos de acesso, agenda ou funcionários.
 - O operador ainda pode modificar **Níveis de acesso por grupo Visitor** nas Configurações; a nova correspondência é o padrão aprovado. Cada grupo continua exigindo um único nível type=2 validado na consulta. Níveis alternativos customizados só são aceitos se já existirem como níveis Visitor na API.
-- Os pontos associados ao nível são lidos da OpenAPI; para os três níveis aprovados, o aplicativo recusa novos cadastros se a quantidade retornada for diferente de **8/8/3**. O número mostrado na página não substitui a checagem dos IDs retornados pela API.
+- Os pontos associados ao nível são lidos da OpenAPI. Os números 8/8/3 eram uma fotografia da configuração consultada em 02/11/2026; a partir da Preview 82, eles são apenas informativos e não limitam o cadastro. Todos os pontos atualmente associados ao nível são usados.
 - Os três níveis usam agenda `ACQUAVALE`, previamente informada como **09:00–17:00 todos os dias**. O aplicativo registra janelas diárias `DAY_USE=09:00-17:00`, `VISITANTE_SERRA=09:00-17:00`, `VISITANTE_VALE=09:00-17:00` em novos perfis. Não edita o schedule real no HikCentral.
 - **Migração de estações existentes:** configurações sem revisão de mapeamento recebem a nova relação desses três grupos, preservando `host`, porta, certificados, `VALID TIMES`, formatos de NFC, foto, ingressos e preferências. Outros grupos não recebem permissões automaticamente. Na primeira gravação, é gerado backup de `settings.json` em `settings.backup-pre-visitor-levels.json`, no mesmo diretório local. A revisão é salva para permitir edições futuras sem substituição automática.
 - Verifique em **Configurações > Níveis de acesso por grupo** e clique **Salvar configurações** após instalar para persistir a migração. Os testes automatizados são simulados e **não criam visitantes reais ou liberam catracas**. Para homologar, execute a consulta de OpenAPI e confira os três níveis e pontos na rede do hotel.
