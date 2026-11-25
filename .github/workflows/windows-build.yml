@@ -23,7 +23,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller==6.16.0 pytest==8.4.2
+          python -m pip install -r requirements.txt pyinstaller==6.22.3 pytest==8.4.2
           # Build-time download only; same YuNet as face_scanner, SHA256-pinned.
           python scripts/download_face_yunet.py
           if ($LASTEXITCODE -ne 0) { throw "Modelo YuNet oficial inválido ou indisponível" }
@@ -52,7 +52,7 @@ jobs:
       - name: Empacotar EXE autocontido
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ValeCadastroFacialNFC --collect-all customtkinter --collect-all smartcard --collect-data cv2 --add-data "models/face_detection_yunet_2023mar.onnx;models" --add-data "models/face_detection_yunet_LICENSE.txt;models" --hidden-import win32crypt app.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx --name ValeCadastroFacialNFC --collect-all customtkinter --collect-all smartcard --collect-data cv2 --add-data "models/face_detection_yunet_2023mar.onnx;models" --add-data "models/face_detection_yunet_LICENSE.txt;models" --hidden-import win32crypt app.py
           if ($LASTEXITCODE -ne 0 -or !(Test-Path dist/ValeCadastroFacialNFC.exe)) { throw "EXE nao gerado" }
       - name: Testar inicializacao do EXE compilado sem rede ou HikCentral
         shell: pwsh
@@ -105,4 +105,5 @@ jobs:
             throw "Release publicada sem o EXE esperado: $tag/$asset"
           }
           Write-Host "EXE presente na release: https://github.com/$env:GH_REPO/releases/download/$tag/$asset"
+
 
