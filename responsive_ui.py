@@ -18,7 +18,9 @@ def _columns(frame, cells, count: int) -> None:
             sticky="nsew", padx=6, pady=(0, 9)
         )
     for col in range(3):
-        frame.grid_columnconfigure(col, weight=1 if col < count else 0,
+        # CTk/Tk under Windows DPI scaling needs a larger nonzero grid weight
+        # to distribute spare width inside the scrollable form rows.
+        frame.grid_columnconfigure(col, weight=100 if col < count else 0,
                                    uniform="equal" if count > 1 else "")
 
 

@@ -249,7 +249,7 @@ def _registration(app):
     details_section.grid(row=0, column=0, sticky="ew", pady=(0, 14))
     columns = ctk.CTkFrame(details, fg_color="transparent")
     columns.grid(row=1, column=0, sticky="ew")
-    columns.grid_columnconfigure((0, 1), weight=1, uniform="visitor")
+    columns.grid_columnconfigure((0, 1), weight=100, uniform="visitor")
     app.visitor_grid = columns
     app.first, app.last, app.group, app.reservation = (
         tk.StringVar(), tk.StringVar(), tk.StringVar(), tk.StringVar())
@@ -279,7 +279,7 @@ def _registration(app):
     credentials_section.grid(row=0, column=0, sticky="ew", pady=(0, 14))
     creds_row = ctk.CTkFrame(credentials, fg_color="transparent")
     creds_row.grid(row=1, column=0, sticky="ew")
-    creds_row.grid_columnconfigure((0, 1), weight=1, uniform="credentials")
+    creds_row.grid_columnconfigure((0, 1), weight=100, uniform="credentials")
     app.credential_grid = creds_row
     nfc_panel = ctk.CTkFrame(creds_row, fg_color="#ECF9F5", corner_radius=12)
     nfc_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
@@ -327,7 +327,7 @@ def _registration(app):
     period_section.grid(row=0, column=0, sticky="ew", pady=(0, 14))
     ticket_row = ctk.CTkFrame(period, fg_color="transparent")
     ticket_row.grid(row=1, column=0, sticky="ew")
-    ticket_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="validity")
+    ticket_row.grid_columnconfigure((0, 1, 2), weight=100, uniform="validity")
     app.ticket_grid = ticket_row
     app.ticket, app.start, app.end = tk.StringVar(), tk.StringVar(), tk.StringVar()
     ticket_area = ctk.CTkFrame(ticket_row, fg_color="transparent")
