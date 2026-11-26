@@ -243,7 +243,7 @@ def _registration(app):
     details = _card(left)
     _section(details, 1, "Dados do visitante", "Informe as informações do visitante", "●")
     columns = ctk.CTkFrame(details, fg_color="transparent")
-    columns.pack(fill="x")
+    columns.pack(fill="x", expand=True)
     columns.grid_columnconfigure((0, 1), weight=1, uniform="visitor")
     app.visitor_grid = columns
     app.first, app.last, app.group, app.reservation = (
@@ -269,7 +269,7 @@ def _registration(app):
     _section(credentials, 2, "Credenciais de acesso",
              "Reconhecimento facial e/ou pulseira NFC", "◆")
     creds_row = ctk.CTkFrame(credentials, fg_color="transparent")
-    creds_row.pack(fill="x")
+    creds_row.pack(fill="x", expand=True)
     creds_row.grid_columnconfigure((0, 1), weight=1, uniform="credentials")
     app.credential_grid = creds_row
     nfc_panel = ctk.CTkFrame(creds_row, fg_color="#ECF9F5", corner_radius=12)
@@ -313,7 +313,7 @@ def _registration(app):
     _section(period, 3, "Ingresso e validade",
              "Defina o tipo de ingresso e o período de acesso", "▦")
     ticket_row = ctk.CTkFrame(period, fg_color="transparent")
-    ticket_row.pack(fill="x")
+    ticket_row.pack(fill="x", expand=True)
     ticket_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="validity")
     app.ticket_grid = ticket_row
     app.ticket, app.start, app.end = tk.StringVar(), tk.StringVar(), tk.StringVar()
