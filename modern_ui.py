@@ -760,14 +760,6 @@ def build(app):
     app.nav_history = _nav_button(app, sidebar, "Cadastros efetuados", "▤", app.history_tab)
     app.nav_settings = _nav_button(app, sidebar, "Configurações", "⚙", app.settings_tab)
     ctk.CTkFrame(sidebar, fg_color="transparent").pack(fill="both", expand=True)
-    status_box = ctk.CTkFrame(
-        sidebar, fg_color=NAVY_2, corner_radius=12)
-    status_box.pack(fill="x", padx=17, pady=(0, 14))
-    _text(status_box, "Integração local\ncom HikCentral", color="#BBCEE4", size=11).pack(
-        anchor="w", padx=14, pady=(12, 3))
-    ctk.CTkLabel(status_box, textvariable=app.connection_label_var,
-                 text_color="#5DE5AD", font=("Segoe UI", 12, "bold")).pack(
-        anchor="w", padx=14, pady=(0, 12))
     _text(sidebar, f"v{app._build_version}", color="#9BB1C9", size=10).pack(
         anchor="w", padx=24, pady=(0, 19))
 

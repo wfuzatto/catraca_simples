@@ -580,7 +580,7 @@ class ValeApp(tk.Tk):
                 if not silent:
                     messagebox.showwarning("Grupo indisponível", self.status.get())
                 return
-            self.status.set(f"Conectado: {len(groups)} grupos e {len(levels)} níveis Visitor.")
+            self.status.set(f"{len(groups)} grupos e {len(levels)} níveis Visitor carregados.")
             if not silent:
                 self.book.select(self.registration_tab)
             # Retomada segura de operações incompletas, sem botão na interface.
