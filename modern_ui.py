@@ -55,6 +55,7 @@ def _section(parent, number, title, subtitle, symbol):
     labels.pack(side="left", fill="x", expand=True)
     _text(labels, f"{number}. {title}", size=18, bold=True).pack(anchor="w")
     _text(labels, subtitle, size=12, color=MUTED).pack(anchor="w", pady=(2, 0))
+    return title_row
 
 
 def _field(parent, label, variable, *, required=False, placeholder="", show=None):
@@ -241,9 +242,13 @@ def _registration(app):
 
     # 1. Visitor identity.
     details = _card(left)
-    _section(details, 1, "Dados do visitante", "Informe as informações do visitante", "●")
+    details.grid_columnconfigure(0, weight=1)
+    details_section = _section(
+        details, 1, "Dados do visitante", "Informe as informações do visitante", "●")
+    details_section.pack_forget()
+    details_section.grid(row=0, column=0, sticky="ew", pady=(0, 14))
     columns = ctk.CTkFrame(details, fg_color="transparent")
-    columns.pack(fill="x", expand=True)
+    columns.grid(row=1, column=0, sticky="ew")
     columns.grid_columnconfigure((0, 1), weight=1, uniform="visitor")
     app.visitor_grid = columns
     app.first, app.last, app.group, app.reservation = (
@@ -266,10 +271,14 @@ def _registration(app):
 
     # 2. Credentials.
     credentials = _card(left)
-    _section(credentials, 2, "Credenciais de acesso",
-             "Reconhecimento facial e/ou pulseira NFC", "◆")
+    credentials.grid_columnconfigure(0, weight=1)
+    credentials_section = _section(
+        credentials, 2, "Credenciais de acesso",
+        "Reconhecimento facial e/ou pulseira NFC", "◆")
+    credentials_section.pack_forget()
+    credentials_section.grid(row=0, column=0, sticky="ew", pady=(0, 14))
     creds_row = ctk.CTkFrame(credentials, fg_color="transparent")
-    creds_row.pack(fill="x", expand=True)
+    creds_row.grid(row=1, column=0, sticky="ew")
     creds_row.grid_columnconfigure((0, 1), weight=1, uniform="credentials")
     app.credential_grid = creds_row
     nfc_panel = ctk.CTkFrame(creds_row, fg_color="#ECF9F5", corner_radius=12)
@@ -310,10 +319,14 @@ def _registration(app):
 
     # 3. Ticket.
     period = _card(left)
-    _section(period, 3, "Ingresso e validade",
-             "Defina o tipo de ingresso e o período de acesso", "▦")
+    period.grid_columnconfigure(0, weight=1)
+    period_section = _section(
+        period, 3, "Ingresso e validade",
+        "Defina o tipo de ingresso e o período de acesso", "▦")
+    period_section.pack_forget()
+    period_section.grid(row=0, column=0, sticky="ew", pady=(0, 14))
     ticket_row = ctk.CTkFrame(period, fg_color="transparent")
-    ticket_row.pack(fill="x", expand=True)
+    ticket_row.grid(row=1, column=0, sticky="ew")
     ticket_row.grid_columnconfigure((0, 1, 2), weight=1, uniform="validity")
     app.ticket_grid = ticket_row
     app.ticket, app.start, app.end = tk.StringVar(), tk.StringVar(), tk.StringVar()
@@ -333,12 +346,12 @@ def _registration(app):
     app.end_entry.configure(state="readonly")
     app.ticket_cells = [ticket_area, start_area, end_area]
     app.start.trace_add("write", lambda *_: app.calculate())
-    _text(period,
+    validity_note = _text(period,
           "Informe apenas a data de entrada. A saída é calculada pelo tipo de ingresso e não pode ser editada. "
           "Após cada cadastro concluído, o formulário volta para hoje e 1 dia. "
           "A validade do Visitor é 00:00–23:59; o perfil da catraca limita os horários de passagem. "
-          "Ingressos disponíveis de 1 a 9 dias.",
-          color=MUTED, size=11).pack(anchor="w", pady=(10, 0))
+          "Ingressos disponíveis de 1 a 9 dias.", color=MUTED, size=11)
+    validity_note.grid(row=2, column=0, sticky="ew", pady=(10, 0))
 
 
 def _setting_field(parent, row, column, title, variable, *, secret=False):
